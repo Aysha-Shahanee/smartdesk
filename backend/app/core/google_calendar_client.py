@@ -1,6 +1,8 @@
 import datetime
 import json
 import os
+import socket
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -11,6 +13,9 @@ from googleapiclient.discovery import build
 
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+
+_NETWORK_RETRY_ATTEMPTS = 3
+_NETWORK_RETRY_BASE_DELAY_SECONDS = 2.0
 
 
 def _get_app_data_dir() -> Path:
@@ -53,6 +58,59 @@ def _get_credentials_path() -> Path:
     return project_root / "calender" / "credentials.json"
 
 
+def _iter_exception_chain(exc: BaseException):
+    """Yield exception and linked causes/contexts without recursion loops."""
+
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def _is_transient_network_error(exc: BaseException) -> bool:
+    for item in _iter_exception_chain(exc):
+        if isinstance(item, socket.gaierror):
+            return True
+        if isinstance(item, OSError) and getattr(item, "errno", None) in {11001, 11002, 11003, 11004}:
+            return True
+
+    msg = str(exc).lower()
+    indicators = (
+        "nameresolutionerror",
+        "getaddrinfo failed",
+        "max retries exceeded",
+        "temporary failure in name resolution",
+        "failed to resolve",
+        "connection aborted",
+        "connection reset",
+        "connection refused",
+        "timed out",
+    )
+    return any(token in msg for token in indicators)
+
+
+def _run_with_network_retry(action_name: str, fn):
+    delay_seconds = _NETWORK_RETRY_BASE_DELAY_SECONDS
+
+    for attempt in range(1, _NETWORK_RETRY_ATTEMPTS + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            is_last_attempt = attempt == _NETWORK_RETRY_ATTEMPTS
+            if not _is_transient_network_error(exc) or is_last_attempt:
+                raise
+
+            print(
+                f"[Calendar Collector] Transient network error during {action_name} "
+                f"(attempt {attempt}/{_NETWORK_RETRY_ATTEMPTS}): {exc}. "
+                f"Retrying in {delay_seconds:.0f}s..."
+            )
+            time.sleep(delay_seconds)
+            delay_seconds *= 2
+
+
 def authenticate() -> Credentials:
     creds: Credentials | None = None
     token_path = _get_token_path()
@@ -62,7 +120,7 @@ def authenticate() -> Credentials:
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            _run_with_network_retry("token refresh", lambda: creds.refresh(Request()))
         else:
             credentials_path = _get_credentials_path()
             flow = InstalledAppFlow.from_client_secrets_file(
@@ -118,13 +176,29 @@ def normalize_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def get_calendar_data(hours_ahead: int = 24) -> list[dict[str, Any]]:
     """Fetch and normalize calendar events for the next `hours_ahead` hours."""
 
-    creds = authenticate()
+    try:
+        creds = authenticate()
+    except Exception as exc:
+        if _is_transient_network_error(exc):
+            print(f"[Calendar Collector] Skipping sync due to temporary network/DNS issue: {exc}")
+            return []
+        raise
 
     now = datetime.datetime.utcnow().isoformat() + "Z"
     end_dt = datetime.datetime.utcnow() + datetime.timedelta(hours=hours_ahead)
     end = end_dt.isoformat() + "Z"
 
-    events = fetch_events(creds, now, end)
+    try:
+        events = _run_with_network_retry(
+            "calendar events fetch",
+            lambda: fetch_events(creds, now, end),
+        )
+    except Exception as exc:
+        if _is_transient_network_error(exc):
+            print(f"[Calendar Collector] Skipping sync due to temporary network/DNS issue: {exc}")
+            return []
+        raise
+
     clean_data = normalize_events(events)
     return clean_data
 

@@ -32,6 +32,8 @@ let currentActiveTab = null;
 let lastStartTime = null;
 let lastLoggedUrl = "";
 let isIdle = false;
+const SYNC_ALARM_NAME = "smartdeskBrowserSync";
+const SYNC_INTERVAL_MINUTES = 5;
 
 // === Classify tab ===
 function classifyTab(tab) {
@@ -234,8 +236,31 @@ function sendHistoryToBackend() {
     });
 }
 
-// Send every 5 minutes
-setInterval(sendHistoryToBackend, 5 * 60 * 1000);
+function ensureSyncAlarm() {
+    chrome.alarms.create(SYNC_ALARM_NAME, {
+        delayInMinutes: 1,
+        periodInMinutes: SYNC_INTERVAL_MINUTES
+    });
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === SYNC_ALARM_NAME) {
+        sendHistoryToBackend();
+    }
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+    ensureSyncAlarm();
+    sendHistoryToBackend();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+    ensureSyncAlarm();
+    sendHistoryToBackend();
+});
+
+// Ensure alarm exists whenever the service worker wakes up.
+ensureSyncAlarm();
 
 // =============================
 // Manual trigger in console

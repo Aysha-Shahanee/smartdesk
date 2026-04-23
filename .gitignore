@@ -1,3 +1,28 @@
 calender/token.json
 calender/credentials.json
 .env
+
+# Python virtual environments
+venv/
+.venv/
+backend/venv/
+backend/.venv/
+
+# Python cache/compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Runtime databases and logs
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Node artifacts
+node_modules/
+*.vsix
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
