@@ -24,9 +24,9 @@ From the `backend` folder:
 ```powershell
 cd "path/to/software project-2nd year/implementation/data collection layer/backend"
 
-# (Recommended) Create and activate a virtual environment
-python -m venv venv
-.\venv\Scripts\Activate.ps1
+# Activate the shared project virtual environment
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+& "path/to/software project-2nd year/implementation/data collection layer/.venv/Scripts/Activate.ps1"
 
 # Install dependencies
 python -m pip install -r requirements.txt
@@ -56,6 +56,21 @@ It shows:
 - Total records and last timestamp per source (OS, Browser, VS Code, Calendar)
 - A simple 24-hour time series of event counts
 - A static setup checklist (can be edited later)
+
+### 1.4. Prepare VS Code tables
+
+If you are using the new clean VS Code session flow, run the migration once after cloning:
+
+```powershell
+cd "path/to/software project-2nd year/implementation/data collection layer/backend"
+python scripts/migrate_vscode_tables.py
+python scripts/verify_vscode_schema.py
+```
+
+This creates and verifies:
+
+- `vscode_sessions`
+- `vscode_session_snapshots`
 
 ---
 
@@ -117,7 +132,26 @@ npm install
 
 Then, open this folder in VS Code and press **F5** to launch an **Extension Development Host**. That VS Code window will have the extension running and can send events to the backend.
 
+If you want to install the packaged extension instead of running it from source, use the VSIX file inside this folder:
+
+- `smartdesk-ide-logger/smartdesk-ide-logger-0.0.1.vsix`
+
+Install it from VS Code by choosing **Extensions** -> **...** -> **Install from VSIX**.
+
 Later, this extension can be packaged and published to the VS Code Marketplace for easier installation.
+
+### 3.2. What the VS Code extension sends
+
+The extension tracks one file-focused session at a time.
+
+- Opening a file starts a new session
+- Switching to another file closes the previous session and starts a new one
+- The same session sends multiple snapshots with the same `event_id`
+
+The backend stores these into:
+
+- `vscode_sessions` for one clean row per session
+- `vscode_session_snapshots` for the full timeline of periodic updates
 
 ---
 
@@ -156,8 +190,13 @@ You can inspect it using **DB Browser for SQLite** or any other SQLite client.
 6. Use the **Table** dropdown to inspect different data sources:
    - `os_signals` – OS-level summaries (window focus, idle/active/locked times)
    - `browser_signals` – Browser history sync batches
-   - `vscode_signals` – VS Code events
+   - `vscode_sessions` – Clean one-row-per-session VS Code data
+   - `vscode_session_snapshots` – Detailed VS Code timeline snapshots
+   - `vscode_signals` – Legacy/raw VS Code events kept for fallback/backward compatibility
    - `calendar_signals` – Google Calendar events
+
+   For the aggregated dataset used by Model 1, also inspect:
+   - `model1_features_10min` – One row per 10-minute window
 
 You can filter, sort, and export these tables as needed (CSV, JSON, etc.).
 
@@ -183,5 +222,54 @@ For a collaborator who just cloned the repo:
 
 5. **Inspect data**
    - Use the dashboard or DB Browser for SQLite to see what has been stored in `smartdesk.db`.
+
+## 7. Model 1 Aggregation Workflow
+
+The aggregation code lives in:
+
+- `backend/app/ml/model1_features.py`
+
+It builds the `model1_features_10min` table from:
+
+- `os_signals`
+- `browser_signals`
+- `vscode_sessions`
+- `calendar_signals`
+
+### 7.1. Build the aggregated table
+
+From the `backend` folder:
+
+```powershell
+cd "path/to/software project-2nd year/implementation/data collection layer/backend"
+python scripts/build_model1_dataset.py
+```
+
+If you want to target a specific SQLite file:
+
+```powershell
+python scripts/build_model1_dataset.py "path/to/smartdesk.db"
+```
+
+### 7.2. See the aggregation output
+
+The script writes rows into the `model1_features_10min` table inside `backend/smartdesk.db`.
+
+You can inspect it with:
+
+```powershell
+python scripts/verify_vscode_schema.py
+```
+
+Or open `backend/smartdesk.db` in DB Browser for SQLite and browse the `model1_features_10min` table.
+
+### 7.3. Quick validation checks
+
+After rebuilding, useful checks are:
+
+- `vscode_total_duration_sec <= 600` for each 10-minute row
+- `vscode_active_seconds + vscode_idle_seconds <= vscode_total_duration_sec`
+- `window_start` and `window_end` use UTC format ending in `+00:00`
+- `manual_label` remains unchanged if it was already filled in
 
 This README can be expanded over time as the product evolves (e.g., packaging, installers, or cloud sync).
