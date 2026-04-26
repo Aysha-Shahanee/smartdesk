@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS model1_features_10min (
     has_calendar_signal INTEGER DEFAULT 0,
     has_any_signal INTEGER DEFAULT 0,
     data_quality_score REAL DEFAULT 0,
+    source_refs_json TEXT DEFAULT NULL,
 
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -267,6 +268,7 @@ def _ensure_optional_columns(conn: sqlite3.Connection) -> None:
         "data_quality_score": "REAL DEFAULT 0",
         "is_training_eligible": "INTEGER DEFAULT 0",
         "quality_warning": "TEXT DEFAULT NULL",
+        "source_refs_json": "TEXT DEFAULT NULL",
     }
 
     for column, col_type in to_add.items():
@@ -941,12 +943,6 @@ def compute_data_quality_flags(
     calendar_features: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Simple source-presence flags and data quality score."""
-    has_os = 1 if os_count > 0 else 0
-    has_browser = 1 if browser_count > 0 else 0
-    has_vscode = 1 if (vscode_count > 0 and float(vscode_features.get("vscode_total_duration_sec", 0) or 0) > 0) else 0
-    has_calendar = 1 if calendar_count > 0 else 0
-    has_any = 1 if (has_os or has_browser or has_vscode or has_calendar) else 0
-
     os_cov = min(
         float(os_features.get("total_active_time_sec", 0) or 0)
         + float(os_features.get("total_idle_time_sec", 0) or 0)
@@ -957,23 +953,42 @@ def compute_data_quality_flags(
     vscode_cov = min(float(vscode_features.get("vscode_total_duration_sec", 0) or 0), 600.0)
     calendar_cov = min(float(calendar_features.get("calendar_meeting_time_sec", 0) or 0), 600.0)
 
+    has_os = 1 if os_cov > 0 else 0
+    # Only flag browser signal when there is real overlap contribution.
+    has_browser = 1 if (browser_cov > 0 and float(browser_features.get("browser_active_time_sec", 0) or 0) > 0) else 0
+    has_vscode = 1 if (vscode_cov > 0 and vscode_count > 0) else 0
+    has_calendar = 1 if calendar_cov > 0 else 0
+    has_any = 1 if (has_os or has_browser or has_vscode or has_calendar) else 0
+
     # Coverage-driven quality score in [0, 1].
     quality = min((os_cov + browser_cov + vscode_cov + calendar_cov) / (4.0 * 600.0), 1.0)
 
-    is_training_eligible = 1 if (
-        has_os
-        or has_browser
-        or float(vscode_features.get("vscode_active_seconds", 0) or 0) >= 30
+    vscode_has_evidence = (
+        float(vscode_features.get("vscode_active_seconds", 0) or 0) >= 30
         or int(vscode_features.get("vscode_edit_count", 0) or 0) > 0
         or int(vscode_features.get("vscode_save_count", 0) or 0) > 0
         or int(vscode_features.get("vscode_terminal_commands", 0) or 0) > 0
         or int(vscode_features.get("vscode_chars_added", 0) or 0) > 0
         or int(vscode_features.get("vscode_chars_removed", 0) or 0) > 0
+    )
+
+    is_vscode_only = (has_os == 0 and has_browser == 0 and has_calendar == 0 and has_vscode == 1)
+    low_evidence_vscode_only = is_vscode_only and (not vscode_has_evidence)
+
+    is_training_eligible = 1 if (
+        has_os
+        or has_browser
+        or vscode_has_evidence
     ) else 0
+
+    if low_evidence_vscode_only:
+        is_training_eligible = 0
 
     quality_warning: Optional[str] = None
     if not has_any:
         quality_warning = "no_signal"
+    elif low_evidence_vscode_only:
+        quality_warning = "low_evidence_vscode_only"
     elif not is_training_eligible:
         quality_warning = "low_evidence"
 
@@ -1056,6 +1071,7 @@ def insert_row(conn: sqlite3.Connection, user_id: str, window_start: datetime, w
         "data_quality_score",
         "is_training_eligible",
         "quality_warning",
+        "source_refs_json",
     ]
 
     values = [user_id, to_utc_window_string(window_start), to_utc_window_string(window_end)]
@@ -1101,6 +1117,113 @@ def warn_on_window_anomalies(window_start: datetime, all_features: Dict[str, Any
         print(f"[warn] {ws} ide_ratio > 1 ({ide_ratio:.4f})")
     if browser_ratio > 1:
         print(f"[warn] {ws} browser_ratio > 1 ({browser_ratio:.4f})")
+
+
+def normalize_quality_flags_for_user(conn: sqlite3.Connection, user_id: str) -> None:
+    """Recompute quality flags on existing rows so older rows follow current rules too."""
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            id,
+            total_active_time_sec,
+            total_idle_time_sec,
+            total_locked_time_sec,
+            browser_active_time_sec,
+            vscode_total_duration_sec,
+            calendar_meeting_time_sec,
+            vscode_active_seconds,
+            vscode_edit_count,
+            vscode_save_count,
+            vscode_terminal_commands,
+            vscode_chars_added,
+            vscode_chars_removed
+        FROM model1_features_10min
+        WHERE user_id = ?
+        """,
+        (user_id,),
+    )
+    rows = cur.fetchall()
+
+    updates: List[Tuple[Any, ...]] = []
+    for r in rows:
+        row_id = r[0]
+        os_cov = min(float((r[1] or 0) + (r[2] or 0) + (r[3] or 0)), 600.0)
+        browser_cov = min(float(r[4] or 0), 600.0)
+        vscode_cov = min(float(r[5] or 0), 600.0)
+        calendar_cov = min(float(r[6] or 0), 600.0)
+
+        has_os = 1 if os_cov > 0 else 0
+        has_browser = 1 if (browser_cov > 0 and float(r[4] or 0) > 0) else 0
+        has_vscode = 1 if vscode_cov > 0 else 0
+        has_calendar = 1 if calendar_cov > 0 else 0
+        has_any = 1 if (has_os or has_browser or has_vscode or has_calendar) else 0
+
+        vscode_has_evidence = (
+            float(r[7] or 0) >= 30
+            or int(r[8] or 0) > 0
+            or int(r[9] or 0) > 0
+            or int(r[10] or 0) > 0
+            or int(r[11] or 0) > 0
+            or int(r[12] or 0) > 0
+        )
+
+        is_vscode_only = (has_os == 0 and has_browser == 0 and has_calendar == 0 and has_vscode == 1)
+        low_evidence_vscode_only = is_vscode_only and (not vscode_has_evidence)
+
+        is_training_eligible = 1 if (has_os or has_browser or vscode_has_evidence) else 0
+        if low_evidence_vscode_only:
+            is_training_eligible = 0
+
+        quality_warning: Optional[str] = None
+        if not has_any:
+            quality_warning = "no_signal"
+        elif low_evidence_vscode_only:
+            quality_warning = "low_evidence_vscode_only"
+        elif not is_training_eligible:
+            quality_warning = "low_evidence"
+
+        quality = min((os_cov + browser_cov + vscode_cov + calendar_cov) / (4.0 * 600.0), 1.0)
+
+        updates.append(
+            (
+                has_os,
+                has_browser,
+                has_vscode,
+                has_calendar,
+                has_any,
+                os_cov,
+                browser_cov,
+                vscode_cov,
+                calendar_cov,
+                quality,
+                is_training_eligible,
+                quality_warning,
+                row_id,
+            )
+        )
+
+    cur.executemany(
+        """
+        UPDATE model1_features_10min
+        SET
+            has_os_signal = ?,
+            has_browser_signal = ?,
+            has_vscode_signal = ?,
+            has_calendar_signal = ?,
+            has_any_signal = ?,
+            os_coverage_sec = ?,
+            browser_coverage_sec = ?,
+            vscode_coverage_sec = ?,
+            calendar_coverage_sec = ?,
+            data_quality_score = ?,
+            is_training_eligible = ?,
+            quality_warning = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        updates,
+    )
 
 
 # ===========================
@@ -1177,6 +1300,24 @@ def build_dataset(db_path: str, user_id: str = "default_user") -> None:
             vscode_features,
             calendar_features,
         )
+        source_refs = {
+            "os": {
+                "count": os_count,
+                "samples": os_samples,
+            },
+            "browser": {
+                "count": browser_count,
+                "samples": browser_samples,
+            },
+            "vscode": {
+                "count": vscode_count,
+                "samples": vscode_samples,
+            },
+            "calendar": {
+                "count": calendar_count,
+                "samples": calendar_samples,
+            },
+        }
         all_features = {
             **os_features,
             **browser_features,
@@ -1184,6 +1325,7 @@ def build_dataset(db_path: str, user_id: str = "default_user") -> None:
             **calendar_features,
             **derived,
             **quality_flags,
+            "source_refs_json": json.dumps(source_refs),
         }
 
         warn_on_window_anomalies(window_start, all_features)
@@ -1193,6 +1335,8 @@ def build_dataset(db_path: str, user_id: str = "default_user") -> None:
 
         if idx % 20 == 0:
             print(f"[*] Processed {idx}/{len(windows)} windows")
+
+    normalize_quality_flags_for_user(conn, user_id)
 
     conn.commit()
     conn.close()
