@@ -59,18 +59,25 @@ It shows:
 
 ### 1.4. Prepare VS Code tables
 
-If you are using the new clean VS Code session flow, run the migration once after cloning:
+If you are using the new clean VS Code session flow, run these in order after cloning:
 
 ```powershell
 cd "path/to/software project-2nd year/implementation/data collection layer/backend"
 python scripts/migrate_vscode_tables.py
 python scripts/verify_vscode_schema.py
+python scripts/build_model1_dataset.py
 ```
 
-This creates and verifies:
+This essential sequence does the following:
 
 - `vscode_sessions`
 - `vscode_session_snapshots`
+
+and then rebuilds:
+
+- `model1_features_10min`
+
+If you only need to inspect the tables without rebuilding the aggregation, run the first two commands only.
 
 ---
 
