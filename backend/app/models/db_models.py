@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, JSON
+from sqlalchemy import Column, Integer, String, DateTime, JSON, Float
 from app.core.database import Base
 
 
@@ -91,3 +91,53 @@ class CalendarRecord(Base):
     timestamp = Column(DateTime(timezone=True), index=True)
     event_type = Column(String, index=True)
     data = Column(JSON)
+
+
+class ActivitySession(Base):
+    __tablename__ = "activity_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, default="default_user", index=True)
+
+    start_time_utc = Column(String, nullable=False, index=True)
+    end_time_utc = Column(String, nullable=False, index=True)
+    duration_seconds = Column(Float, nullable=False)
+
+    activity_label = Column(String, nullable=False, index=True)
+    label_source = Column(String, nullable=True)
+    confidence = Column(Float, default=0)
+
+    primary_app = Column(String, nullable=True)
+    primary_project = Column(String, nullable=True)
+    primary_domain = Column(String, nullable=True)
+
+    total_active_time_sec = Column(Float, default=0)
+    total_idle_time_sec = Column(Float, default=0)
+    total_locked_time_sec = Column(Float, default=0)
+
+    vscode_total_duration_sec = Column(Float, default=0)
+    vscode_active_seconds = Column(Float, default=0)
+    vscode_idle_seconds = Column(Float, default=0)
+    vscode_edit_count = Column(Integer, default=0)
+    vscode_save_count = Column(Integer, default=0)
+    vscode_terminal_commands = Column(Integer, default=0)
+
+    browser_active_time_sec = Column(Float, default=0)
+    browser_productive_time_sec = Column(Float, default=0)
+    browser_distracting_time_sec = Column(Float, default=0)
+
+    os_context_switch_count = Column(Integer, default=0)
+    multitask_score = Column(Float, default=0)
+    distraction_score = Column(Float, default=0)
+    focus_score = Column(Float, default=0)
+
+    source_window_ids_json = Column(String, nullable=True)
+    source_refs_json = Column(String, nullable=True)
+    metrics_json = Column(String, nullable=True)
+
+    data_quality_score = Column(Float, default=0)
+    quality_warning = Column(String, nullable=True)
+
+    sync_status = Column(String, default="pending", index=True)
+    created_at = Column(DateTime(timezone=True), index=True)
+    updated_at = Column(DateTime(timezone=True), index=True)
