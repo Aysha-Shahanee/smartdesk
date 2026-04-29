@@ -1,7 +1,10 @@
 import time
 import threading
+import json
+import os
 from collections import defaultdict
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import ctypes
 from ctypes import wintypes
 
@@ -13,10 +16,13 @@ import win32api
 from app.core.session_watcher import SessionState, SessionWatcher
 from app.models.os_signals import OSSignalPayload
 from app.services.os_signals_service import OSSignalsService
+from app.models.os_minute_window import OSMinuteWindowPayload
+from app.services.os_minute_window_service import OSMinuteWindowService
 
 POLL_SEC = 1.0
 WINDOW_SEC = 60
 IDLE_THRESHOLD_MS = 60_000
+USER_ID = os.getenv("USER_ID", "demo_user")
 
 class LASTINPUTINFO(ctypes.Structure):
     _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
@@ -69,7 +75,7 @@ def get_foreground_context() -> dict:
     return {"pid": pid, "procName": proc_name, "exePath": exe_path, "company": company, "product": product, "description": description}
 
 def now_epoch() -> float: return time.time()
-def iso_utc(ts) -> str: return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+def iso_colombo(ts) -> str: return datetime.fromtimestamp(ts, tz=ZoneInfo("Asia/Colombo")).replace(microsecond=0).isoformat()
 
 def heuristics_category_from_text(t: str) -> str | None:
     t = t.lower()
@@ -98,6 +104,7 @@ class OSMonitorTask:
     def __init__(self):
         self.stop_event = threading.Event()
         self.service = OSSignalsService()
+        self.minute_window_service = OSMinuteWindowService()
         self.sess_state = SessionState()
         self.watcher = SessionWatcher(self.sess_state)
 
@@ -186,8 +193,8 @@ class OSMonitorTask:
                     last_change_t = t
 
                 payload_data = {
-                    "window_start": iso_utc(window_start),
-                    "window_end": iso_utc(t),
+                    "window_start": iso_colombo(window_start),
+                    "window_end": iso_colombo(t),
                     "active_app_durations_sec": {k: round(v, 2) for k, v in durations.items()},
                     "category_durations_sec": {k: round(v, 2) for k, v in category_durations.items()},
                     "context_switch_count": int(switch_count),
@@ -196,16 +203,50 @@ class OSMonitorTask:
                     "locked_time_sec": round(locked_time, 2)
                 }
 
+                top_app = None
+                top_app_sec = None
+                if durations:
+                    top_app, top_app_sec = max(durations.items(), key=lambda kv: kv[1])
+
+                dominant_app_category = None
+                dominant_app_category_sec = None
+                if category_durations:
+                    dominant_app_category, dominant_app_category_sec = max(
+                        category_durations.items(), key=lambda kv: kv[1]
+                    )
+
                 # Construct internal payload
                 payload = OSSignalPayload(
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(ZoneInfo("Asia/Colombo")),
                     event_type="window_summary",
                     data=payload_data
+                )
+
+                minute_payload = OSMinuteWindowPayload(
+                    user_id=USER_ID,
+                    window_start=payload_data["window_start"],
+                    window_end=payload_data["window_end"],
+                    timezone="Asia/Colombo",
+                    active_time_sec=int(payload_data.get("active_time_sec") or 0),
+                    idle_time_sec=int(payload_data.get("idle_time_sec") or 0),
+                    locked_time_sec=int(payload_data.get("locked_time_sec") or 0),
+                    context_switch_count=int(payload_data.get("context_switch_count") or 0),
+                    top_app=top_app,
+                    top_app_sec=int(top_app_sec) if top_app_sec is not None else None,
+                    dominant_app_category=dominant_app_category,
+                    dominant_app_category_sec=int(dominant_app_category_sec) if dominant_app_category_sec is not None else None,
+                    active_app_durations_json=json.dumps(payload_data.get("active_app_durations_sec") or {}),
+                    category_durations_json=json.dumps(payload_data.get("category_durations_sec") or {}),
+                    source="os_collector",
+                    schema_version="1.0",
+                    created_at=iso_colombo(t),
+                    updated_at=iso_colombo(t),
                 )
                 
                 # Push directly to the backend abstraction
                 try:
                     self.service.process_and_save(payload)
+                    self.minute_window_service.process_and_save(minute_payload)
                     print(f"[OS Collector] Background signal saved safely: {payload.event_type}")
                 except Exception as e:
                     print(f"Failed to process OS Signal: {e}")

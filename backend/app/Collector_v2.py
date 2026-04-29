@@ -1,4 +1,6 @@
 """
+LEGACY/ARCHIVED: Standalone OS collector script. Not used by the current FastAPI runtime.
+
 Collector_v2_1.py — Smart Desk OS Signals (Windows)
 Option 1 polling + Lock/Unlock + Categories + Local Auto-Categorisation (NO Stage 2)
 
@@ -17,6 +19,7 @@ from collections import defaultdict
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import ctypes
 from ctypes import wintypes
 
@@ -147,8 +150,11 @@ def now_epoch() -> float:
     return time.time()
 
 
-def iso_utc(ts_epoch: float) -> str:
-    return datetime.fromtimestamp(ts_epoch, tz=timezone.utc).isoformat()
+COLOMBO_TZ = ZoneInfo("Asia/Colombo")
+
+
+def iso_colombo(ts_epoch: float) -> str:
+    return datetime.fromtimestamp(ts_epoch, tz=COLOMBO_TZ).replace(microsecond=0).isoformat()
 
 
 # ======================
@@ -451,8 +457,8 @@ if __name__ == "__main__":
                 payload = {
                     "user_id": USER_ID,
 
-                    "window_start": iso_utc(window_start),
-                    "window_end": iso_utc(t),
+                    "window_start": iso_colombo(window_start),
+                    "window_end": iso_colombo(t),
 
                     "active_app_durations_sec": {k: round(v, 2) for k, v in durations.items()},
                     "category_durations_sec": {k: round(v, 2) for k, v in category_durations.items()},

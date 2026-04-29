@@ -1,6 +1,7 @@
 from app.models.browser import BrowserPayload
 from app.repositories.browser_repository import BrowserRepository
 
+# LEGACY: Session-based browser ingestion. Keep for backward compatibility.
 class BrowserService:
     def __init__(self):
         self.repository = BrowserRepository()

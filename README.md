@@ -1,282 +1,503 @@
 # SmartDesk Data Collection Layer
 
-This project collects a developer's activity from multiple sources and stores it locally in a SQLite database:
+SmartDesk collects developer activity and stores it locally in `backend/smartdesk.db`.
 
-- OS signals (active window, idle time, lock status)
-- Browser activity (tabs, URLs, basic focus/distracted classification)
-- VS Code activity (via a dedicated extension)
+Sources:
+
+- OS signals
+- Browser activity
+- VS Code activity
 - Google Calendar events
-- A small dashboard UI to visualize what has been stored
+
+Dashboard:
+
+- http://127.0.0.1:8000/dashboard/
 
 ---
 
-## 1. Backend API & Collectors
+## 1. What To Run After Cloning
 
-### 1.1. Requirements
+1. Set up Python and start the backend
+2. Open the dashboard
+3. Load the browser extension
+4. Package and install the VS Code extension as `.vsix`
+5. If needed, set up Google Calendar and click `Connect`
 
-- Python 3.10+ (recommended)
-- PowerShell (on Windows, default)
+---
 
-### 1.2. Setup and run backend
+## 2. Backend Setup
 
-From the `backend` folder:
+From the project root:
 
 ```powershell
-cd "path/to/software project-2nd year/implementation/data collection layer/backend"
-
-# Activate the shared project virtual environment
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
-& "path/to/software project-2nd year/implementation/data collection layer/.venv/Scripts/Activate.ps1"
-
-# Install dependencies
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+cd backend
 python -m pip install -r requirements.txt
-
-# Run the FastAPI app
 python -m uvicorn app.main:app --reload
 ```
 
-Once it starts you should see log lines like:
+Important:
+
+- run Uvicorn from the `backend` folder
+- if you run it from the repo root, `app.main:app` will fail
+
+When it starts, you should see:
 
 - `Initializing local SQLite database...`
 - `Starting OS Collector background service...`
 - `Starting Calendar Collector background service...`
 
-The API will be listening at:
+Open:
 
-- http://127.0.0.1:8000/
-
-### 1.3. Dashboard UI
-
-A small dashboard UI is available to see an overview of stored data.
-
-- Open: http://127.0.0.1:8000/dashboard/
-
-It shows:
-
-- Total records and last timestamp per source (OS, Browser, VS Code, Calendar)
-- A simple 24-hour time series of event counts
-- A static setup checklist (can be edited later)
-
-### 1.4. Prepare VS Code tables
-
-If you are using the new clean VS Code session flow, run these in order after cloning:
-
-```powershell
-cd "path/to/software project-2nd year/implementation/data collection layer/backend"
-python scripts/migrate_vscode_tables.py
-python scripts/verify_vscode_schema.py
-python scripts/build_model1_dataset.py
-```
-
-This essential sequence does the following:
-
-- `vscode_sessions`
-- `vscode_session_snapshots`
-
-and then rebuilds:
-
-- `model1_features_10min`
-
-If you only need to inspect the tables without rebuilding the aggregation, run the first two commands only.
+- API root: http://127.0.0.1:8000/
+- Dashboard: http://127.0.0.1:8000/dashboard/
 
 ---
 
-## 2. Browser Extension (Chrome / Edge / Firefox)
+## 3. Browser Extension Setup
 
-The browser extension tracks active tabs and periodically sends summarized history to the backend.
+Folder:
 
-Source folder:
+- `browser extension/`
 
-- `browser extension/` (top-level folder in this repo)
+What it does:
 
-Key behaviors:
+- tracks active tabs and tab switches
+- classifies pages as `Focused`, `Distracted`, or `Neutral`
+- sends browser minute-window summaries to the backend every 1 minute
 
-- Classifies pages as Focused / Distracted / Neutral (simple heuristics)
-- Logs tab changes, window focus changes, and idle time
-- Every 5 minutes, sends a batch to:
-  - `http://127.0.0.1:8000/api/v1/browser/`
+### Chrome / Edge
 
-### 2.1. Install in Chrome / Edge (development)
-
-1. Build / run backend as above.
-2. Open browser extensions page:
+1. Make sure the backend is running
+2. Open:
    - Chrome: `chrome://extensions`
    - Edge: `edge://extensions`
-3. Turn on **Developer mode**.
-4. Click **Load unpacked**.
-5. Select the `browser extension` folder from this repo.
+3. Turn on `Developer mode`
+4. Click `Load unpacked`
+5. Select the `browser extension` folder
 
-The extension icon should appear and start logging when the backend is running.
+### Firefox
 
-### 2.2. Install in Firefox (temporary add-on)
-
-1. Build / run backend as above.
-2. Open `about:debugging` in Firefox.
-3. Choose **This Firefox** → **Load Temporary Add-on…**.
-4. Select the `manifest.json` inside the `browser extension` folder.
-
-Note: This loads the add-on temporarily (it is removed when Firefox restarts). For permanent distribution, the extension should be packaged and submitted to the Firefox Add-ons store.
+1. Make sure the backend is running
+2. Open `about:debugging`
+3. Click `This Firefox`
+4. Click `Load Temporary Add-on...`
+5. Select `browser extension/manifest.json`
 
 ---
 
-## 3. VS Code Extension (SmartDesk IDE Logger)
+## 4. VS Code Extension Setup Using VSIX
 
-The VS Code extension sends IDE-related activity to the backend.
-
-Source folder:
+Folder:
 
 - `smartdesk-ide-logger/`
 
-### 3.1. Install dependencies and run in development
+What it does:
 
-From the `smartdesk-ide-logger` folder:
+- tracks edits, saves, file switches, debug runs, and terminal usage
+- sends one payload per 1-minute window
+
+### Step 1: Install dependencies
+
+From the project root:
 
 ```powershell
-cd "path/to/software project-2nd year/implementation/data collection layer/smartdesk-ide-logger"
-
+cd smartdesk-ide-logger
 npm install
 ```
 
-Then, open this folder in VS Code and press **F5** to launch an **Extension Development Host**. That VS Code window will have the extension running and can send events to the backend.
+### Step 2: Package the extension as `.vsix`
 
-If you want to install the packaged extension instead of running it from source, use the VSIX file inside this folder:
+Use:
 
-- `smartdesk-ide-logger/smartdesk-ide-logger-0.0.1.vsix`
+```powershell
+npx @vscode/vsce package
+```
 
-Install it from VS Code by choosing **Extensions** -> **...** -> **Install from VSIX**.
+This should create a file similar to:
 
-Later, this extension can be packaged and published to the VS Code Marketplace for easier installation.
+- `smartdesk-ide-logger-0.0.1.vsix`
 
-### 3.2. What the VS Code extension sends
+### Step 3: Install the `.vsix` in VS Code
 
-The extension tracks one file-focused session at a time.
+1. Open VS Code
+2. Open the Extensions panel
+3. Click the `...` menu in the Extensions panel
+4. Click `Install from VSIX...`
+5. Select the generated `.vsix` file from `smartdesk-ide-logger/`
+6. Reload VS Code if prompted
 
-- Opening a file starts a new session
-- Switching to another file closes the previous session and starts a new one
-- The same session sends multiple snapshots with the same `event_id`
+After that, use VS Code normally and the extension should start sending data to:
 
-The backend stores these into:
-
-- `vscode_sessions` for one clean row per session
-- `vscode_session_snapshots` for the full timeline of periodic updates
-
----
-
-## 4. Google Calendar Integration
-
-The backend includes a background task that periodically reads events from your Google Calendar and stores them locally.
-
-- On first run, when the calendar sync starts, it will open a browser window asking you to **allow access** to your Google Calendar.
-- After you approve, a token is stored in a user-specific directory and future syncs run silently.
-
-Behavior:
-
-- Fetches upcoming events (by default: now to +24 hours)
-- Runs on startup, then at a fixed interval (currently every 15 minutes)
-- Stores normalized event data in the `calendar_signals` table inside `smartdesk.db`
+- `POST /api/v1/vscode/minute-window`
 
 ---
 
-## 5. Viewing the SQLite Database (DB Browser for SQLite)
+## VS Code Minute-Window Tracking
 
-All collected data is stored in a local SQLite database file:
+The VS Code extension now sends one payload per 1-minute window.
 
-- `backend/smartdesk.db`
+Key points:
 
-You can inspect it using **DB Browser for SQLite** or any other SQLite client.
+- Endpoint: `POST /api/v1/vscode/minute-window`
+- SQLite table: `vscode_minute_windows`
+- One row per user per 1-minute window
+- Upsert key: `user_id + window_start + window_end`
+- If the same window is sent again, the row is updated (no duplicates)
+- `window_start` and `window_end` include the Asia/Colombo offset (+05:30)
+- `timezone` is stored as Asia/Colombo
 
-### 5.1. Using DB Browser for SQLite
+Verify VS Code minute windows:
 
-1. Download and install **DB Browser for SQLite**:
-   - https://sqlitebrowser.org/
-2. Open the application.
-3. Click **Open Database**.
-4. Browse to this project and select:
+1. Start the backend:
+
+   ```powershell
+   python -m uvicorn app.main:app --reload
+   ```
+
+2. Install the latest VS Code extension VSIX:
+   - Open VS Code
+   - Go to Extensions
+   - Click the three dots menu
+   - Select Install from VSIX
+   - Choose the newly built smartdesk-ide-logger `.vsix` file
+   - Restart VS Code
+
+3. Open a project folder in VS Code.
+4. Edit any file for at least 1-2 minutes.
+5. Check backend logs and confirm this endpoint appears:
+   - `POST /api/v1/vscode/minute-window`
+6. Open the SQLite database in DB Browser:
    - `backend/smartdesk.db`
-5. Go to the **Browse Data** tab.
-6. Use the **Table** dropdown to inspect different data sources:
-   - `os_signals` – OS-level summaries (window focus, idle/active/locked times)
-   - `browser_signals` – Browser history sync batches
-   - `vscode_sessions` – Clean one-row-per-session VS Code data
-   - `vscode_session_snapshots` – Detailed VS Code timeline snapshots
-   - `vscode_signals` – Legacy/raw VS Code events kept for fallback/backward compatibility
-   - `calendar_signals` – Google Calendar events
+7. Go to Browse Data and select:
+   - `vscode_minute_windows`
+8. Confirm rows appear with fields like:
+   - `window_start`, `window_end`, `timezone`
+   - `workspace_name`, `project_path`, `repo_id`, `git_branch`
+   - `active_file_name`, `active_language`
+   - `active_editor_sec`, `idle_sec`
+   - `edit_count`, `save_count`, `file_switch_count`
+   - `terminal_command_count`, `debug_run_count`
+9. Confirm expected behavior:
+   - One row per 1-minute window
+   - The same `user_id + window_start + window_end` does not create duplicates
+   - Re-sending the same window updates the existing row
+   - Different minutes create different rows
 
-   For the aggregated dataset used by Model 1, also inspect:
-   - `model1_features_10min` – One row per 10-minute window
+Note:
 
-You can filter, sort, and export these tables as needed (CSV, JSON, etc.).
+`python -m scripts.verify_vscode_minute_windows` only verifies the backend/database insert and upsert logic. It does not prove that the installed VS Code extension is sending data. To confirm extension data flow, check backend logs for:
+
+- `POST /api/v1/vscode/minute-window`
+
+and confirm rows appear in `vscode_minute_windows`.
 
 ---
 
-## 6. Typical Developer Workflow
+## Browser 1-Minute Window Tracking
 
-For a collaborator who just cloned the repo:
+Browser data is now collected every 1 minute to align with OS and VS Code windows.
 
-1. **Backend**
-   - Setup venv and install requirements.
-   - Run `python -m uvicorn app.main:app --reload`.
-   - Visit `http://127.0.0.1:8000/dashboard/`.
+Verify browser minute windows:
 
-2. **Browser extension**
-   - Load `browser extension/` as an unpacked extension in Chrome/Edge, or a temporary add-on in Firefox.
+1. Start the backend.
+2. Load/reload the browser extension.
+3. Use the browser normally for 2-3 minutes.
+4. Confirm backend logs show browser payloads every 1 minute:
+   - `POST /api/v1/browser/minute-window`
+5. Open the database table used for browser minute-window data:
+   - `browser_minute_windows`
+6. Confirm one row appears per minute.
+7. Confirm browser windows align with VS Code and OS windows using `window_start` and `window_end`.
 
-3. **VS Code extension**
-   - In `smartdesk-ide-logger`, run `npm install` and start the extension host via VS Code (F5).
+---
 
-4. **Calendar**
-   - On first run of the backend, accept the Google Calendar permission prompt.
+## 10-Minute Productivity Summary
 
-5. **Inspect data**
-   - Use the dashboard or DB Browser for SQLite to see what has been stored in `smartdesk.db`.
+1-minute source data from OS, browser, VS Code, and calendar is aggregated into `productivity_summary_10min`.
 
-## 7. Model 1 Aggregation Workflow
+Key points:
 
-The aggregation code lives in:
+- Each row represents one 10-minute Asia/Colombo window.
+- This table is used for dashboard display and the initial ML dataset.
+- It prevents dashboard queries from directly depending on multiple raw/source tables.
+- Each summary row only uses data inside the same 10-minute window to reduce leakage risk.
 
-- `backend/app/ml/model1_features.py`
+For ML training, use feature columns only and exclude:
 
-It builds the `model1_features_10min` table from:
+- `activity_label`
+- `focus_score`
+- `label_source`
+- `created_at`
+- `updated_at`
+
+Manual build and scheduler:
+
+- Manual: `POST /api/v1/productivity-summary/10min/build` (useful for testing/backfills)
+- Automatic: a background scheduler builds completed 10-minute windows every minute during normal backend runtime
+
+---
+
+## Structured Source Tables
+
+SmartDesk now uses structured source tables for easier dashboard and ML aggregation:
+
+- `os_minute_windows`
+- `browser_minute_windows`
+- `vscode_minute_windows`
+- `calendar_events`
+
+Legacy/raw tables remain as backup and for backward compatibility:
 
 - `os_signals`
 - `browser_signals`
-- `vscode_sessions`
+- `vscode_signals`
 - `calendar_signals`
 
-### 7.1. Build the aggregated table
+The structured tables are the main source for `productivity_summary_10min`. This reduces JSON parsing and makes dashboard/ML feature generation easier.
 
-From the `backend` folder:
+---
 
-```powershell
-cd "path/to/software project-2nd year/implementation/data collection layer/backend"
-python scripts/build_model1_dataset.py
+## Table Status
+
+Active tables for current dashboard/ML:
+
+- `os_minute_windows`
+- `browser_minute_windows`
+- `vscode_minute_windows`
+- `calendar_events`
+- `productivity_summary_10min`
+
+Legacy/raw backup tables:
+
+- `os_signals`
+- `browser_signals`
+- `vscode_signals`
+- `calendar_signals`
+
+Deprecated/ignore unless needed:
+
+- `vscode_sessions`
+- `vscode_session_snapshots`
+- `activity_sessions`
+- `model1_features_10min`
+
+Note: `dashboard.py` still uses legacy tables for its current view. The next planned step is to switch dashboard reads to `productivity_summary_10min`.
+
+## 5. Google Calendar Setup
+
+The Calendar collector is built into the backend, but it needs Google OAuth client config before `Connect` from the dashboard will work.
+
+### Step 1: Create Google OAuth credentials
+
+In Google Cloud:
+
+1. Create or choose a project
+2. Enable Google Calendar API
+3. Configure OAuth consent
+4. Create an OAuth client of type `Desktop app`
+5. Download the client JSON file
+
+Useful official links:
+
+- Calendar quickstart: https://developers.google.com/workspace/calendar/api/quickstart/python
+- OAuth consent guide: https://developers.google.com/workspace/guides/configure-oauth-consent
+- Create credentials guide: https://developers.google.com/workspace/guides/create-credentials
+
+### Step 2: Add the credentials to this project
+
+You can use either method below.
+
+#### Option A: Use `backend/.env`
+
+1. Open the downloaded Google JSON file
+2. Copy the values of:
+   - `client_id`
+   - `client_secret`
+   - `project_id`
+3. Create a new file:
+   - `backend/.env`
+4. Paste this and replace the values:
+
+```env
+SMARTDESK_GOOGLE_CLIENT_ID=your-desktop-app-client-id.apps.googleusercontent.com
+SMARTDESK_GOOGLE_CLIENT_SECRET=your-client-secret
+SMARTDESK_GOOGLE_PROJECT_ID=your-google-cloud-project-id
 ```
 
-If you want to target a specific SQLite file:
+You can also copy from:
+
+- `backend/.env.example`
+
+#### Option B: Put the downloaded JSON file in the project
+
+1. Take the JSON file you downloaded from Google Cloud
+2. Rename it to:
+   - `google_calendar_client.json`
+3. Place it here:
+   - `backend/app/config/google_calendar_client.json`
+
+This is the exact path the backend checks for bundled Calendar OAuth config.
+
+### Step 3: Restart the backend
+
+If the backend was already running, stop it and start it again:
 
 ```powershell
-python scripts/build_model1_dataset.py "path/to/smartdesk.db"
+cd backend
+python -m uvicorn app.main:app --reload
 ```
 
-### 7.2. See the aggregation output
+### Step 4: Connect Google Calendar
 
-The script writes rows into the `model1_features_10min` table inside `backend/smartdesk.db`.
+1. Open the dashboard:
+   - http://127.0.0.1:8000/dashboard/
+2. In the Calendar section, click `Connect`
+3. Sign in to Google
+4. Approve Calendar read-only access
 
-You can inspect it with:
+After success:
+
+- the token is saved to `%APPDATA%\smartdesk-calendar\token.json`
+- background sync runs automatically every 15 minutes
+
+### Step 5: Check if it worked
+
+On the dashboard, the Calendar status should change like this:
+
+- `Needs credentials` -> config missing
+- `Not connected` -> config found, waiting for user connect
+- `Connected` -> token saved and sync is active
+
+You can also test these endpoints:
+
+- `GET /api/v1/calendar/status`
+- `GET /api/v1/calendar/events`
+- `POST /api/v1/calendar/sync`
+
+---
+
+## 6. Local Database
+
+Database file:
+
+- `backend/smartdesk.db`
+
+Tables:
+
+- `os_signals`
+- `browser_signals`
+- `browser_minute_windows`
+- `vscode_signals`
+- `vscode_minute_windows`
+- `calendar_signals`
+- `os_minute_windows`
+- `calendar_events`
+- `productivity_summary_10min`
+
+If you want to inspect it manually, use DB Browser for SQLite:
+
+- https://sqlitebrowser.org/
+
+---
+
+## 7. Current Save Frequency
+
+- OS collector: saves every 60 seconds
+- Browser extension: sends every 1 minute
+- VS Code extension: sends every 1 minute
+- Calendar collector: syncs every 15 minutes
+- Summary scheduler: builds the latest completed 10-minute window every 60 seconds
+
+---
+
+## Timezone Standard
+
+SmartDesk stores collector timestamps in Asia/Colombo ISO format.
+
+Example:
+
+- `2026-04-27T10:37:00+05:30`
+
+This means 10:37 AM Sri Lanka time.
+
+Rules:
+
+- `timezone` should be `Asia/Colombo`
+- `window_start` and `window_end` include `+05:30`
+- We are not maintaining separate UTC/local columns at this MVP stage
+
+This makes local debugging, DB Browser inspection, dashboard display, and 10-minute aggregation easier.
+
+---
+
+## Time-Window Architecture Summary
+
+Current time-window architecture:
+
+- OS collector -> 1-minute OS windows
+- VS Code extension -> `vscode_minute_windows`, 1-minute windows
+- Browser extension -> 1-minute browser windows
+- Calendar collector -> event intervals / meeting overlap data
+- Feature layer -> aggregates 1-minute data into 10-minute summaries
+
+The 1-minute tables are the main source for dashboard and ML feature generation. Raw/session/event tables can remain for debugging or detailed analysis, but ML should primarily use the aligned 1-minute window data.
+
+---
+
+## 8. Troubleshooting
+
+### `ModuleNotFoundError: No module named 'app'`
+
+You started Uvicorn from the wrong folder.
+
+Use:
 
 ```powershell
-python scripts/verify_vscode_schema.py
+cd backend
+python -m uvicorn app.main:app --reload
 ```
 
-Or open `backend/smartdesk.db` in DB Browser for SQLite and browse the `model1_features_10min` table.
+### Dashboard says `Needs credentials`
 
-### 7.3. Quick validation checks
+Calendar OAuth config is missing.
 
-After rebuilding, useful checks are:
+Fix it by either:
 
-- `vscode_total_duration_sec <= 600` for each 10-minute row
-- `vscode_active_seconds + vscode_idle_seconds <= vscode_total_duration_sec`
-- `window_start` and `window_end` use UTC format ending in `+00:00`
-- `manual_label` remains unchanged if it was already filled in
+- creating `backend/.env`
+- or adding `backend/app/config/google_calendar_client.json`
 
-This README can be expanded over time as the product evolves (e.g., packaging, installers, or cloud sync).
+Then restart the backend.
+
+### Dashboard says `Reconnect needed`
+
+The saved Google token is no longer valid.
+
+Delete:
+
+- `%APPDATA%\smartdesk-calendar\token.json`
+
+Then use `Connect` again from the dashboard.
+
+### No browser data appears
+
+Check:
+
+- backend is running
+- the extension is loaded from `browser extension/`
+
+### No VS Code data appears
+
+Check:
+
+- the `.vsix` extension was installed successfully
+- backend is running
+
+---
+
+## 9. Notes
+
+- Calendar access is read-only
+- All data stays local in SQLite
+- This project is currently set up for development use by teammates

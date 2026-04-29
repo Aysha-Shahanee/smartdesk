@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import health, os_signals, browser, vscode, calendar, dashboard
+from app.routes import health, os_signals, browser, vscode, calendar, dashboard, productivity_summary, os_minute_window
 from app.core.database import Base, engine
 from app.models import db_models
 
@@ -13,15 +13,18 @@ async def lifespan(app: FastAPI):
     
     from app.services.os_monitoring_service import os_monitor
     from app.services.calendar_sync_service import calendar_sync
+    from app.services.productivity_summary_scheduler import summary_scheduler
     print("Starting OS Collector background service...")
     os_monitor.start()
     print("Starting Calendar Collector background service...")
     calendar_sync.start()
+    summary_scheduler.start()
     yield
     print("Stopping OS Collector background service...")
     os_monitor.stop()
     print("Stopping Calendar Collector background service...")
     calendar_sync.stop()
+    summary_scheduler.stop()
 
 app = FastAPI(title="SmartDesk Data Collection Layer", lifespan=lifespan)
 
@@ -36,9 +39,11 @@ app.add_middleware(
 
 app.include_router(health.router, prefix="/health", tags=["Health"])
 app.include_router(os_signals.router, prefix="/api/v1/os-signals", tags=["OS Signals"])
+app.include_router(os_minute_window.router, prefix="/api/v1/os", tags=["OS Minute Windows"])
 app.include_router(browser.router, prefix="/api/v1/browser", tags=["Browser"])
 app.include_router(vscode.router, prefix="/api/v1/vscode", tags=["VS Code"])
 app.include_router(calendar.router, prefix="/api/v1/calendar", tags=["Calendar"])
+app.include_router(productivity_summary.router, prefix="/api/v1/productivity-summary", tags=["Productivity Summary"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
 
 @app.get("/")

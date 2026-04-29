@@ -14,5 +14,13 @@ engine = create_engine(
 # A sessionmaker builds a new Session object when called.
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+# FastAPI dependency for session scope
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
 # All standard SQLAlchemy models will inherit from this Base class
 Base = declarative_base()

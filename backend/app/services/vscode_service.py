@@ -5,6 +5,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# LEGACY: Session-based VS Code ingestion. Keep for backward compatibility.
 class VSCodeService:
     def __init__(self):
         self.repository = VSCodeRepository()

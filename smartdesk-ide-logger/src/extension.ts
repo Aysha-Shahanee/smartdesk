@@ -2,54 +2,56 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
 
-type SessionEvent = {
-	event_id: string;
-	file_path?: string;
-	language?: string;
+type ActiveEditorInfo = {
+	file_path: string | null;
+	file_name: string | null;
+	language: string | null;
+};
 
-	start_time: string;
-	end_time?: string;
-	duration_seconds?: number;
-
-	active_seconds: number;
-	idle_seconds: number;
-
+type MinuteWindowCounters = {
+	vscode_foreground_sec: number;
+	active_editor_sec: number;
+	idle_sec: number;
 	edit_count: number;
 	save_count: number;
-	debug_runs: number;
-
-	approx_lines_added: number;
-	approx_lines_removed: number;
-	approx_chars_added: number;
-	approx_chars_removed: number;
-
-	terminal_commands: number;
+	file_switch_count: number;
+	terminal_command_count: number;
+	debug_run_count: number;
 };
 
-type ProjectLog = {
-	project_name: string;
+type VSCodeMinuteWindowPayload = {
+	user_id: string;
+	window_start: string;
+	window_end: string;
+	timezone: string;
+	workspace_name: string;
 	project_path: string;
-	sessions: SessionEvent[];
+	repo_id: string | null;
+	git_branch: string | null;
+	active_file_path: string | null;
+	active_file_name: string | null;
+	active_language: string | null;
+	vscode_foreground_sec: number | null;
+	active_editor_sec: number | null;
+	idle_sec: number | null;
+	edit_count: number;
+	save_count: number;
+	file_switch_count: number;
+	terminal_command_count: number;
+	debug_run_count: number;
+	source: string;
+	schema_version: string;
+	created_at: string;
+	updated_at: string;
 };
 
-const AUTO_SAVE_INTERVAL = 30000;
-const IDLE_THRESHOLD = 90 * 1000; // 90s grace period
-
-function nowLocalIso() {
-	const d = new Date();
-	const pad = (n: number) => String(n).padStart(2, "0");
-	const ms = String(d.getMilliseconds()).padStart(3, "0");
-
-	const tzOffset = -d.getTimezoneOffset();
-	const tzSign = tzOffset >= 0 ? "+" : "-";
-	const tzHours = pad(Math.floor(Math.abs(tzOffset) / 60));
-	const tzMins = pad(Math.abs(tzOffset) % 60);
-	const tz = `${tzSign}${tzHours}:${tzMins}`;
-
-	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
-		d.getHours()
-	)}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${ms}${tz}`;
-}
+const WINDOW_SECONDS = 60;
+const WINDOW_MS = WINDOW_SECONDS * 1000;
+const TICK_MS = 1000;
+const IDLE_THRESHOLD_MS = 90 * 1000; // 90s grace period
+const SCHEMA_VERSION = "1.0";
+const COLOMBO_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+const COLOMBO_TIMEZONE = "Asia/Colombo";
 
 function getRelativePath(filePath: string): string {
 	const folders = vscode.workspace.workspaceFolders;
@@ -62,276 +64,278 @@ function getRelativePath(filePath: string): string {
 	return path.basename(filePath);
 }
 
+function getWorkspaceName(): string {
+	return vscode.workspace.workspaceFolders?.[0]?.name ?? "unknown-workspace";
+}
+
+function getProjectPath(): string {
+	return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
+}
+
+function getUserId(): string {
+	return process.env.USER_ID ?? "demo_user";
+}
+
+function getTimezone(): string {
+	return COLOMBO_TIMEZONE;
+}
+
+function toColomboISOString(date: Date): string {
+	const colomboDate = new Date(date.getTime() + COLOMBO_OFFSET_MS);
+	const yyyy = colomboDate.getUTCFullYear();
+	const mm = String(colomboDate.getUTCMonth() + 1).padStart(2, "0");
+	const dd = String(colomboDate.getUTCDate()).padStart(2, "0");
+	const hh = String(colomboDate.getUTCHours()).padStart(2, "0");
+	const mi = String(colomboDate.getUTCMinutes()).padStart(2, "0");
+	const ss = String(colomboDate.getUTCSeconds()).padStart(2, "0");
+	return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}+05:30`;
+}
+
+function alignToColomboMinute(ms: number): number {
+	const shifted = ms + COLOMBO_OFFSET_MS;
+	const aligned = Math.floor(shifted / WINDOW_MS) * WINDOW_MS;
+	return aligned - COLOMBO_OFFSET_MS;
+}
+
+function getGitInfo(projectPath: string): { repo_id: string | null; git_branch: string | null } {
+	if (!projectPath) {
+		return { repo_id: null, git_branch: null };
+	}
+
+	const gitDir = path.join(projectPath, ".git");
+	if (!fs.existsSync(gitDir)) {
+		return { repo_id: null, git_branch: null };
+	}
+
+	let gitBranch: string | null = null;
+	try {
+		const headPath = path.join(gitDir, "HEAD");
+		const head = fs.readFileSync(headPath, "utf8").trim();
+		if (head.startsWith("ref:")) {
+			const parts = head.split("/");
+			gitBranch = parts[parts.length - 1] ?? null;
+		} else if (head) {
+			gitBranch = head.substring(0, 7);
+		}
+	} catch {
+		gitBranch = null;
+	}
+
+	let repoId: string | null = null;
+	try {
+		const configPath = path.join(gitDir, "config");
+		const config = fs.readFileSync(configPath, "utf8");
+		const originBlock = config.split(/\[remote "origin"\]/i)[1];
+		if (originBlock) {
+			const urlMatch = originBlock.match(/url\s*=\s*(.+)/i);
+			if (urlMatch) {
+				repoId = urlMatch[1].trim();
+			}
+		}
+	} catch {
+		repoId = null;
+	}
+
+	return { repo_id: repoId, git_branch: gitBranch };
+}
+
 export function activate(context: vscode.ExtensionContext) {
 	const output = vscode.window.createOutputChannel("SmartDesk Logger");
 	context.subscriptions.push(output);
 	output.appendLine(`[SmartDesk] Activated at ${new Date().toISOString()}`);
 
-	const storagePath = context.globalStorageUri.fsPath;
-	if (!fs.existsSync(storagePath)) { fs.mkdirSync(storagePath, { recursive: true }); }
-
-	const logFilePath = path.join(storagePath, "ide_events.json");
-	if (!fs.existsSync(logFilePath)) {
-		fs.writeFileSync(logFilePath, JSON.stringify([], null, 2), "utf8");
-	}
-
-	function readLogs(): ProjectLog[] {
-		try {
-			const data = JSON.parse(fs.readFileSync(logFilePath, "utf8"));
-			if (!Array.isArray(data)) { return []; }
-
-			// Already in ProjectLog[] format
-			if (data.length > 0 && (data[0] as any).sessions) {
-				return data;
-			}
-
-			// Migrate old flat SessionEvent[] format
-			if (data.length > 0 && (data[0] as any).event_id) {
-				const migrated: ProjectLog[] = [{
-					project_name: getProjectName(),
-					project_path: getProjectPath(),
-					sessions: data as SessionEvent[]
-				}];
-				writeLogs(migrated);
-				return migrated;
-			}
-
-			return [];
-		} catch { }
-		return [];
-	}
-
-	function writeLogs(logs: ProjectLog[]) {
-		fs.writeFileSync(logFilePath, JSON.stringify(logs, null, 2), "utf8");
-	}
-
-	function getProjectName(): string {
-		return vscode.workspace.workspaceFolders?.[0]?.name ?? "unknown-project";
-	}
-
-	function getProjectPath(): string {
-		return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
-	}
-
-	async function sendToBackend(session: SessionEvent) {
-		try {
-			const payload = {
-				timestamp: new Date().toISOString(),
-				event_type: "vscode_session",
-				data: {
-					project_name: getProjectName(),
-					project_path: getProjectPath(),
-					...session
-				}
-			};
-
-			// Fire an HTTP POST request to the local backend
-			await fetch("http://localhost:8000/api/v1/vscode/", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(payload)
-			});
-		} catch (error) {
-			const errMessage = error instanceof Error ? error.message : String(error);
-			output.appendLine(`[SmartDesk] Backend sync failed: ${errMessage}`);
-		}
-	}
-
-	function upsertSession(session: SessionEvent) {
-		const logs = readLogs();
-		let project = logs.find(p => p.project_path === getProjectPath());
-		if (!project) {
-			project = {
-				project_name: getProjectName(),
-				project_path: getProjectPath(),
-				sessions: []
-			};
-			logs.push(project);
-		}
-
-		const idx = project.sessions.findIndex(s => s.event_id === session.event_id);
-		if (idx >= 0) { project.sessions[idx] = session; }
-		else { project.sessions.push(session); }
-
-		writeLogs(logs);
-
-		// Send non-blocking update to backend
-		sendToBackend(session);
-	}
-
-	function isSessionDoc(doc: vscode.TextDocument): boolean {
-		if (!currentSession) { return false; }
-		// Case-insensitive comparison for Windows (VS Code can report different casing)
-		return getRelativePath(doc.fileName).toLowerCase() === currentSession.file_path?.toLowerCase();
-	}
-
-	let currentSession: SessionEvent | null = null;
-	let sessionStartMs = 0;
-	let autoSaveTimer: NodeJS.Timeout | null = null;
+	let windowStartMs = 0;
+	let windowEndMs = 0;
+	let windowTimer: NodeJS.Timeout | null = null;
+	let windowInterval: NodeJS.Timeout | null = null;
 	let activityTimer: NodeJS.Timeout | null = null;
-	let lastActivityTimestamp = Date.now();
+	let lastActivityMs = Date.now();
+	let isWindowFocused = vscode.window.state.focused;
+	let lastActiveFilePath: string | null = null;
+	let activeEditorInfo: ActiveEditorInfo = {
+		file_path: null,
+		file_name: null,
+		language: null
+	};
 
-	function createEmptySession(doc: vscode.TextDocument): SessionEvent {
+	let counters: MinuteWindowCounters = createEmptyCounters();
+
+	function createEmptyCounters(): MinuteWindowCounters {
 		return {
-			event_id: `evt_${Date.now()}`,
-			file_path: getRelativePath(doc.fileName),
-			language: doc.languageId,
-
-			start_time: nowLocalIso(),
-			end_time: undefined,
-			duration_seconds: undefined,
-
-			active_seconds: 0,
-			idle_seconds: 0,
-
+			vscode_foreground_sec: 0,
+			active_editor_sec: 0,
+			idle_sec: 0,
 			edit_count: 0,
 			save_count: 0,
-			debug_runs: 0,
-
-			approx_lines_added: 0,
-			approx_lines_removed: 0,
-			approx_chars_added: 0,
-			approx_chars_removed: 0,
-
-			terminal_commands: 0
+			file_switch_count: 0,
+			terminal_command_count: 0,
+			debug_run_count: 0
 		};
 	}
 
-	function startActivityMonitor() {
-		stopActivityMonitor();
-		activityTimer = setInterval(() => {
-			if (!currentSession) { return; }
-			const now = Date.now();
-
-			if (now - lastActivityTimestamp > IDLE_THRESHOLD) {
-				currentSession.idle_seconds += 1;
-			} else {
-				currentSession.active_seconds += 1;
-			}
-		}, 1000);
+	function resetCounters() {
+		counters = createEmptyCounters();
 	}
 
-	function stopActivityMonitor() {
+	function updateActiveEditor(editor?: vscode.TextEditor) {
+		if (!editor || editor.document.isUntitled) { return; }
+
+		const filePath = getRelativePath(editor.document.fileName);
+		if (lastActiveFilePath && lastActiveFilePath !== filePath) {
+			counters.file_switch_count += 1;
+		}
+
+		activeEditorInfo = {
+			file_path: filePath,
+			file_name: path.basename(editor.document.fileName),
+			language: editor.document.languageId
+		};
+
+		lastActiveFilePath = filePath;
+		lastActivityMs = Date.now();
+	}
+
+	function startActivityTimer() {
+		stopActivityTimer();
+		activityTimer = setInterval(() => {
+			if (!windowStartMs) { return; }
+			const now = Date.now();
+			if (isWindowFocused) {
+				counters.vscode_foreground_sec += 1;
+				if (lastActivityMs > 0 && now - lastActivityMs <= IDLE_THRESHOLD_MS) {
+					counters.active_editor_sec += 1;
+				} else {
+					counters.idle_sec += 1;
+				}
+			} else {
+				counters.idle_sec += 1;
+			}
+		}, TICK_MS);
+	}
+
+	function stopActivityTimer() {
 		if (activityTimer) {
 			clearInterval(activityTimer);
 			activityTimer = null;
 		}
 	}
 
-	function startAutoSaveTimer() {
-		stopAutoSaveTimer();
-		autoSaveTimer = setInterval(() => {
-			if (!currentSession) { return; }
-			const snapshot = { ...currentSession };
-			snapshot.end_time = nowLocalIso();
-			snapshot.duration_seconds = Math.max(1, Math.floor((Date.now() - sessionStartMs) / 1000));
-			upsertSession(snapshot);
-		}, AUTO_SAVE_INTERVAL);
-	}
-
-	function stopAutoSaveTimer() {
-		if (autoSaveTimer) {
-			clearInterval(autoSaveTimer);
-			autoSaveTimer = null;
+	async function sendMinuteWindow(payload: VSCodeMinuteWindowPayload) {
+		try {
+			await fetch("http://localhost:8000/api/v1/vscode/minute-window", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(payload)
+			});
+		} catch (error) {
+			const errMessage = error instanceof Error ? error.message : String(error);
+			output.appendLine(`[SmartDesk] Minute window sync failed: ${errMessage}`);
 		}
 	}
 
-	function startSession(editor: vscode.TextEditor) {
-		if (editor.document.isUntitled) { return; }
+	function buildPayload(): VSCodeMinuteWindowPayload {
+		const projectPath = getProjectPath();
+		const gitInfo = getGitInfo(projectPath);
+		const nowIso = toColomboISOString(new Date());
 
-		currentSession = createEmptySession(editor.document);
-		sessionStartMs = Date.now();
-		lastActivityTimestamp = Date.now();
-
-		startAutoSaveTimer();
-		startActivityMonitor();
-
-		output.appendLine(`[SmartDesk] Session started: ${currentSession.file_path}`);
+		return {
+			user_id: getUserId(),
+			window_start: toColomboISOString(new Date(windowStartMs)),
+			window_end: toColomboISOString(new Date(windowEndMs)),
+			timezone: getTimezone(),
+			workspace_name: getWorkspaceName(),
+			project_path: projectPath,
+			repo_id: gitInfo.repo_id,
+			git_branch: gitInfo.git_branch,
+			active_file_path: activeEditorInfo.file_path,
+			active_file_name: activeEditorInfo.file_name,
+			active_language: activeEditorInfo.language,
+			vscode_foreground_sec: counters.vscode_foreground_sec,
+			active_editor_sec: counters.active_editor_sec,
+			idle_sec: counters.idle_sec,
+			edit_count: counters.edit_count,
+			save_count: counters.save_count,
+			file_switch_count: counters.file_switch_count,
+			terminal_command_count: counters.terminal_command_count,
+			debug_run_count: counters.debug_run_count,
+			source: "vscode_extension",
+			schema_version: SCHEMA_VERSION,
+			created_at: nowIso,
+			updated_at: nowIso
+		};
 	}
 
-	function endSession() {
-		if (!currentSession) { return; }
+	function flushWindow() {
+		if (!windowStartMs || !windowEndMs) { return; }
+		const payload = buildPayload();
+		sendMinuteWindow(payload);
+		resetCounters();
+	}
 
-		stopAutoSaveTimer();
-		stopActivityMonitor();
+	function stopWindowCycle() {
+		if (windowTimer) {
+			clearTimeout(windowTimer);
+			windowTimer = null;
+		}
+		if (windowInterval) {
+			clearInterval(windowInterval);
+			windowInterval = null;
+		}
+	}
 
-		currentSession.end_time = nowLocalIso();
-		currentSession.duration_seconds = Math.max(1, Math.floor((Date.now() - sessionStartMs) / 1000));
+	function startWindowCycle() {
+		stopWindowCycle();
+		const now = Date.now();
+		windowStartMs = alignToColomboMinute(now);
+		windowEndMs = windowStartMs + WINDOW_MS;
+		resetCounters();
 
-		upsertSession(currentSession);
-
-		output.appendLine(`[SmartDesk] Session ended: ${currentSession.file_path}`);
-
-		currentSession = null;
-		sessionStartMs = 0;
+		const delay = Math.max(0, windowEndMs - now);
+		windowTimer = setTimeout(() => {
+			flushWindow();
+			windowStartMs = windowEndMs;
+			windowEndMs = windowStartMs + WINDOW_MS;
+			resetCounters();
+			windowInterval = setInterval(() => {
+				flushWindow();
+				windowStartMs = windowEndMs;
+				windowEndMs = windowStartMs + WINDOW_MS;
+				resetCounters();
+			}, WINDOW_MS);
+		}, delay);
 	}
 
 	// --- Event Listeners ---
-
 	const fileSwitch = vscode.window.onDidChangeActiveTextEditor(editor => {
-		endSession();
-		if (!editor) { return; }
-
-		const fullPath = editor.document.fileName;
-		if (fullPath === logFilePath) { return; }
-		if (fullPath.toLowerCase().endsWith(".json")) { return; }
-
-		startSession(editor);
+		updateActiveEditor(editor);
 	});
 
 	const editTracking = vscode.workspace.onDidChangeTextDocument(e => {
-		if (!currentSession) { return; }
-
-		// Skip events with no actual content changes (metadata-only events)
 		if (e.contentChanges.length === 0) { return; }
-
-		if (!isSessionDoc(e.document)) {
-			// Log mismatch for debugging
-			output.appendLine(`[SmartDesk] Edit SKIPPED: doc="${getRelativePath(e.document.fileName)}" session="${currentSession.file_path}"`);
-			return;
-		}
-
-		currentSession.edit_count += e.contentChanges.length;
-		lastActivityTimestamp = Date.now();
-
-		for (const change of e.contentChanges) {
-			currentSession.approx_chars_added += change.text.length;
-			currentSession.approx_chars_removed += change.rangeLength;
-
-			const added = (change.text.match(/\n/g) || []).length;
-			const removed = Math.max(0, change.range.end.line - change.range.start.line);
-
-			currentSession.approx_lines_added += added;
-			currentSession.approx_lines_removed += removed;
-		}
+		if (vscode.window.activeTextEditor?.document !== e.document) { return; }
+		counters.edit_count += e.contentChanges.length;
+		lastActivityMs = Date.now();
 	});
 
 	const saveTracking = vscode.workspace.onDidSaveTextDocument(doc => {
-		if (!currentSession || !isSessionDoc(doc)) { return; }
-		currentSession.save_count += 1;
-		lastActivityTimestamp = Date.now();
+		if (vscode.window.activeTextEditor?.document !== doc) { return; }
+		counters.save_count += 1;
+		lastActivityMs = Date.now();
 	});
 
 	const debugTracking = vscode.debug.onDidStartDebugSession(() => {
-		if (!currentSession) { return; }
-		currentSession.debug_runs += 1;
-		lastActivityTimestamp = Date.now();
+		counters.debug_run_count += 1;
+		lastActivityMs = Date.now();
 	});
 
 	const terminalTracking = vscode.window.onDidStartTerminalShellExecution?.(() => {
-		if (!currentSession) { return; }
-		currentSession.terminal_commands += 1;
-		lastActivityTimestamp = Date.now();
+		counters.terminal_command_count += 1;
+		lastActivityMs = Date.now();
 	});
 
 	const windowFocus = vscode.window.onDidChangeWindowState(state => {
-		if (!currentSession) { return; }
-
-		if (!state.focused) {
-			lastActivityTimestamp = 0; // force idle
-		} else {
-			lastActivityTimestamp = Date.now();
-		}
+		isWindowFocused = state.focused;
+		lastActivityMs = isWindowFocused ? Date.now() : 0;
 	});
 
 	context.subscriptions.push(
@@ -346,22 +350,17 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push({
 		dispose: () => {
-			endSession();
+			stopWindowCycle();
+			stopActivityTimer();
 		}
 	});
 
-	const showLogLocation = vscode.commands.registerCommand(
-		"smartdesk.showLogLocation",
-		() => {
-			vscode.window.showInformationMessage(`SmartDesk log file: ${logFilePath}`);
-		}
-	);
-
-	context.subscriptions.push(showLogLocation);
-
 	if (vscode.window.activeTextEditor) {
-		startSession(vscode.window.activeTextEditor);
+		updateActiveEditor(vscode.window.activeTextEditor);
 	}
+
+	startWindowCycle();
+	startActivityTimer();
 }
 
 export function deactivate() { }

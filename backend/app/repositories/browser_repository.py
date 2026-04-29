@@ -2,6 +2,7 @@ from app.models.browser import BrowserPayload
 from app.core.database import SessionLocal
 from app.models.db_models import BrowserRecord
 
+# LEGACY: Session-based browser ingestion. Keep for backward compatibility.
 class BrowserRepository:
     def save(self, payload: BrowserPayload):
         db = SessionLocal()

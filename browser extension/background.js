@@ -29,11 +29,15 @@ const distractedDomains = [
 
 // Track currently active tab
 let currentActiveTab = null;
-let lastStartTime = null;
-let lastLoggedUrl = "";
 let isIdle = false;
 const SYNC_ALARM_NAME = "smartdeskBrowserSync";
-const SYNC_INTERVAL_MINUTES = 5;
+const SYNC_INTERVAL_MINUTES = 1;
+const WINDOW_MS = 60 * 1000;
+const USER_ID = "demo_user";
+const SCHEMA_VERSION = "1.0";
+const SOURCE = "browser_extension";
+const COLOMBO_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+const COLOMBO_TIMEZONE = "Asia/Colombo";
 
 // === Classify tab ===
 function classifyTab(tab) {
@@ -73,7 +77,7 @@ function logPageVisit(tab) {
             // find last log of this tab without endTime
             for (let i = history.length - 1; i >= 0; i--) {
                 if (history[i].index === currentActiveTab.index && !history[i].endTime) {
-                    history[i].endTime = now.toISOString();
+                    history[i].endTime = toColomboISOString(now);
                     break;
                 }
             }
@@ -84,7 +88,7 @@ function logPageVisit(tab) {
     // Log new active tab
     const logData = {
         index: Date.now(),
-        startTime: now.toISOString(),
+        startTime: toColomboISOString(now),
         endTime: null,
         title: tab.title || "No Title",
         url: tab.url,
@@ -100,7 +104,6 @@ function logPageVisit(tab) {
     });
 
     currentActiveTab = logData;
-    lastStartTime = now;
 }
 
 function closeCurrentSession() {
@@ -113,7 +116,7 @@ function closeCurrentSession() {
 
         for (let i = history.length - 1; i >= 0; i--) {
             if (history[i].index === currentActiveTab.index && !history[i].endTime) {
-                history[i].endTime = now.toISOString();
+                history[i].endTime = toColomboISOString(now);
                 break;
             }
         }
@@ -195,6 +198,7 @@ chrome.idle.onStateChanged.addListener((newState) => {
 // =============================
 // Transform & send history to backend
 // =============================
+// LEGACY: Session-based history sync. Active flow is sendMinuteWindowToBackend().
 function sendHistoryToBackend() {
     chrome.storage.local.get("history", (data) => {
         const history = data.history || [];
@@ -211,7 +215,7 @@ function sendHistoryToBackend() {
         }));
 
         const wrappedPayload = {
-            timestamp: new Date().toISOString(),
+            timestamp: toColomboISOString(new Date()),
             event_type: "browser_history_sync",
             data: { history: historyPayload }
         };
@@ -236,6 +240,158 @@ function sendHistoryToBackend() {
     });
 }
 
+function getTimezone() {
+    return COLOMBO_TIMEZONE;
+}
+
+function getBrowserName() {
+    const ua = (navigator.userAgent || "").toLowerCase();
+    if (ua.includes("edg")) return "Edge";
+    if (ua.includes("firefox")) return "Firefox";
+    if (ua.includes("chrome")) return "Chrome";
+    if (ua.includes("safari")) return "Safari";
+    return "Unknown";
+}
+
+function safeDomain(url) {
+    if (!url) return null;
+    try {
+        return new URL(url).hostname || null;
+    } catch {
+        return null;
+    }
+}
+
+function toColomboISOString(date) {
+    const colomboDate = new Date(date.getTime() + COLOMBO_OFFSET_MS);
+    const yyyy = colomboDate.getUTCFullYear();
+    const mm = String(colomboDate.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(colomboDate.getUTCDate()).padStart(2, "0");
+    const hh = String(colomboDate.getUTCHours()).padStart(2, "0");
+    const mi = String(colomboDate.getUTCMinutes()).padStart(2, "0");
+    const ss = String(colomboDate.getUTCSeconds()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}+05:30`;
+}
+
+function alignToColomboMinute(ms) {
+    const shifted = ms + COLOMBO_OFFSET_MS;
+    const aligned = Math.floor(shifted / WINDOW_MS) * WINDOW_MS;
+    return aligned - COLOMBO_OFFSET_MS;
+}
+
+function buildMinuteWindowPayload(windowStartMs, windowEndMs, history) {
+    const windowStartIso = toColomboISOString(new Date(windowStartMs));
+    const windowEndIso = toColomboISOString(new Date(windowEndMs));
+    const windowDurationSec = Math.floor((windowEndMs - windowStartMs) / 1000);
+
+    let productive = 0;
+    let neutral = 0;
+    let distracting = 0;
+    let activeTime = 0;
+    let tabSwitchCount = 0;
+    const domains = new Set();
+
+    let activeTab = null;
+    if (currentActiveTab && currentActiveTab.url) {
+        activeTab = currentActiveTab;
+    } else if (history.length > 0) {
+        activeTab = history[history.length - 1];
+    }
+
+    for (const entry of history) {
+        if (!entry.startTime) continue;
+        const startMs = Date.parse(entry.startTime);
+        if (Number.isNaN(startMs)) continue;
+        const endMs = entry.endTime ? Date.parse(entry.endTime) : windowEndMs;
+        if (Number.isNaN(endMs)) continue;
+
+        const overlapStart = Math.max(startMs, windowStartMs);
+        const overlapEnd = Math.min(endMs, windowEndMs);
+        const overlapMs = Math.max(0, overlapEnd - overlapStart);
+        if (overlapMs === 0) continue;
+
+        const overlapSec = Math.floor(overlapMs / 1000);
+        activeTime += overlapSec;
+
+        const category = entry.category || "Neutral";
+        if (category === "Focused") productive += overlapSec;
+        else if (category === "Distracted") distracting += overlapSec;
+        else neutral += overlapSec;
+
+        const domain = safeDomain(entry.url);
+        if (domain) domains.add(domain);
+
+        const entryStartMs = startMs;
+        if (entryStartMs >= windowStartMs && entryStartMs < windowEndMs) {
+            tabSwitchCount += 1;
+        }
+    }
+
+    const idleSec = Math.max(0, windowDurationSec - activeTime);
+    const activeDomain = activeTab ? safeDomain(activeTab.url) : null;
+
+    return {
+        user_id: USER_ID,
+        window_start: windowStartIso,
+        window_end: windowEndIso,
+        timezone: getTimezone(),
+        browser_name: getBrowserName(),
+        active_tab_domain: activeDomain,
+        active_tab_url: activeTab ? activeTab.url || null : null,
+        active_tab_title: activeTab ? activeTab.title || null : null,
+        active_tab_category: activeTab ? activeTab.category || null : null,
+        browser_active_time_sec: activeTime,
+        browser_idle_time_sec: idleSec,
+        productive_time_sec: productive,
+        neutral_time_sec: neutral,
+        distracting_time_sec: distracting,
+        communication_time_sec: 0,
+        tab_switch_count: tabSwitchCount,
+        unique_domains_count: domains.size,
+        source: SOURCE,
+        schema_version: SCHEMA_VERSION,
+        created_at: toColomboISOString(new Date()),
+        updated_at: toColomboISOString(new Date())
+    };
+}
+
+function pruneHistory(history, windowEndMs) {
+    return history.filter((entry) => {
+        if (!entry.endTime) return true;
+        const endMs = Date.parse(entry.endTime);
+        if (Number.isNaN(endMs)) return true;
+        return endMs > windowEndMs;
+    });
+}
+
+function sendMinuteWindowToBackend() {
+    const now = Date.now();
+    const windowEndMs = alignToColomboMinute(now);
+    const windowStartMs = windowEndMs - WINDOW_MS;
+
+    chrome.storage.local.get("history", (data) => {
+        const history = data.history || [];
+        const payload = buildMinuteWindowPayload(windowStartMs, windowEndMs, history);
+
+        fetch("http://127.0.0.1:8000/api/v1/browser/minute-window", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        })
+            .then(res => {
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}`);
+                }
+                return res.json();
+            })
+            .then(() => {
+                const pruned = pruneHistory(history, windowEndMs);
+                chrome.storage.local.set({ history: pruned });
+            })
+            .catch(err => console.error("Error sending minute window:", err));
+    });
+}
+
 function ensureSyncAlarm() {
     chrome.alarms.create(SYNC_ALARM_NAME, {
         delayInMinutes: 1,
@@ -245,18 +401,18 @@ function ensureSyncAlarm() {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === SYNC_ALARM_NAME) {
-        sendHistoryToBackend();
+        sendMinuteWindowToBackend();
     }
 });
 
 chrome.runtime.onInstalled.addListener(() => {
     ensureSyncAlarm();
-    sendHistoryToBackend();
+    sendMinuteWindowToBackend();
 });
 
 chrome.runtime.onStartup.addListener(() => {
     ensureSyncAlarm();
-    sendHistoryToBackend();
+    sendMinuteWindowToBackend();
 });
 
 // Ensure alarm exists whenever the service worker wakes up.
@@ -266,7 +422,7 @@ ensureSyncAlarm();
 // Manual trigger in console
 // =============================
 function sendNow() {
-    sendHistoryToBackend();
+    sendMinuteWindowToBackend();
     console.log("Manual send triggered");
 }
 
