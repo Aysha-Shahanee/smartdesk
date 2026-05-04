@@ -27,6 +27,18 @@ class VSCodeMinuteWindowRepository:
             )
 
             if record:
+                # Accumulate additive counters across multiple VS Code windows
+                # sending for the same minute slot, rather than last-write-wins.
+                record.edit_count = (record.edit_count or 0) + (payload.edit_count or 0)
+                record.save_count = (record.save_count or 0) + (payload.save_count or 0)
+                record.file_switch_count = (record.file_switch_count or 0) + (payload.file_switch_count or 0)
+                record.terminal_command_count = (record.terminal_command_count or 0) + (payload.terminal_command_count or 0)
+                record.debug_run_count = (record.debug_run_count or 0) + (payload.debug_run_count or 0)
+                # Keep the higher time values (whichever window was more active)
+                record.vscode_foreground_sec = max(record.vscode_foreground_sec or 0, payload.vscode_foreground_sec or 0)
+                record.active_editor_sec = max(record.active_editor_sec or 0, payload.active_editor_sec or 0)
+                record.idle_sec = min(record.idle_sec or 0, payload.idle_sec or 0)
+                # Overwrite contextual fields with the latest values
                 record.timezone = payload.timezone
                 record.workspace_name = payload.workspace_name
                 record.project_path = payload.project_path
@@ -35,14 +47,6 @@ class VSCodeMinuteWindowRepository:
                 record.active_file_path = payload.active_file_path
                 record.active_file_name = payload.active_file_name
                 record.active_language = payload.active_language
-                record.vscode_foreground_sec = payload.vscode_foreground_sec
-                record.active_editor_sec = payload.active_editor_sec
-                record.idle_sec = payload.idle_sec
-                record.edit_count = payload.edit_count
-                record.save_count = payload.save_count
-                record.file_switch_count = payload.file_switch_count
-                record.terminal_command_count = payload.terminal_command_count
-                record.debug_run_count = payload.debug_run_count
                 record.source = payload.source
                 record.schema_version = payload.schema_version
                 record.updated_at = datetime.now(ZoneInfo("Asia/Colombo")).replace(microsecond=0).isoformat()

@@ -14,8 +14,7 @@ import win32process
 import win32api
 
 from app.core.session_watcher import SessionState, SessionWatcher
-from app.models.os_signals import OSSignalPayload
-from app.services.os_signals_service import OSSignalsService
+
 from app.models.os_minute_window import OSMinuteWindowPayload
 from app.services.os_minute_window_service import OSMinuteWindowService
 
@@ -44,12 +43,16 @@ def get_foreground_pid() -> int | None:
     return pid or None
 
 def get_process_name(pid: int) -> str | None:
-    try: return psutil.Process(pid).name()
-    except: return None
+    try:
+        return psutil.Process(pid).name()
+    except Exception:
+        return None
 
 def get_process_exe(pid: int) -> str | None:
-    try: return psutil.Process(pid).exe()
-    except: return None
+    try:
+        return psutil.Process(pid).exe()
+    except Exception:
+        return None
 
 def get_file_version_field(exe_path: str, field_name: str) -> str | None:
     try:
@@ -60,7 +63,8 @@ def get_file_version_field(exe_path: str, field_name: str) -> str | None:
         str_path = fr"\StringFileInfo\{lang:04x}{codepage:04x}\{field_name}"
         val = win32api.VerQueryValue(info, str_path)
         return val.strip() if isinstance(val, str) else None
-    except: return None
+    except Exception:
+        return None
 
 def get_foreground_context() -> dict:
     pid = get_foreground_pid()
@@ -103,7 +107,7 @@ def classify_context(ctx: dict) -> tuple[str, str]:
 class OSMonitorTask:
     def __init__(self):
         self.stop_event = threading.Event()
-        self.service = OSSignalsService()
+
         self.minute_window_service = OSMinuteWindowService()
         self.sess_state = SessionState()
         self.watcher = SessionWatcher(self.sess_state)
@@ -215,12 +219,6 @@ class OSMonitorTask:
                         category_durations.items(), key=lambda kv: kv[1]
                     )
 
-                # Construct internal payload
-                payload = OSSignalPayload(
-                    timestamp=datetime.now(ZoneInfo("Asia/Colombo")),
-                    event_type="window_summary",
-                    data=payload_data
-                )
 
                 minute_payload = OSMinuteWindowPayload(
                     user_id=USER_ID,
@@ -245,11 +243,10 @@ class OSMonitorTask:
                 
                 # Push directly to the backend abstraction
                 try:
-                    self.service.process_and_save(payload)
                     self.minute_window_service.process_and_save(minute_payload)
-                    print(f"[OS Collector] Background signal saved safely: {payload.event_type}")
+                    print(f"[OS Collector] Minute window saved successfully")
                 except Exception as e:
-                    print(f"Failed to process OS Signal: {e}")
+                    print(f"Failed to save OS minute window: {e}")
 
                 window_start = t
                 durations.clear()

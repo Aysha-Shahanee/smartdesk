@@ -1,23 +1,29 @@
+import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List
 
 from app.core.google_calendar_client import get_calendar_data
-from app.models.calendar import CalendarPayload
-from app.repositories.calendar_repository import CalendarRepository
+from app.models.calendar_event import CalendarEventPayload
+from app.services.calendar_event_service import CalendarEventService
+
+
+COLOMBO_TZ = ZoneInfo("Asia/Colombo")
 
 
 class CalendarSyncTask:
     """Background task that periodically pulls Google Calendar events and
-    stores them in the local database using the existing repository layer.
+    stores them in the calendar_events table using the structured schema.
     """
 
     def __init__(self, interval_minutes: int = 15):
         self.interval_minutes = interval_minutes
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
-        self._repository = CalendarRepository()
+        self._event_service = CalendarEventService()
+        self._user_id = os.getenv("USER_ID", "demo_user")
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -45,20 +51,34 @@ class CalendarSyncTask:
 
     def _collect_and_save(self) -> None:
         events: List[Dict[str, Any]] = get_calendar_data()
-        collected_at = datetime.now(timezone.utc)
+        collected_at = datetime.now(COLOMBO_TZ)
+        now_iso = collected_at.replace(microsecond=0).isoformat()
 
         for ev in events:
-            payload = CalendarPayload(
-                timestamp=collected_at,
-                event_type="calendar_event",
-                data=ev,
+            event_id = ev.get("event_id")
+            if not event_id:
+                continue
+
+            payload = CalendarEventPayload(
+                user_id=self._user_id,
+                event_id=str(event_id),
+                title=ev.get("title"),
+                start_time=ev.get("start_time"),
+                end_time=ev.get("end_time"),
+                timezone=ev.get("timezone") or "Asia/Colombo",
+                attendees_count=ev.get("attendees_count"),
+                is_recurring=bool(ev.get("is_recurring")),
+                source="google_calendar",
+                schema_version="1.0",
+                created_at=now_iso,
+                updated_at=now_iso,
             )
             try:
-                self._repository.save(payload)
+                self._event_service.process_and_save(payload)
             except Exception as exc:
-                print(f"[Calendar Collector] Failed to save event {ev.get('event_id')}: {exc}")
+                print(f"[Calendar Collector] Failed to save event {event_id}: {exc}")
             else:
-                print(f"[Calendar Collector] Event stored: {ev.get('event_id')}")
+                print(f"[Calendar Collector] Event stored: {event_id}")
 
 
 calendar_sync = CalendarSyncTask()

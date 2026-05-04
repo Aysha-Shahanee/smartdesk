@@ -196,49 +196,8 @@ chrome.idle.onStateChanged.addListener((newState) => {
 });
 
 // =============================
-// Transform & send history to backend
+// Helper Functions
 // =============================
-// LEGACY: Session-based history sync. Active flow is sendMinuteWindowToBackend().
-function sendHistoryToBackend() {
-    chrome.storage.local.get("history", (data) => {
-        const history = data.history || [];
-        if (history.length === 0) return;
-
-        // Transform each entry 
-        const historyPayload = history.map(e => ({
-            index: e.index,
-            timestamp: e.startTime,
-            endTime: e.endTime,
-            title: e.title || "No Title",
-            url: e.url || "No URL",
-            category: e.category || "Unknown"
-        }));
-
-        const wrappedPayload = {
-            timestamp: toColomboISOString(new Date()),
-            event_type: "browser_history_sync",
-            data: { history: historyPayload }
-        };
-
-        fetch("http://127.0.0.1:8000/api/v1/browser/", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(wrappedPayload)
-        })
-            .then(res => {
-                if (!res.ok) {
-                    throw new Error(`HTTP ${res.status}`);
-                }
-                return res.json();
-            })
-            .then(data => {
-                console.log("Server Response:", data);
-                // Clear the local history after a successful send so we don't upload duplicates
-                chrome.storage.local.set({ history: [] });
-            })
-            .catch(err => console.error("Error sending history:", err));
-    });
-}
 
 function getTimezone() {
     return COLOMBO_TIMEZONE;
@@ -278,6 +237,10 @@ function alignToColomboMinute(ms) {
     const aligned = Math.floor(shifted / WINDOW_MS) * WINDOW_MS;
     return aligned - COLOMBO_OFFSET_MS;
 }
+
+// =============================
+// Minute Window Builder
+// =============================
 
 function buildMinuteWindowPayload(windowStartMs, windowEndMs, history) {
     const windowStartIso = toColomboISOString(new Date(windowStartMs));
@@ -364,6 +327,10 @@ function pruneHistory(history, windowEndMs) {
     });
 }
 
+// =============================
+// Sync: Send Minute Window
+// =============================
+
 function sendMinuteWindowToBackend() {
     const now = Date.now();
     const windowEndMs = alignToColomboMinute(now);
@@ -418,107 +385,4 @@ chrome.runtime.onStartup.addListener(() => {
 // Ensure alarm exists whenever the service worker wakes up.
 ensureSyncAlarm();
 
-// =============================
-// Manual trigger in console
-// =============================
-function sendNow() {
-    sendMinuteWindowToBackend();
-    console.log("Manual send triggered");
-}
 
-// =============================
-// Export History as JSON File
-// =============================
-function exportHistoryToJSON() {
-    chrome.storage.local.get("history", (data) => {
-        const history = data.history || [];
-        if (history.length === 0) {
-            console.log("No history found to export.");
-            return;
-        }
-
-        // Convert data to a JSON string
-        const jsonString = JSON.stringify(history, null, 4);
-
-        // Convert string to a Data URI
-        const dataUri = "data:application/json;charset=utf-8," + encodeURIComponent(jsonString);
-
-        // Trigger the download
-        chrome.downloads.download({
-            url: dataUri,
-            filename: `SmartDesk_History_${new Date().toISOString().split('T')[0]}.json`,
-            saveAs: true // Set to false if you want it to save automatically
-        }, (downloadId) => {
-            if (chrome.runtime.lastError) {
-                console.error("Export failed:", chrome.runtime.lastError.message);
-            } else {
-                console.log("History exported! ID:", downloadId);
-            }
-        });
-    });
-}
-
-// Optional: Listen for a message from your Popup/Options page to trigger export
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === "download_json") {
-        exportHistoryToJSON();
-        sendResponse({ status: "Export started" });
-    }
-});
-
-
-
-
-
-
-/*const focusKeywords = [
-    "tutorial",
-    "documentation",
-    "guide",
-    "learn",
-    "course",
-    "api",
-    "programming",
-    "developer",
-    "stack"
-];
-
-const distractKeywords = [
-    "music",
-    "movie",
-    "gaming",
-    "funny",
-    "reaction",
-    "entertainment",
-    "reels",
-    "shorts"
-];
-
-function classifyTab(url, title) {
-
-    if (!url || !title) return "neutral";
-
-    let text = (url + " " + title).toLowerCase();
-
-    if (focusKeywords.some(word => text.includes(word)))
-        return "focused";
-
-    if (distractKeywords.some(word => text.includes(word)))
-        return "distracted";
-
-    return "neutral";
-}
-
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-
-    if (changeInfo.status === "complete") {
-
-        let category = classifyTab(tab.url, tab.title);
-
-        console.log("URL:", tab.url);
-        console.log("Title:", tab.title);
-        console.log("Category:", category);
-        console.log("----------------------------");
-    }
-
-});*/

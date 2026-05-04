@@ -1,16 +1,21 @@
-from fastapi import APIRouter, Depends
-from app.models.calendar import CalendarPayload
+from fastapi import APIRouter
 from app.services.calendar_service import CalendarService
 
-
 router = APIRouter()
+calendar_service = CalendarService()
 
+@router.get("/status")
+def get_calendar_status():
+    return calendar_service.get_status()
 
-def get_service():
-    return CalendarService()
+@router.post("/connect")
+def connect_calendar(force_reauth: bool = False):
+    return calendar_service.connect(force_reauth=force_reauth)
 
+@router.post("/disconnect")
+def disconnect_calendar():
+    return calendar_service.disconnect()
 
-@router.post("/")
-def collect_data(payload: CalendarPayload, service: CalendarService = Depends(get_service)):
-    result = service.process_and_save(payload)
-    return {"message": "Data collected successfully", "result": result}
+@router.post("/sync")
+def sync_calendar():
+    return calendar_service.sync_now()

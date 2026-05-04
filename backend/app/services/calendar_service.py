@@ -10,29 +10,26 @@ from app.core.google_calendar_client import (
     get_calendar_connection_status,
     get_calendar_data,
 )
-from app.models.calendar import CalendarPayload
-from app.models.db_models import CalendarRecord
-from app.repositories.calendar_repository import CalendarRepository
+from app.models.db_models import CalendarEventRecord
 from app.models.calendar_event import CalendarEventPayload
 from app.services.calendar_event_service import CalendarEventService
 
 
 class CalendarService:
     def __init__(self):
-        self.repository = CalendarRepository()
         self.event_service = CalendarEventService()
         self.user_id = os.getenv("USER_ID", "demo_user")
-
-    def process_and_save(self, payload: CalendarPayload):
-        return self.repository.save(payload)
 
     def get_status(self) -> Dict[str, Any]:
         session = SessionLocal()
         try:
-            total = session.query(CalendarRecord).count()
+            total = session.query(CalendarEventRecord).filter(
+                CalendarEventRecord.user_id == self.user_id
+            ).count()
             last = (
-                session.query(CalendarRecord)
-                .order_by(CalendarRecord.timestamp.desc())
+                session.query(CalendarEventRecord)
+                .filter(CalendarEventRecord.user_id == self.user_id)
+                .order_by(CalendarEventRecord.start_time.desc())
                 .limit(1)
                 .one_or_none()
             )
@@ -41,8 +38,8 @@ class CalendarService:
 
         status = get_calendar_connection_status()
         status["stats"] = {
-            "total_records": total,
-            "last_synced_at": last.timestamp.isoformat() if last and last.timestamp else None,
+            "total_events": total,
+            "last_event_start": last.start_time if last else None,
         }
         return status
 
@@ -76,50 +73,38 @@ class CalendarService:
     def sync_now(self, hours_ahead: int = 24) -> Dict[str, Any]:
         events = get_calendar_data(hours_ahead=hours_ahead, allow_interactive=False)
         collected_at = datetime.now(ZoneInfo("Asia/Colombo"))
+        now_iso = collected_at.replace(microsecond=0).isoformat()
         inserted = 0
         updated = 0
-        structured_inserted = 0
-        structured_updated = 0
 
         for event in events:
-            payload = CalendarPayload(
-                timestamp=collected_at,
-                event_type="calendar_event",
-                data=event,
+            event_id = event.get("event_id")
+            if not event_id:
+                continue
+
+            event_payload = CalendarEventPayload(
+                user_id=self.user_id,
+                event_id=str(event_id),
+                title=event.get("title"),
+                start_time=event.get("start_time"),
+                end_time=event.get("end_time"),
+                timezone=event.get("timezone") or "Asia/Colombo",
+                attendees_count=event.get("attendees_count"),
+                is_recurring=bool(event.get("is_recurring")),
+                source="google_calendar",
+                schema_version="1.0",
+                created_at=now_iso,
+                updated_at=now_iso,
             )
-            result = self.repository.save(payload)
+            result = self.event_service.process_and_save(event_payload)
             if result["status"] == "updated":
                 updated += 1
             else:
                 inserted += 1
 
-            event_id = event.get("event_id")
-            if event_id:
-                event_payload = CalendarEventPayload(
-                    user_id=self.user_id,
-                    event_id=str(event_id),
-                    title=event.get("title"),
-                    start_time=event.get("start_time"),
-                    end_time=event.get("end_time"),
-                    timezone=event.get("timezone") or "Asia/Colombo",
-                    attendees_count=event.get("attendees_count"),
-                    is_recurring=bool(event.get("is_recurring")),
-                    source="google_calendar",
-                    schema_version="1.0",
-                    created_at=collected_at.replace(microsecond=0).isoformat(),
-                    updated_at=collected_at.replace(microsecond=0).isoformat(),
-                )
-                structured_result = self.event_service.process_and_save(event_payload)
-                if structured_result["status"] == "updated":
-                    structured_updated += 1
-                else:
-                    structured_inserted += 1
-
         return {
             "fetched_events": len(events),
             "inserted": inserted,
             "updated": updated,
-            "structured_inserted": structured_inserted,
-            "structured_updated": structured_updated,
             "hours_ahead": hours_ahead,
         }

@@ -26,14 +26,12 @@ class ProductivitySummaryRepository:
 
             if record:
                 for key, value in data.items():
-                    setattr(record, key, value)
-                record.updated_at = now_iso
+                    if hasattr(record, key):
+                        setattr(record, key, value)
                 db.commit()
                 return {"status": "updated", "collection": "productivity_summary_10min", "id": record.id}
 
-            record = ProductivitySummary10MinRecord(**data)
-            record.created_at = data.get("created_at") or now_iso
-            record.updated_at = data.get("updated_at") or now_iso
+            record = ProductivitySummary10MinRecord(**{k: v for k, v in data.items() if hasattr(ProductivitySummary10MinRecord, k)})
             db.add(record)
             db.commit()
             db.refresh(record)

@@ -1,5 +1,4 @@
-calender/token.json
-calender/credentials.json
+# Environment & secrets
 .env
 
 # Python virtual environments
@@ -23,9 +22,12 @@ __pycache__/
 node_modules/
 *.vsix
 
+# IDE extension build output
+smartdesk-ide-logger/out/
+
 # OS/editor noise
 .DS_Store
 Thumbs.db
-
-__pycache__/
-*.pyc
+*.swp
+*.swo
+*~

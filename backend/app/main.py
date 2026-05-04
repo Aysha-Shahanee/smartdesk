@@ -1,15 +1,38 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import health, os_signals, browser, vscode, calendar, dashboard, productivity_summary, os_minute_window
+from app.routes import health, browser, vscode, dashboard, productivity_summary, os_minute_window, calendar
 from app.core.database import Base, engine
 from app.models import db_models
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Run schema migrations before table creation
+    print("Running database migrations...")
+    from pathlib import Path
+    from app.core.database import engine
+    migration_sql = Path(__file__).parent.parent / "scripts" / "migrations" / "007_recreate_productivity_summary_10min.sql"
+    if migration_sql.exists():
+        with engine.connect() as conn:
+            sql_text = migration_sql.read_text(encoding="utf-8")
+            # Strip line comments before splitting to avoid semicolons in comments.
+            sql_text = "\n".join(
+                line for line in sql_text.splitlines() if not line.strip().startswith("--")
+            )
+            for statement in sql_text.split(";"):
+                stmt = statement.strip()
+                if stmt:
+                    try:
+                        conn.execute(__import__("sqlalchemy").text(stmt))
+                    except Exception as e:
+                        print(f"[Migration] Warning: {e}")
+            conn.commit()
+        print("Migration 007 applied.")
+
     # Initialize the database file and tables on startup
     print("Initializing local SQLite database...")
     Base.metadata.create_all(bind=engine)
+
     
     from app.services.os_monitoring_service import os_monitor
     from app.services.calendar_sync_service import calendar_sync
@@ -38,7 +61,6 @@ app.add_middleware(
 )
 
 app.include_router(health.router, prefix="/health", tags=["Health"])
-app.include_router(os_signals.router, prefix="/api/v1/os-signals", tags=["OS Signals"])
 app.include_router(os_minute_window.router, prefix="/api/v1/os", tags=["OS Minute Windows"])
 app.include_router(browser.router, prefix="/api/v1/browser", tags=["Browser"])
 app.include_router(vscode.router, prefix="/api/v1/vscode", tags=["VS Code"])
