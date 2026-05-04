@@ -116,29 +116,39 @@ class CalendarEventRecord(Base):
     updated_at = Column(String, nullable=False)
 
 
-class ProductivitySummary10MinRecord(Base):
-    __tablename__ = "productivity_summary_10min"
+class ActivitySessionSummaryRecord(Base):
+    __tablename__ = "activity_session_summary"
     __table_args__ = (
-        UniqueConstraint("user_id", "window_start", "window_end", name="uq_productivity_summary_10min"),
+        UniqueConstraint("user_id", "session_start", "session_end", name="uq_activity_session_summary"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String, index=True, nullable=False)
-    window_start = Column(String, index=True, nullable=False)
-    window_end = Column(String, index=True, nullable=False)
+    session_start = Column(String, index=True, nullable=False)
+    session_end = Column(String, index=True, nullable=False)
+    timezone = Column(String, nullable=False)
+    duration_sec = Column(Integer, nullable=False)
 
-    # OS-level time totals
+    primary_app = Column(String, nullable=True)
+    primary_category = Column(String, nullable=True)
+
     total_active_time_sec = Column(Integer, nullable=True)
     total_idle_time_sec = Column(Integer, nullable=True)
     total_locked_time_sec = Column(Integer, nullable=True)
-
-    # Per-source active time
-    browser_time_sec = Column(Integer, nullable=True)
-    vscode_time_sec = Column(Integer, nullable=True)
-    calendar_meeting_time_sec = Column(Integer, nullable=True)
-
-    # Context switching
     context_switch_count = Column(Integer, nullable=True)
 
+    browser_time_sec = Column(Integer, nullable=True)
+    top_domain = Column(String, nullable=True)
+    active_tab_category = Column(String, nullable=True)
+
+    calendar_meeting_time_sec = Column(Integer, nullable=True)
+    in_meeting = Column(Integer, nullable=True)
+
+    activity_type = Column(String, nullable=True)
+    activity_description = Column(String, nullable=True)
+
+    source = Column(String, nullable=True)
+    schema_version = Column(String, nullable=True)
     created_at = Column(String, nullable=False)
+    updated_at = Column(String, nullable=False)
 

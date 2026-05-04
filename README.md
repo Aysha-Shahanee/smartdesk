@@ -111,8 +111,8 @@ Calendar Sync ──────────── (background thread) ──→
                                                        │
                      ┌─────────────────────────────────┘
                      ▼
-Productivity    reads all 4 tables every 60s
-Scheduler  ──→ aggregates into 10-min windows ──→ productivity_summary_10min
+Activity Sessions   derive from OS windows
+Builder        ──→ aggregates into sessions ──→ activity_session_summary
                                                        │
 Dashboard   reads all 5 tables ◄───────────────────────┘
 ```
@@ -127,7 +127,7 @@ Dashboard   reads all 5 tables ◄───────────────�
 | `browser_minute_windows` | 1-min browser activity windows | Browser Extension (POST) |
 | `vscode_minute_windows` | 1-min VS Code activity windows | IDE Extension (POST) |
 | `calendar_events` | Google Calendar events | Calendar Sync (background thread) |
-| `productivity_summary_10min` | 10-min aggregated summaries | Productivity Scheduler (background thread) |
+| `activity_session_summary` | Session-based dashboard summary | Activity Session Scheduler (background thread) |
 
 All 5 tables use **upsert** logic — duplicate windows are updated, not duplicated.
 
@@ -141,7 +141,23 @@ All 5 tables use **upsert** logic — duplicate windows are updated, not duplica
 | Browser extension | Every 1 minute |
 | VS Code extension | Every 1 minute |
 | Calendar sync | Every 15 minutes |
-| Productivity summary | Builds latest completed 10-min window every 60 seconds |
+| Activity session summary | Builds latest 30-minute window every 60 seconds |
+
+---
+
+## Activity Session Summary Table
+
+`activity_session_summary` is a session-based dashboard summary table. It stores the main timeline rows for the UI.
+
+OS activity defines sessions. Browser, VS Code, and calendar data are attached by time overlap.
+
+For detailed drill-downs, the backend or dashboard should query the source tables for the same `user_id` and time range:
+
+- `os_minute_windows`
+- `browser_minute_windows`
+- `vscode_minute_windows`
+- `calendar_events`
+
 
 ---
 
@@ -167,8 +183,8 @@ All timestamps use **Asia/Colombo** (UTC+5:30) ISO format:
 | GET | `/api/v1/calendar/status` | Calendar connection status |
 | GET | `/api/v1/calendar/events` | List calendar events |
 | POST | `/api/v1/calendar/sync` | Manual calendar sync trigger |
-| POST | `/api/v1/productivity-summary/10min/build` | Manual summary build |
-| GET | `/api/v1/productivity-summary/10min/list` | List productivity summaries |
+| POST | `/api/v1/activity-sessions/build` | Manual session summary build |
+| GET | `/api/v1/activity-sessions` | List activity sessions |
 | GET | `/dashboard/` | Dashboard HTML page |
 
 ---

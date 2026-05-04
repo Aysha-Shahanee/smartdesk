@@ -232,40 +232,30 @@ Fetches upcoming 24h of events from Google Calendar API:
 
 ---
 
-## 5. Productivity Summary — 10-Minute Aggregation Window
+## 5. Activity Session Summary
 
-**Source**: `backend/app/services/productivity_summary_service.py`
-**Scheduler**: `backend/app/services/productivity_summary_scheduler.py`
-**Repository**: `backend/app/repositories/productivity_summary_repository.py`
-**Table**: `productivity_summary_10min`
+**Source**: `backend/app/services/activity_session_summary_service.py`
+**Repository**: `backend/app/repositories/activity_session_summary_repository.py`
+**Table**: `activity_session_summary`
 
-### 5.1 How the Scheduler Works
+### 5.1 Session Builder Overview
 
-The `ProductivitySummaryScheduler` runs as a **background daemon thread** started on FastAPI startup:
+The session builder reads `os_minute_windows` and groups contiguous windows by:
 
-- **Tick interval**: Every **60 seconds** it checks whether a new 10-minute window has completed
-- **Window alignment**: Windows are aligned to clock boundaries (e.g. 22:00, 22:10, 22:20...)
-- **Deduplication**: Tracks `_last_built_end` — if the latest completed window was already built, it skips
-- **User ID**: Hardcoded to `"demo_user"` (`SUMMARY_BUILDER_USER_ID`)
-- **Upsert**: If a summary already exists for a window, it updates it; otherwise inserts
+- same `top_app`
+- same `dominant_app_category`
+- minimal time gap between windows
+- changes in idle/locked state
 
+These OS-driven sessions become the **dashboard timeline**. Browser, VS Code, and calendar data are attached by time overlap.
+
+Manual build endpoint:
 ```
-Timeline:
-  22:00 ──── 22:10 ──── 22:20 ──── 22:30
-   │          │          │          │
-   └──window──┘          └──window──┘
-     Built at ~22:11       Built at ~22:31
-```
-
-The scheduler can also be triggered manually via:
-```
-POST /api/v1/productivity-summary/10min/build
+POST /api/v1/activity-sessions/build
 Body: { "user_id": "demo_user", "start_time": "...", "end_time": "..." }
 ```
 
 ### 5.2 Data Sources
-
-For each 10-minute window, the service queries from the structured tables with SQL-level time range filtering:
 
 | Source | Table |
 |---|---|
@@ -274,208 +264,19 @@ For each 10-minute window, the service queries from the structured tables with S
 | VS Code | `vscode_minute_windows` |
 | Calendar | `calendar_events` |
 
-Each source's 1-minute rows are **filtered to overlap** with the 10-minute window, then aggregated.
+### 5.3 Summary Fields (High-Level)
 
-### 5.3 Full Column Breakdown — `productivity_summary_10min`
+The summary table stores session boundaries and major totals needed by the dashboard. Detailed data remains in source tables.
 
-#### Window Identity (4 columns)
+Key fields include:
 
-| Column | Type | Source | Description |
-|---|---|---|---|
-| `user_id` | STRING | Input parameter | User identifier |
-| `window_start` | STRING | Computed | 10-min window start, e.g. `2026-05-02T22:10:00+05:30` |
-| `window_end` | STRING | Computed | 10-min window end, e.g. `2026-05-02T22:20:00+05:30` |
-| `timezone` | STRING | Hardcoded | Always `"Asia/Colombo"` |
-
-#### OS Metrics (6 columns) — from `os_minute_windows`
-
-| Column | Type | Aggregation | Description |
-|---|---|---|---|
-| `os_active_sec` | INT | SUM of `active_time_sec` across overlapping rows | Total seconds the computer was actively used |
-| `os_idle_sec` | INT | SUM of `idle_time_sec` | Seconds idle (no keyboard/mouse >60s) |
-| `os_locked_sec` | INT | SUM of `locked_time_sec` | Seconds screen was locked |
-| `context_switch_count` | INT | SUM of `context_switch_count` | Total app switches |
-| `top_app` | STRING | Most frequent `top_app` weighted by `top_app_sec` | e.g. `"Code.exe"` |
-| `dominant_app_category` | STRING | Most frequent category weighted by duration | e.g. `"ide"`, `"browser"` |
-
-#### Browser Metrics (9 columns) — from `browser_minute_windows`
-
-| Column | Type | Aggregation | Description |
-|---|---|---|---|
-| `browser_active_sec` | INT | SUM of `browser_active_time_sec` | Total browser active time |
-| `productive_browser_sec` | INT | SUM of `productive_time_sec` | Time on focused/educational sites |
-| `neutral_browser_sec` | INT | SUM of `neutral_time_sec` | Time on neutral sites |
-| `distracting_browser_sec` | INT | SUM of `distracting_time_sec` | Time on distraction sites |
-| `communication_browser_sec` | INT | SUM of `communication_time_sec` | Time on communication sites |
-| `tab_switch_count` | INT | SUM of `tab_switch_count` | Total tab switches |
-| `unique_domains_count` | INT | SUM of `unique_domains_count` | Total unique domains |
-| `top_domain` | STRING | Most frequently seen `active_tab_domain` | e.g. `"github.com"` |
-| `active_tab_category` | STRING | Most frequently seen `active_tab_category` | `"Focused"` / `"Distracted"` / `"Neutral"` |
-
-#### VS Code Metrics (12 columns) — from `vscode_minute_windows`
-
-| Column | Type | Aggregation | Description |
-|---|---|---|---|
-| `vscode_foreground_sec` | INT | SUM of `vscode_foreground_sec` | Seconds VS Code was foreground |
-| `vscode_active_sec` | INT | SUM of `active_editor_sec` | Seconds actively editing |
-| `vscode_idle_sec` | INT | SUM of `idle_sec` | Seconds idle in VS Code |
-| `edit_count` | INT | SUM of `edit_count` | Total text changes |
-| `save_count` | INT | SUM of `save_count` | Total file saves |
-| `file_switch_count` | INT | SUM of `file_switch_count` | Total file tab switches |
-| `terminal_command_count` | INT | SUM of `terminal_command_count` | Terminal commands executed |
-| `debug_run_count` | INT | SUM of `debug_run_count` | Debug sessions started |
-| `active_project` | STRING | Most frequent `workspace_name` (or `project_path`) | e.g. `"smartdesk"` |
-| `active_file_name` | STRING | From the latest minute-window row | e.g. `"extension.ts"` |
-| `active_language` | STRING | Most frequent `active_language` | e.g. `"python"`, `"typescript"` |
-| `git_branch` | STRING | From the latest minute-window row | e.g. `"dev"` |
-
-#### Calendar Metrics (3 columns) — from `calendar_events` or `calendar_signals`
-
-| Column | Type | Aggregation | Description |
-|---|---|---|---|
-| `calendar_meeting_sec` | INT | SUM of overlap seconds between event time range and 10-min window | Seconds in meetings |
-| `in_meeting` | INT (0/1) | `1` if `calendar_meeting_sec > 0` | Binary meeting flag |
-| `meeting_title` | STRING | Title of the first overlapping event | e.g. `"Sprint Planning"` |
-
-#### Derived / ML Columns (3 columns) — computed by rule engine
-
-| Column | Type | Description |
-|---|---|---|
-| `focus_score` | INT (0-100) | Composite productivity score (see formula below) |
-| `activity_label` | STRING | Human-readable activity classification (see decision tree below) |
-| `label_source` | STRING | Always `"rule_based"` (placeholder for future ML) |
-
-#### Data Quality Columns (2 columns)
-
-| Column | Type | Description |
-|---|---|---|
-| `data_quality_score` | INT (0-100) | `(sources_present / 4) × 100`. If all 4 sources have data → 100 |
-| `missing_sources` | STRING (JSON) | e.g. `["browser", "calendar"]` — which sources had zero rows |
-
-#### Metadata (4 columns)
-
-| Column | Type | Description |
-|---|---|---|
-| `source` | STRING | Always `"productivity_summary_10min"` |
-| `schema_version` | STRING | `"1.0"` |
-| `created_at` | STRING | ISO timestamp of first insert |
-| `updated_at` | STRING | ISO timestamp of last update |
-
-**Total: 43 columns** in `productivity_summary_10min`.
-
-### 5.4 Focus Score Formula
-
-```python
-score = 50                                          # Base score
-
-# Positive signals
-score += min(30, vscode_active / 600 * 30)          # Up to +30 for coding
-score += min(20, productive_browser / 600 * 20)     # Up to +20 for learning
-score += min(20, os_active / 600 * 20)              # Up to +20 for being active
-
-# Negative signals
-score -= min(30, distracting_browser / 600 * 30)    # Up to -30 for distractions
-score -= min(20, os_idle / 600 * 20)                # Up to -20 for idling
-score -= min(10, (context_switches + tab_switches) / 20 * 10)  # Up to -10 for switching
-
-# Final range
-score = clamp(score, 0, 100)
-```
-
-**600** = `WINDOW_SECONDS` (10 minutes × 60)
-
-| Example Scenario | Score |
-|---|---|
-| 10 min solid coding, no distractions | ~100 |
-| 10 min browsing stackoverflow | ~70 |
-| 10 min on social media | ~20 |
-| 10 min idle/locked | ~10 |
-| Mixed coding + some YouTube | ~60 |
-
-### 5.5 Activity Label Decision Tree
-
-Labels are evaluated **top-to-bottom** — first match wins:
-
-```
-1. Meeting    → calendar_meeting_sec > 0
-                 "User is in a calendar meeting"
-
-2. Idle       → os_idle_sec >= 300 OR (os_active + browser_active + vscode_active) < 120
-                 "User is away or barely active"
-
-3. Focused    → vscode_active_sec >= 300 AND distracting_browser_sec <= 60
-                 "Deep work — coding with minimal distractions"
-
-4. Learning   → productive_browser_sec >= 300 AND edit_count <= 2
-                   AND active_tab_category == "Focused"
-                 "Reading docs/tutorials without writing code"
-
-5. Distracted → distracting_browser_sec >= 180
-                 "3+ minutes on social media / entertainment"
-
-6. Multitask  → (context_switches + tab_switches + file_switches) >= 15
-                 "Rapidly switching between many apps/tabs/files"
-
-7. Unknown    → none of the above matched
-```
-
-### 5.6 Sample `productivity_summary_10min` Row
-
-```json
-{
-  "id": 42,
-  "user_id": "demo_user",
-  "window_start": "2026-05-02T22:10:00+05:30",
-  "window_end": "2026-05-02T22:20:00+05:30",
-  "timezone": "Asia/Colombo",
-
-  "os_active_sec": 520,
-  "os_idle_sec": 80,
-  "os_locked_sec": 0,
-  "context_switch_count": 6,
-  "top_app": "Code.exe",
-  "dominant_app_category": "ide",
-
-  "browser_active_sec": 120,
-  "productive_browser_sec": 100,
-  "neutral_browser_sec": 20,
-  "distracting_browser_sec": 0,
-  "communication_browser_sec": 0,
-  "tab_switch_count": 3,
-  "unique_domains_count": 2,
-  "top_domain": "github.com",
-  "active_tab_category": "Focused",
-
-  "vscode_foreground_sec": 400,
-  "vscode_active_sec": 350,
-  "vscode_idle_sec": 50,
-  "edit_count": 87,
-  "save_count": 5,
-  "file_switch_count": 4,
-  "terminal_command_count": 2,
-  "debug_run_count": 0,
-  "active_project": "smartdesk",
-  "active_file_name": "extension.ts",
-  "active_language": "typescript",
-  "git_branch": "dev",
-
-  "calendar_meeting_sec": 0,
-  "in_meeting": 0,
-  "meeting_title": null,
-
-  "focus_score": 85,
-  "activity_label": "Focused",
-  "label_source": "rule_based",
-
-  "data_quality_score": 75,
-  "missing_sources": "[\"calendar\"]",
-
-  "source": "productivity_summary_10min",
-  "schema_version": "1.0",
-  "created_at": "2026-05-02T22:21:01+05:30",
-  "updated_at": "2026-05-02T22:21:01+05:30"
-}
-```
+- `session_start`, `session_end`, `duration_sec`, `timezone`
+- `primary_app`, `primary_category`
+- `total_active_time_sec`, `total_idle_time_sec`, `total_locked_time_sec`, `context_switch_count`
+- `browser_time_sec`, `tab_switch_count`, `top_domain`, `active_tab_category`
+- `vscode_time_sec`, `edit_count`, `save_count`, `active_file_name`, `active_language`
+- `calendar_meeting_time_sec`, `in_meeting`, `meeting_title`
+- `activity_type`, `activity_description`
 
 ---
 
@@ -505,7 +306,7 @@ Each data source writes to exactly **one table** (no dual-writes):
 | **Browser Extension** (JS) | POST `/api/v1/browser/minute-window` | `browser_minute_windows` | Upsert (user_id + window_start + window_end) |
 | **OS Collector** (background thread) | Internal — `OSMinuteWindowService` | `os_minute_windows` | Upsert (user_id + window_start + window_end) |
 | **Calendar Sync** (background thread) | Internal — `CalendarEventService` | `calendar_events` | Upsert (user_id + event_id) |
-| **Productivity Scheduler** (background thread) | Internal — `ProductivitySummaryRepository` | `productivity_summary_10min` | Upsert (user_id + window_start + window_end) |
+| **Activity Session Builder** (manual) | Internal — `ActivitySessionSummaryService` | `activity_session_summary` | Upsert (user_id + session_start + session_end) |
 
 
 
@@ -515,11 +316,11 @@ Each data source writes to exactly **one table** (no dual-writes):
 
 | # | Table Name | Columns | Writer | Reader(s) |
 |---|---|---|---|---|
-| 1 | `os_minute_windows` | 16 cols — user_id, window_start/end, timezone, active/idle/locked_time_sec, context_switch_count, top_app/sec, dominant_category/sec, app_durations_json, category_durations_json, source, schema_version, created/updated_at | `OSMinuteWindowRepository` | Dashboard, ProductivitySummaryService |
-| 2 | `browser_minute_windows` | 20 cols — user_id, window_start/end, timezone, browser_name, active_tab_domain/url/title/category, active/idle_time_sec, productive/neutral/distracting/communication_time_sec, tab_switch_count, unique_domains_count, source, schema_version, created/updated_at | `BrowserMinuteWindowRepository` | Dashboard, ProductivitySummaryService |
-| 3 | `vscode_minute_windows` | 22 cols — user_id, window_start/end, timezone, workspace_name, project_path, repo_id, git_branch, active_file_path/name, active_language, vscode_foreground_sec, active_editor_sec, idle_sec, edit/save/file_switch/terminal_command/debug_run_count, source, schema_version, created/updated_at | `VSCodeMinuteWindowRepository` | Dashboard, ProductivitySummaryService |
-| 4 | `calendar_events` | 12 cols — user_id, event_id, title, start/end_time, timezone, attendees_count, is_recurring, source, schema_version, created/updated_at | `CalendarEventRepository` | Dashboard, ProductivitySummaryService, CalendarService |
-| 5 | `productivity_summary_10min` | 43 cols — see Section 5.3 for full breakdown | `ProductivitySummaryRepository` | API |
+| 1 | `os_minute_windows` | 16 cols — user_id, window_start/end, timezone, active/idle/locked_time_sec, context_switch_count, top_app/sec, dominant_category/sec, app_durations_json, category_durations_json, source, schema_version, created/updated_at | `OSMinuteWindowRepository` | Dashboard, ActivitySessionSummaryService |
+| 2 | `browser_minute_windows` | 20 cols — user_id, window_start/end, timezone, browser_name, active_tab_domain/url/title/category, active/idle_time_sec, productive/neutral/distracting/communication_time_sec, tab_switch_count, unique_domains_count, source, schema_version, created/updated_at | `BrowserMinuteWindowRepository` | Dashboard, ActivitySessionSummaryService |
+| 3 | `vscode_minute_windows` | 22 cols — user_id, window_start/end, timezone, workspace_name, project_path, repo_id, git_branch, active_file_path/name, active_language, vscode_foreground_sec, active_editor_sec, idle_sec, edit/save/file_switch/terminal_command/debug_run_count, source, schema_version, created/updated_at | `VSCodeMinuteWindowRepository` | Dashboard, ActivitySessionSummaryService |
+| 4 | `calendar_events` | 12 cols — user_id, event_id, title, start/end_time, timezone, attendees_count, is_recurring, source, schema_version, created/updated_at | `CalendarEventRepository` | Dashboard, ActivitySessionSummaryService, CalendarService |
+| 5 | `activity_session_summary` | Session summary fields | `ActivitySessionSummaryRepository` | Dashboard, API |
 
 **Total: 5 active tables.**
 
@@ -677,8 +478,8 @@ Calendar Sync ──────────── (background thread) ──→
                                                        │
                      ┌─────────────────────────────────┘
                      ▼
-Productivity    reads all 4 tables above every 60s
-Scheduler  ──→ aggregates into 10-min windows ──→ productivity_summary_10min
+Activity Sessions  derive from OS windows
+Builder        ──→ aggregates into sessions ──→ activity_session_summary
                                                        │
 Dashboard   reads all 5 tables ◄───────────────────────┘
 ```
