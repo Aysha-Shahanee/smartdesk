@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
+import * as os from "os";
 
 type ActiveEditorInfo = {
 	file_path: string | null;
@@ -9,7 +10,7 @@ type ActiveEditorInfo = {
 };
 
 type MinuteWindowCounters = {
-	vscode_foreground_sec: number;
+	ide_foreground_sec: number;
 	active_editor_sec: number;
 	idle_sec: number;
 	edit_count: number;
@@ -17,6 +18,8 @@ type MinuteWindowCounters = {
 	file_switch_count: number;
 	terminal_command_count: number;
 	debug_run_count: number;
+	lines_added: number;
+	lines_deleted: number;
 };
 
 type VSCodeMinuteWindowPayload = {
@@ -31,7 +34,7 @@ type VSCodeMinuteWindowPayload = {
 	active_file_path: string | null;
 	active_file_name: string | null;
 	active_language: string | null;
-	vscode_foreground_sec: number | null;
+	ide_foreground_sec: number | null;
 	active_editor_sec: number | null;
 	idle_sec: number | null;
 	edit_count: number;
@@ -39,19 +42,53 @@ type VSCodeMinuteWindowPayload = {
 	file_switch_count: number;
 	terminal_command_count: number;
 	debug_run_count: number;
+	lines_added: number;
+	lines_deleted: number;
 	source: string;
-	schema_version: string;
-	created_at: string;
-	updated_at: string;
 };
 
 const WINDOW_SECONDS = 60;
 const WINDOW_MS = WINDOW_SECONDS * 1000;
 const TICK_MS = 1000;
 const IDLE_THRESHOLD_MS = 90 * 1000; // 90s grace period
-const SCHEMA_VERSION = "1.0";
-const COLOMBO_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-const COLOMBO_TIMEZONE = "Asia/Colombo";
+
+// ─── Dynamic Timezone Helpers ───
+
+function getTimezone(): string {
+	return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+function toLocalISOString(date: Date): string {
+	// Use the system timezone offset dynamically
+	const offsetMs = -date.getTimezoneOffset() * 60 * 1000;
+	const local = new Date(date.getTime() + offsetMs);
+	const sign = offsetMs >= 0 ? "+" : "-";
+	const absOffset = Math.abs(date.getTimezoneOffset());
+	const hh = String(Math.floor(absOffset / 60)).padStart(2, "0");
+	const mm = String(absOffset % 60).padStart(2, "0");
+	return local.toISOString().replace("Z", `${sign}${hh}:${mm}`);
+}
+
+function alignToLocalMinute(ms: number): number {
+	const offsetMs = -new Date().getTimezoneOffset() * 60 * 1000;
+	const shifted = ms + offsetMs;
+	const aligned = Math.floor(shifted / WINDOW_MS) * WINDOW_MS;
+	return aligned - offsetMs;
+}
+
+// ─── Repo ID Hashing (don't expose raw git URLs) ───
+
+function hashRepoId(remoteUrl: string): string {
+	let hash = 0;
+	for (let i = 0; i < remoteUrl.length; i++) {
+		const char = remoteUrl.charCodeAt(i);
+		hash = ((hash << 5) - hash) + char;
+		hash = hash & hash; // 32-bit int
+	}
+	return Math.abs(hash).toString(16).padStart(8, "0");
+}
+
+// ─── Helpers ───
 
 function getRelativePath(filePath: string): string {
 	const folders = vscode.workspace.workspaceFolders;
@@ -73,28 +110,14 @@ function getProjectPath(): string {
 }
 
 function getUserId(): string {
-	return process.env.USER_ID ?? "demo_user";
+	const configured = vscode.workspace.getConfiguration("smartdesk").get<string>("userId");
+	if (configured && configured.trim()) { return configured.trim(); }
+	return os.hostname(); // fallback: machine hostname
 }
 
-function getTimezone(): string {
-	return COLOMBO_TIMEZONE;
-}
-
-function toColomboISOString(date: Date): string {
-	const colomboDate = new Date(date.getTime() + COLOMBO_OFFSET_MS);
-	const yyyy = colomboDate.getUTCFullYear();
-	const mm = String(colomboDate.getUTCMonth() + 1).padStart(2, "0");
-	const dd = String(colomboDate.getUTCDate()).padStart(2, "0");
-	const hh = String(colomboDate.getUTCHours()).padStart(2, "0");
-	const mi = String(colomboDate.getUTCMinutes()).padStart(2, "0");
-	const ss = String(colomboDate.getUTCSeconds()).padStart(2, "0");
-	return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}+05:30`;
-}
-
-function alignToColomboMinute(ms: number): number {
-	const shifted = ms + COLOMBO_OFFSET_MS;
-	const aligned = Math.floor(shifted / WINDOW_MS) * WINDOW_MS;
-	return aligned - COLOMBO_OFFSET_MS;
+function getBackendUrl(): string {
+	return vscode.workspace.getConfiguration("smartdesk").get<string>("backendUrl")
+		?? "http://localhost:8000";
 }
 
 function getGitInfo(projectPath: string): { repo_id: string | null; git_branch: string | null } {
@@ -129,7 +152,8 @@ function getGitInfo(projectPath: string): { repo_id: string | null; git_branch: 
 		if (originBlock) {
 			const urlMatch = originBlock.match(/url\s*=\s*(.+)/i);
 			if (urlMatch) {
-				repoId = urlMatch[1].trim();
+				// Hash the URL — don't send raw git URLs to the backend
+				repoId = hashRepoId(urlMatch[1].trim());
 			}
 		}
 	} catch {
@@ -160,16 +184,21 @@ export function activate(context: vscode.ExtensionContext) {
 
 	let counters: MinuteWindowCounters = createEmptyCounters();
 
+	// Offline buffering — queue failed payloads for retry
+	const pendingQueue: VSCodeMinuteWindowPayload[] = [];
+
 	function createEmptyCounters(): MinuteWindowCounters {
 		return {
-			vscode_foreground_sec: 0,
+			ide_foreground_sec: 0,
 			active_editor_sec: 0,
 			idle_sec: 0,
 			edit_count: 0,
 			save_count: 0,
 			file_switch_count: 0,
 			terminal_command_count: 0,
-			debug_run_count: 0
+			debug_run_count: 0,
+			lines_added: 0,
+			lines_deleted: 0
 		};
 	}
 
@@ -201,7 +230,7 @@ export function activate(context: vscode.ExtensionContext) {
 			if (!windowStartMs) { return; }
 			const now = Date.now();
 			if (isWindowFocused) {
-				counters.vscode_foreground_sec += 1;
+				counters.ide_foreground_sec += 1;
 				if (lastActivityMs > 0 && now - lastActivityMs <= IDLE_THRESHOLD_MS) {
 					counters.active_editor_sec += 1;
 				} else {
@@ -221,27 +250,33 @@ export function activate(context: vscode.ExtensionContext) {
 	}
 
 	async function sendMinuteWindow(payload: VSCodeMinuteWindowPayload) {
-		try {
-			await fetch("http://localhost:8000/api/v1/vscode/minute-window", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(payload)
-			});
-		} catch (error) {
-			const errMessage = error instanceof Error ? error.message : String(error);
-			output.appendLine(`[SmartDesk] Minute window sync failed: ${errMessage}`);
+		const toSend = [...pendingQueue, payload];
+		pendingQueue.length = 0;
+
+		for (const p of toSend) {
+			try {
+				const res = await fetch(`${getBackendUrl()}/api/v1/ide/minute-window`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(p)
+				});
+				if (!res.ok) { throw new Error(`HTTP ${res.status}`); }
+			} catch (error) {
+				const errMessage = error instanceof Error ? error.message : String(error);
+				output.appendLine(`[SmartDesk] Send failed, queued for retry: ${errMessage}`);
+				pendingQueue.push(p); // re-queue for next minute
+			}
 		}
 	}
 
 	function buildPayload(): VSCodeMinuteWindowPayload {
 		const projectPath = getProjectPath();
 		const gitInfo = getGitInfo(projectPath);
-		const nowIso = toColomboISOString(new Date());
 
 		return {
 			user_id: getUserId(),
-			window_start: toColomboISOString(new Date(windowStartMs)),
-			window_end: toColomboISOString(new Date(windowEndMs)),
+			window_start: toLocalISOString(new Date(windowStartMs)),
+			window_end: toLocalISOString(new Date(windowEndMs)),
 			timezone: getTimezone(),
 			workspace_name: getWorkspaceName(),
 			project_path: projectPath,
@@ -250,7 +285,7 @@ export function activate(context: vscode.ExtensionContext) {
 			active_file_path: activeEditorInfo.file_path,
 			active_file_name: activeEditorInfo.file_name,
 			active_language: activeEditorInfo.language,
-			vscode_foreground_sec: counters.vscode_foreground_sec,
+			ide_foreground_sec: counters.ide_foreground_sec,
 			active_editor_sec: counters.active_editor_sec,
 			idle_sec: counters.idle_sec,
 			edit_count: counters.edit_count,
@@ -258,10 +293,9 @@ export function activate(context: vscode.ExtensionContext) {
 			file_switch_count: counters.file_switch_count,
 			terminal_command_count: counters.terminal_command_count,
 			debug_run_count: counters.debug_run_count,
+			lines_added: counters.lines_added,
+			lines_deleted: counters.lines_deleted,
 			source: "vscode_extension",
-			schema_version: SCHEMA_VERSION,
-			created_at: nowIso,
-			updated_at: nowIso
 		};
 	}
 
@@ -286,7 +320,7 @@ export function activate(context: vscode.ExtensionContext) {
 	function startWindowCycle() {
 		stopWindowCycle();
 		const now = Date.now();
-		windowStartMs = alignToColomboMinute(now);
+		windowStartMs = alignToLocalMinute(now);
 		windowEndMs = windowStartMs + WINDOW_MS;
 		resetCounters();
 
@@ -310,10 +344,29 @@ export function activate(context: vscode.ExtensionContext) {
 		updateActiveEditor(editor);
 	});
 
+	// Track ALL text document changes — this fires for user edits, Copilot
+	// completions, auto-format, extension-generated edits, and any other
+	// programmatic modifications. Every content change is captured.
 	const editTracking = vscode.workspace.onDidChangeTextDocument(e => {
 		if (e.contentChanges.length === 0) { return; }
 		if (vscode.window.activeTextEditor?.document !== e.document) { return; }
-		counters.edit_count += e.contentChanges.length;
+
+		// Count lines added/deleted from all content changes.
+		// This captures user edits, Copilot completions, auto-format,
+		// extension edits — any mutation to the document.
+		let added = 0;
+		let deleted = 0;
+		for (const change of e.contentChanges) {
+			const newLines = change.text.split("\n").length - 1;
+			const oldLines = change.range.end.line - change.range.start.line;
+			added += Math.max(0, newLines - oldLines);
+			deleted += Math.max(0, oldLines - newLines);
+		}
+		counters.lines_added += added;
+		counters.lines_deleted += deleted;
+
+		// Count 1 per change event (not contentChanges.length which overcounts auto-format)
+		counters.edit_count += 1;
 		lastActivityMs = Date.now();
 	});
 

@@ -1,21 +1,28 @@
-from datetime import datetime
-from zoneinfo import ZoneInfo
+import logging
+from datetime import datetime, timezone
+
 from sqlalchemy import and_
 
 from app.core.database import SessionLocal
-from app.models.db_models import ActivitySessionSummaryRecord
+from app.models.db_models import ActivityTimelineIndex
+
+logger = logging.getLogger("smartdesk.repo.timeline")
 
 
-class ActivitySessionSummaryRepository:
+def _server_timestamp() -> str:
+    return datetime.now(timezone.utc).astimezone().replace(microsecond=0).isoformat()
+
+
+class ActivityTimelineRepository:
     def delete_overlapping(self, user_id: str, start_time: str, end_time: str) -> int:
         db = SessionLocal()
         try:
             deleted = (
-                db.query(ActivitySessionSummaryRecord)
+                db.query(ActivityTimelineIndex)
                 .filter(
-                    ActivitySessionSummaryRecord.user_id == user_id,
-                    ActivitySessionSummaryRecord.session_start < end_time,
-                    ActivitySessionSummaryRecord.session_end > start_time,
+                    ActivityTimelineIndex.user_id == user_id,
+                    ActivityTimelineIndex.window_start < end_time,
+                    ActivityTimelineIndex.window_end > start_time,
                 )
                 .delete(synchronize_session=False)
             )
@@ -28,34 +35,31 @@ class ActivitySessionSummaryRepository:
         db = SessionLocal()
         try:
             record = (
-                db.query(ActivitySessionSummaryRecord)
+                db.query(ActivityTimelineIndex)
                 .filter(
                     and_(
-                        ActivitySessionSummaryRecord.user_id == data["user_id"],
-                        ActivitySessionSummaryRecord.session_start == data["session_start"],
-                        ActivitySessionSummaryRecord.session_end == data["session_end"],
+                        ActivityTimelineIndex.user_id == data["user_id"],
+                        ActivityTimelineIndex.window_start == data["window_start"],
+                        ActivityTimelineIndex.window_end == data["window_end"],
                     )
                 )
                 .one_or_none()
             )
 
-            now_iso = datetime.now(ZoneInfo("Asia/Colombo")).replace(microsecond=0).isoformat()
-
             if record:
                 for key, value in data.items():
                     if hasattr(record, key):
                         setattr(record, key, value)
-                record.updated_at = data.get("updated_at") or now_iso
                 db.commit()
-                return {"status": "updated", "collection": "activity_session_summary", "id": record.id}
+                return {"status": "updated", "collection": "activity_timeline_index", "id": record.id}
 
-            record = ActivitySessionSummaryRecord(
-                **{k: v for k, v in data.items() if hasattr(ActivitySessionSummaryRecord, k)}
+            record = ActivityTimelineIndex(
+                **{k: v for k, v in data.items() if hasattr(ActivityTimelineIndex, k)}
             )
             db.add(record)
             db.commit()
             db.refresh(record)
-            return {"status": "inserted", "collection": "activity_session_summary", "id": record.id}
+            return {"status": "inserted", "collection": "activity_timeline_index", "id": record.id}
         finally:
             db.close()
 
@@ -68,14 +72,14 @@ class ActivitySessionSummaryRepository:
     ):
         db = SessionLocal()
         try:
-            query = db.query(ActivitySessionSummaryRecord)
+            query = db.query(ActivityTimelineIndex)
             if user_id:
-                query = query.filter(ActivitySessionSummaryRecord.user_id == user_id)
+                query = query.filter(ActivityTimelineIndex.user_id == user_id)
             if start_time:
-                query = query.filter(ActivitySessionSummaryRecord.session_start >= start_time)
+                query = query.filter(ActivityTimelineIndex.window_start >= start_time)
             if end_time:
-                query = query.filter(ActivitySessionSummaryRecord.session_end <= end_time)
-            query = query.order_by(ActivitySessionSummaryRecord.session_start.desc())
+                query = query.filter(ActivityTimelineIndex.window_end <= end_time)
+            query = query.order_by(ActivityTimelineIndex.window_start.desc())
             if limit:
                 query = query.limit(limit)
             return query.all()

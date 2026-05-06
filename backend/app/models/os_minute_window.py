@@ -17,10 +17,15 @@ class OSMinuteWindowPayload(BaseModel):
     dominant_app_category_sec: Optional[int] = None
     active_app_durations_json: Optional[str] = None
     category_durations_json: Optional[str] = None
-    source: str
-    schema_version: str
-    created_at: str
-    updated_at: str
+
+    # Future extensibility
+    extra_data: Optional[str] = None
+
+    # Server-managed fields — optional from client
+    source: Optional[str] = "os_collector"
+    schema_version: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class OSMinuteWindowResponse(OSMinuteWindowPayload):

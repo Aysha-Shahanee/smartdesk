@@ -9,33 +9,25 @@ class ActivitySessionBuildRequest(BaseModel):
     end_time: str
 
 
-class ActivitySessionSummaryResponse(BaseModel):
+class ActivityTimelineIndexResponse(BaseModel):
     id: int
     user_id: str
-    session_start: str
-    session_end: str
+    window_start: str
+    window_end: str
     timezone: str
-    duration_sec: int
 
-    primary_app: Optional[str] = None
-    primary_category: Optional[str] = None
+    foreground_source: str
+    foreground_app: Optional[str] = None
+    foreground_window_title: Optional[str] = None
+    foreground_category: Optional[str] = None
 
-    total_active_time_sec: Optional[int] = None
-    total_idle_time_sec: Optional[int] = None
-    total_locked_time_sec: Optional[int] = None
-    context_switch_count: Optional[int] = None
+    has_os_data: bool = False
+    has_ide_data: bool = False
+    has_browser_data: bool = False
 
-    browser_time_sec: Optional[int] = None
-    top_domain: Optional[str] = None
-    active_tab_category: Optional[str] = None
+    ide_workspace: Optional[str] = None
+    browser_domain: Optional[str] = None
 
-    calendar_meeting_time_sec: Optional[int] = None
-    in_meeting: Optional[int] = None
+    activity_confidence: Optional[float] = None
 
-    activity_type: Optional[str] = None
-    activity_description: Optional[str] = None
-
-    source: Optional[str] = None
-    schema_version: Optional[str] = None
     created_at: str
-    updated_at: str

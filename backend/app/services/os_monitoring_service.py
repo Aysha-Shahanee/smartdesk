@@ -1,10 +1,9 @@
+import logging
 import time
 import threading
 import json
-import os
 from collections import defaultdict
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
 import ctypes
 from ctypes import wintypes
 
@@ -13,15 +12,17 @@ import win32gui
 import win32process
 import win32api
 
+from app.core.config import settings
 from app.core.session_watcher import SessionState, SessionWatcher
 
 from app.models.os_minute_window import OSMinuteWindowPayload
 from app.services.os_minute_window_service import OSMinuteWindowService
 
+logger = logging.getLogger("smartdesk.collector.os")
+
 POLL_SEC = 1.0
 WINDOW_SEC = 60
 IDLE_THRESHOLD_MS = 60_000
-USER_ID = os.getenv("USER_ID", "demo_user")
 
 class LASTINPUTINFO(ctypes.Structure):
     _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
@@ -79,12 +80,13 @@ def get_foreground_context() -> dict:
     return {"pid": pid, "procName": proc_name, "exePath": exe_path, "company": company, "product": product, "description": description}
 
 def now_epoch() -> float: return time.time()
-def iso_colombo(ts) -> str: return datetime.fromtimestamp(ts, tz=ZoneInfo("Asia/Colombo")).replace(microsecond=0).isoformat()
+def iso_local(ts) -> str: return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone().replace(microsecond=0).isoformat()
+def get_timezone() -> str: return datetime.now(timezone.utc).astimezone().tzinfo.key if hasattr(datetime.now(timezone.utc).astimezone().tzinfo, 'key') else str(datetime.now(timezone.utc).astimezone().tzinfo)
 
 def heuristics_category_from_text(t: str) -> str | None:
     t = t.lower()
     if any(x in t for x in ["chrome", "msedge", "edge", "firefox", "brave", "opera"]): return "browser"
-    if any(x in t for x in ["code", "pycharm", "idea", "vscode"]): return "ide"
+    if any(x in t for x in ["code", "pycharm", "idea", "vscode", "antigravity", "webstorm", "goland", "rider", "clion", "phpstorm", "rubymine", "datagrip"]): return "ide"
     if any(x in t for x in ["whatsapp", "slack", "discord", "outlook"]): return "communication"
     if any(x in t for x in ["zoom", "teams", "skype", "meet"]): return "meeting"
     if any(x in t for x in ["winword", "excel", "powerpnt", "pdf"]): return "docs"
@@ -197,8 +199,8 @@ class OSMonitorTask:
                     last_change_t = t
 
                 payload_data = {
-                    "window_start": iso_colombo(window_start),
-                    "window_end": iso_colombo(t),
+                    "window_start": iso_local(window_start),
+                    "window_end": iso_local(t),
                     "active_app_durations_sec": {k: round(v, 2) for k, v in durations.items()},
                     "category_durations_sec": {k: round(v, 2) for k, v in category_durations.items()},
                     "context_switch_count": int(switch_count),
@@ -221,10 +223,10 @@ class OSMonitorTask:
 
 
                 minute_payload = OSMinuteWindowPayload(
-                    user_id=USER_ID,
+                    user_id=settings.DEFAULT_USER_ID,
                     window_start=payload_data["window_start"],
                     window_end=payload_data["window_end"],
-                    timezone="Asia/Colombo",
+                    timezone=get_timezone(),
                     active_time_sec=int(payload_data.get("active_time_sec") or 0),
                     idle_time_sec=int(payload_data.get("idle_time_sec") or 0),
                     locked_time_sec=int(payload_data.get("locked_time_sec") or 0),
@@ -236,17 +238,14 @@ class OSMonitorTask:
                     active_app_durations_json=json.dumps(payload_data.get("active_app_durations_sec") or {}),
                     category_durations_json=json.dumps(payload_data.get("category_durations_sec") or {}),
                     source="os_collector",
-                    schema_version="1.0",
-                    created_at=iso_colombo(t),
-                    updated_at=iso_colombo(t),
                 )
                 
                 # Push directly to the backend abstraction
                 try:
                     self.minute_window_service.process_and_save(minute_payload)
-                    print(f"[OS Collector] Minute window saved successfully")
+                    logger.debug("Minute window saved successfully")
                 except Exception as e:
-                    print(f"Failed to save OS minute window: {e}")
+                    logger.error("Failed to save OS minute window: %s", e)
 
                 window_start = t
                 durations.clear()

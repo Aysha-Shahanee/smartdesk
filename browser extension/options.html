@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SmartDesk Tracker — Settings</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 40px 20px;
+    }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 32px;
+      width: 100%;
+      max-width: 420px;
+    }
+    h1 {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: #94a3b8;
+      margin-bottom: 24px;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 6px;
+      color: #cbd5e1;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #475569;
+      border-radius: 8px;
+      background: #0f172a;
+      color: #e2e8f0;
+      font-size: 14px;
+      margin-bottom: 16px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input[type="text"]:focus {
+      border-color: #3b82f6;
+    }
+    .hint {
+      font-size: 11px;
+      color: #64748b;
+      margin-top: -12px;
+      margin-bottom: 16px;
+    }
+    button {
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 8px;
+      background: #3b82f6;
+      color: white;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #2563eb; }
+    .status {
+      margin-top: 12px;
+      font-size: 13px;
+      color: #22c55e;
+      text-align: center;
+      min-height: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>SmartDesk Tracker</h1>
+    <p class="subtitle">Configure your browser extension settings.</p>
+
+    <label for="userId">User ID</label>
+    <input type="text" id="userId" placeholder="e.g. my-machine or your-username" />
+    <p class="hint">Leave blank to use "local_user" as default.</p>
+
+    <label for="backendUrl">Backend URL</label>
+    <input type="text" id="backendUrl" placeholder="http://127.0.0.1:8000" />
+    <p class="hint">The SmartDesk backend server address.</p>
+
+    <button id="saveBtn">Save Settings</button>
+    <p class="status" id="status"></p>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

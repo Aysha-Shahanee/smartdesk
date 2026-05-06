@@ -1,5 +1,6 @@
 # Environment & secrets
 .env
+backend/.env
 
 # Python virtual environments
 venv/
@@ -31,3 +32,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Archive files (don't commit large zips)
+*.zip

@@ -1,15 +1,28 @@
-from datetime import datetime
-from zoneinfo import ZoneInfo
+import logging
+from datetime import datetime, timezone
+
 from sqlalchemy import and_
+from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
 from app.models.db_models import CalendarEventRecord
 from app.models.calendar_event import CalendarEventPayload
 
+logger = logging.getLogger("smartdesk.repo.calendar")
+
+
+def _server_timestamp() -> str:
+    """Generate a server-side timestamp in ISO format with timezone."""
+    return datetime.now(timezone.utc).astimezone().replace(microsecond=0).isoformat()
+
 
 class CalendarEventRepository:
+    def __init__(self, db: Session | None = None):
+        self.db = db
+        self._owns_session = db is None
+
     def upsert(self, payload: CalendarEventPayload):
-        db = SessionLocal()
+        db = self.db or SessionLocal()
         try:
             record = (
                 db.query(CalendarEventRecord)
@@ -22,7 +35,7 @@ class CalendarEventRepository:
                 .one_or_none()
             )
 
-            now_iso = datetime.now(ZoneInfo("Asia/Colombo")).replace(microsecond=0).isoformat()
+            now_iso = _server_timestamp()
 
             if record:
                 record.title = payload.title
@@ -31,9 +44,11 @@ class CalendarEventRepository:
                 record.timezone = payload.timezone
                 record.attendees_count = payload.attendees_count
                 record.is_recurring = 1 if payload.is_recurring else 0
-                record.source = payload.source
+                record.extra_data = payload.extra_data
+                record.source = payload.source or "google_calendar"
                 record.schema_version = payload.schema_version
-                record.updated_at = payload.updated_at or now_iso
+                # Always set updated_at server-side
+                record.updated_at = now_iso
                 db.commit()
                 return {"status": "updated", "collection": "calendar_events", "id": record.id}
 
@@ -46,20 +61,23 @@ class CalendarEventRepository:
                 timezone=payload.timezone,
                 attendees_count=payload.attendees_count,
                 is_recurring=1 if payload.is_recurring else 0,
-                source=payload.source,
+                extra_data=payload.extra_data,
+                source=payload.source or "google_calendar",
                 schema_version=payload.schema_version,
-                created_at=payload.created_at or now_iso,
-                updated_at=payload.updated_at or now_iso,
+                # Always set timestamps server-side
+                created_at=now_iso,
+                updated_at=now_iso,
             )
             db.add(record)
             db.commit()
             db.refresh(record)
             return {"status": "inserted", "collection": "calendar_events", "id": record.id}
         finally:
-            db.close()
+            if self._owns_session:
+                db.close()
 
     def list(self, user_id: str | None = None, start_time: str | None = None, end_time: str | None = None, limit: int = 200):
-        db = SessionLocal()
+        db = self.db or SessionLocal()
         try:
             query = db.query(CalendarEventRecord)
             if user_id:
@@ -73,4 +91,5 @@ class CalendarEventRepository:
                 query = query.limit(limit)
             return query.all()
         finally:
-            db.close()
+            if self._owns_session:
+                db.close()

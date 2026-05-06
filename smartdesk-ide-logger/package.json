@@ -15,6 +15,21 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "SmartDesk",
+      "properties": {
+        "smartdesk.userId": {
+          "type": "string",
+          "default": "",
+          "description": "Your SmartDesk user ID (leave blank to use machine hostname)"
+        },
+        "smartdesk.backendUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "SmartDesk backend URL"
+        }
+      }
+    },
     "commands": [
       {
         "command": "smartdesk.showLogLocation",

@@ -1,72 +1,60 @@
+import logging
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from app.core.config import settings
+from app.core.database import Base, engine
+from app.core.logging import setup_logging
+from app.models import db_models  # noqa: F401  — registers ORM models with Base
 from app.routes import (
     activity_session_summary,
     browser,
     calendar,
     dashboard,
     health,
+    ide,
     os_minute_window,
-    vscode,
 )
-from app.core.database import Base, engine
-from app.models import db_models
+
+logger = logging.getLogger("smartdesk.main")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Run schema migrations before table creation
-    print("Running database migrations...")
-    from pathlib import Path
-    from app.core.database import engine
-    migration_files = [
-        Path(__file__).parent.parent / "scripts" / "migrations" / "006_create_activity_session_summary.sql",
-        Path(__file__).parent.parent / "scripts" / "migrations" / "007_drop_activity_session_summary_fields.sql",
-    ]
-    for migration_sql in migration_files:
-        if migration_sql.exists():
-            with engine.connect() as conn:
-                sql_text = migration_sql.read_text(encoding="utf-8")
-                # Strip line comments before splitting to avoid semicolons in comments.
-                sql_text = "\n".join(
-                    line for line in sql_text.splitlines() if not line.strip().startswith("--")
-                )
-                for statement in sql_text.split(";"):
-                    stmt = statement.strip()
-                    if stmt:
-                        try:
-                            conn.execute(__import__("sqlalchemy").text(stmt))
-                        except Exception as e:
-                            print(f"[Migration] Warning: {e}")
-                conn.commit()
-            print(f"Migration {migration_sql.name} applied.")
+    # Configure logging first
+    setup_logging(level=settings.LOG_LEVEL)
 
     # Initialize the database file and tables on startup
-    print("Initializing local SQLite database...")
+    logger.info("Initializing local SQLite database...")
     Base.metadata.create_all(bind=engine)
 
-    
     from app.services.os_monitoring_service import os_monitor
     from app.services.calendar_sync_service import calendar_sync
     from app.services.activity_session_summary_scheduler import activity_session_scheduler
-    print("Starting OS Collector background service...")
+
+    logger.info("Starting OS Collector background service...")
     os_monitor.start()
-    print("Starting Calendar Collector background service...")
+    logger.info("Starting Calendar Collector background service...")
     calendar_sync.start()
+    logger.info("Starting Activity Session Scheduler...")
     activity_session_scheduler.start()
     yield
-    print("Stopping OS Collector background service...")
+    logger.info("Stopping OS Collector background service...")
     os_monitor.stop()
-    print("Stopping Calendar Collector background service...")
+    logger.info("Stopping Calendar Collector background service...")
     calendar_sync.stop()
+    logger.info("Stopping Activity Session Scheduler...")
     activity_session_scheduler.stop()
+
 
 app = FastAPI(title="SmartDesk Data Collection Layer", lifespan=lifespan)
 
-# Add CORS middleware to allow requests from Chrome/Edge extensions
+# CORS — restricted to configured origins (extensions + local dev servers)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins (including chrome-extension://)
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -75,10 +63,11 @@ app.add_middleware(
 app.include_router(health.router, prefix="/health", tags=["Health"])
 app.include_router(os_minute_window.router, prefix="/api/v1/os", tags=["OS Minute Windows"])
 app.include_router(browser.router, prefix="/api/v1/browser", tags=["Browser"])
-app.include_router(vscode.router, prefix="/api/v1/vscode", tags=["VS Code"])
+app.include_router(ide.router, prefix="/api/v1/ide", tags=["IDE"])
 app.include_router(calendar.router, prefix="/api/v1/calendar", tags=["Calendar"])
 app.include_router(activity_session_summary.router, prefix="/api/v1/activity-sessions", tags=["Activity Sessions"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
+
 
 @app.get("/")
 def root():

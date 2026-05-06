@@ -6,7 +6,7 @@ class BrowserMinuteWindowPayload(BaseModel):
     user_id: str
     window_start: str
     window_end: str
-    timezone: str
+    timezone: Optional[str] = None
     browser_name: Optional[str] = None
     active_tab_domain: Optional[str] = None
     active_tab_url: Optional[str] = None
@@ -20,7 +20,12 @@ class BrowserMinuteWindowPayload(BaseModel):
     communication_time_sec: Optional[int] = None
     tab_switch_count: int
     unique_domains_count: int
-    source: str
-    schema_version: str
-    created_at: str
-    updated_at: str
+
+    # Future extensibility
+    extra_data: Optional[str] = None
+
+    # Server-managed fields — optional from client
+    source: Optional[str] = "browser_extension"
+    schema_version: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None

@@ -1,6 +1,6 @@
 # SmartDesk — Full System Analysis
 
-> Updated: 2026-05-03 | Covers: IDE Extension, Browser Extension, OS Collector, Calendar Sync, Productivity Summary
+> Updated: 2026-05-06 | Covers: IDE Extension, Browser Extension, OS Collector, Calendar Sync, Activity Timeline Index
 
 ---
 
@@ -8,8 +8,8 @@
 
 ```
 ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│  VS Code / IDE   │  │ Browser Extension│  │   OS Collector   │
-│  Extension (.ts) │  │  (background.js) │  │  (background svc)│
+│  IDE Extension   │  │ Browser Extension│  │   OS Collector   │
+│  (.ts / plugin)  │  │  (background.js) │  │  (background svc)│
 └───────┬──────────┘  └───────┬──────────┘  └───────┬──────────┘
         │ POST                │ POST                │ internal
         ▼                     ▼                     ▼
@@ -21,120 +21,83 @@
                             ▼                 │ (background)
                     ┌───────────────┐  ┌──────────────────────┐
                     │  smartdesk.db │  │ Calendar Sync Service │
-                    │   (SQLite)    │  │ Productivity Scheduler│
+                    │   (SQLite)    │  │ Timeline Index Builder│
                     └───────────────┘  └──────────────────────┘
 ```
 
 **Database**: SQLite file at `backend/smartdesk.db`
-**All timestamps**: Asia/Colombo (UTC+5:30)
+**Timezones**: Dynamic (uses the local system timezone of the collector)
 
 ---
 
-## 1. VS Code / IDE Extension
+## 1. IDE Extension (VS Code, Antigravity, JetBrains)
 
-**Source**: `smartdesk-ide-logger/src/extension.ts`
+**Source Example**: `smartdesk-ide-logger/src/extension.ts`
 **Activation**: `onStartupFinished`
 
 ### What It Collects
 
-Every **60 seconds**, the extension flushes a "minute window" payload:
+Every **60 seconds**, the extension flushes an IDE-agnostic "minute window" payload. The `source` field identifies the IDE (e.g., `"vscode_extension"`, `"antigravity_extension"`).
 
 | Field | Type | Description |
 |---|---|---|
-| `user_id` | string | From env `USER_ID`, default `"demo_user"` |
-| `window_start` | ISO string | Start of the 60-second window |
-| `window_end` | ISO string | End of the 60-second window |
-| `timezone` | string | Always `"Asia/Colombo"` |
-| `workspace_name` | string | VS Code workspace folder name |
+| `user_id` | string | Configured user ID |
+| `window_start` / `window_end` | ISO string | Start/end of the 60-second window |
+| `timezone` | string | Detected local timezone |
+| `workspace_name` | string | IDE workspace/project name |
 | `project_path` | string | Filesystem path to workspace root |
-| `repo_id` | string? | Git remote origin URL (from `.git/config`) |
-| `git_branch` | string? | Current git branch (from `.git/HEAD`) |
+| `repo_id` | string? | Hashed Git remote origin URL (for privacy) |
+| `git_branch` | string? | Current git branch |
 | `active_file_path` | string? | Relative path of the active file |
 | `active_file_name` | string? | Basename of the active file |
 | `active_language` | string? | Language ID of the active file |
-| `vscode_foreground_sec` | int | Seconds VS Code was the foreground window |
-| `active_editor_sec` | int | Seconds user was actively editing (not idle) |
-| `idle_sec` | int | Seconds idle (>90s no input while focused, or unfocused) |
-| `edit_count` | int | Number of text changes (keystrokes) |
+| `ide_foreground_sec` | int | Seconds the IDE was the foreground window |
+| `active_editor_sec` | int | Seconds user was actively editing |
+| `idle_sec` | int | Seconds idle |
+| `edit_count` | int | Number of document mutations |
 | `save_count` | int | Number of file saves |
 | `file_switch_count` | int | Number of file tab switches |
 | `terminal_command_count` | int | Terminal shell executions |
 | `debug_run_count` | int | Debug sessions started |
-| `source` | string | Always `"vscode_extension"` |
-| `schema_version` | string | `"1.0"` |
-
-### How Events Are Detected
-
-| Event | VS Code API Used |
-|---|---|
-| Edits | `workspace.onDidChangeTextDocument` — counts `contentChanges.length` |
-| Saves | `workspace.onDidSaveTextDocument` |
-| File switches | `window.onDidChangeActiveTextEditor` |
-| Debug runs | `debug.onDidStartDebugSession` |
-| Terminal commands | `window.onDidStartTerminalShellExecution` |
-| Foreground/idle | 1-second tick timer + `window.state.focused` + 90s idle threshold |
+| `lines_added` / `lines_deleted` | int | Tracked line changes (supports AI generated code) |
+| `source` | string | Identifies the IDE plugin |
 
 ### Endpoint
 
 | Method | URL | Purpose |
 |---|---|---|
-| POST | `/api/v1/vscode/minute-window` | Minute window data (every 60s) |
+| POST | `/api/v1/ide/minute-window` | Minute window data (every 60s) |
 
 ### Table Written
 
 | Table | Written By |
 |---|---|
-| `vscode_minute_windows` | `VSCodeMinuteWindowRepository.upsert()` |
+| `ide_minute_windows` | `IDEMinuteWindowRepository.upsert()` |
 
 ---
 
 ## 2. Browser Extension
 
 **Source**: `browser extension/background.js`
-**Type**: Chrome/Edge Manifest V3 extension
+**Type**: Chrome/Edge/Firefox Manifest V3 extension
 
 ### What It Collects
 
-Every **60 seconds** (via `chrome.alarms`), it builds a minute window from local browsing history:
+Every **60 seconds** (via `chrome.alarms`), it builds a payload from local history. Background activity is properly excluded from active time. Hardcap of 5000 history entries is maintained for AI training.
 
 | Field | Type | Description |
 |---|---|---|
-| `user_id` | string | Hardcoded `"demo_user"` |
-| `window_start` / `window_end` | ISO string | 60-second window boundaries |
-| `timezone` | string | `"Asia/Colombo"` |
-| `browser_name` | string | Chrome / Edge / Firefox / Safari |
-| `active_tab_domain` | string? | Domain of the currently active tab |
-| `active_tab_url` | string? | Full URL of the active tab |
-| `active_tab_title` | string? | Title of the active tab |
+| `user_id` | string | Configured user ID |
+| `browser_name` | string | Chrome / Edge / Firefox |
+| `active_tab_domain` / `url` / `title` | string? | Details of the active tab |
 | `active_tab_category` | string? | `"Focused"` / `"Distracted"` / `"Neutral"` |
-| `browser_active_time_sec` | int | Seconds of active browsing in this window |
+| `browser_active_time_sec` | int | Seconds of foreground browsing |
 | `browser_idle_time_sec` | int | Window duration minus active time |
 | `productive_time_sec` | int | Seconds on focused/educational sites |
 | `neutral_time_sec` | int | Seconds on neutral sites |
 | `distracting_time_sec` | int | Seconds on distraction sites |
-| `communication_time_sec` | int | Always `0` (not yet implemented) |
 | `tab_switch_count` | int | Tab switches within the window |
 | `unique_domains_count` | int | Distinct domains visited |
-
-### Tab Classification Logic
-
-```
-1. Check title/URL for educational keywords → "Focused"
-   (tutorial, course, programming, documentation, etc.)
-2. Check URL for distraction domains → "Distracted"
-   (facebook, instagram, tiktok, netflix, twitter, reddit, etc.)
-3. Check URL for developer domains → "Focused"
-   (github, stackoverflow, MDN, coursera, etc.)
-4. Default → "Neutral"
-```
-
-**Special**: YouTube is NOT in the distracted list — it's classified by title keywords (educational YouTube = Focused).
-
-### Idle Detection
-
-- Uses `chrome.idle` API with 180-second threshold
-- When idle/locked: closes current session, stops counting time
-- When active again: resumes tracking from current tab
 
 ### Endpoint
 
@@ -161,40 +124,11 @@ Polls every **1 second**, flushes every **60 seconds**:
 
 | Field | Type | Description |
 |---|---|---|
-| `user_id` | string | From env `USER_ID`, default `"demo_user"` |
-| `window_start` / `window_end` | ISO string | 60-second window |
-| `timezone` | string | `"Asia/Colombo"` |
-| `active_time_sec` | int | Seconds of active computer use |
-| `idle_time_sec` | int | Seconds idle (>60s no keyboard/mouse) |
-| `locked_time_sec` | int | Seconds screen was locked |
-| `context_switch_count` | int | App switches during the window |
-| `top_app` | string? | Most-used app process name |
-| `top_app_sec` | int? | Seconds spent in top app |
-| `dominant_app_category` | string? | Most-used app category |
-| `dominant_app_category_sec` | int? | Seconds in dominant category |
-| `active_app_durations_json` | JSON string | `{"chrome.exe": 25.3, "Code.exe": 34.7}` |
-| `category_durations_json` | JSON string | `{"browser": 25.3, "ide": 34.7}` |
-
-### App Classification Logic
-
-```
-Process name heuristics:
-  chrome/msedge/firefox/brave/opera → "browser"
-  code/pycharm/idea/vscode          → "ide"
-  whatsapp/slack/discord/outlook    → "communication"
-  zoom/teams/skype/meet             → "meeting"
-  winword/excel/powerpnt/pdf        → "docs"
-  terminal/powershell/cmd/bash      → "terminal"
-  explorer/taskmgr/systemsettings   → "system"
-  
-If no match: check Windows file metadata (Company/Product/Description)
-If still no match: → "other"
-```
-
-### Lock Detection
-
-- Uses `SessionWatcher` (Windows WTS session notifications)
-- Also detects `LockApp.exe` as foreground process = locked
+| `active_time_sec` / `idle_time_sec` / `locked_time_sec` | int | State durations |
+| `context_switch_count` | int | App switches |
+| `top_app` / `top_app_sec` | string / int | Most-used app |
+| `dominant_app_category` | string | App category (e.g., `"ide"`, `"browser"`) |
+| `active_app_durations_json` | string | JSON map of app times |
 
 ### Table Written
 
@@ -206,23 +140,8 @@ If still no match: → "other"
 
 ## 4. Google Calendar Sync
 
-**Source**: `backend/app/services/calendar_sync_service.py` + `calendar_service.py`
-**Type**: Background thread, polls every 15 minutes
-
-### What It Collects
-
-Fetches upcoming 24h of events from Google Calendar API:
-
-| Field | Type | Description |
-|---|---|---|
-| `user_id` | string | From env, default `"demo_user"` |
-| `event_id` | string | Google Calendar event ID |
-| `title` | string? | Event title/summary |
-| `start_time` | ISO string | Event start |
-| `end_time` | ISO string | Event end |
-| `timezone` | string | Event timezone |
-| `attendees_count` | int? | Number of attendees |
-| `is_recurring` | bool? | Whether the event recurs |
+**Source**: `backend/app/services/calendar_sync_service.py`
+**Type**: Background thread, polls every 15 minutes, configured via `.env` OAuth credentials.
 
 ### Table Written
 
@@ -232,236 +151,113 @@ Fetches upcoming 24h of events from Google Calendar API:
 
 ---
 
-## 5. Activity Session Summary
+## 5. Activity Timeline Index
 
 **Source**: `backend/app/services/activity_session_summary_service.py`
 **Repository**: `backend/app/repositories/activity_session_summary_repository.py`
-**Table**: `activity_session_summary`
+**Table**: `activity_timeline_index`
 
-### 5.1 Session Builder Overview
+### 5.1 Architecture
 
-The session builder reads `os_minute_windows` and groups contiguous windows by:
+The system uses a canonical foreground activity timeline. Instead of redundantly storing detailed metrics, `activity_timeline_index` serves as a lean index. 
 
-- same `top_app`
-- same `dominant_app_category`
-- minimal time gap between windows
-- changes in idle/locked state
+Each row represents one minute window and records:
+- **Foreground authority**: Uses OS data to determine what the user was actually looking at (`"ide"`, `"browser"`, `"terminal"`, `"os"`).
+- **Data availability flags**: `has_os_data`, `has_ide_data`, `has_browser_data`.
+- **Context links**: `ide_workspace`, `browser_domain`.
 
-These OS-driven sessions become the **dashboard timeline**. Browser, VS Code, and calendar data are attached by time overlap.
+When the dashboard needs detailed IDE metrics (like `lines_added`), it queries `ide_minute_windows` directly using the timeframe defined by the timeline index.
 
-Manual build endpoint:
-```
-POST /api/v1/activity-sessions/build
-Body: { "user_id": "demo_user", "start_time": "...", "end_time": "..." }
-```
+### 5.2 Background Builder
 
-### 5.2 Data Sources
-
-| Source | Table |
-|---|---|
-| OS | `os_minute_windows` |
-| Browser | `browser_minute_windows` |
-| VS Code | `vscode_minute_windows` |
-| Calendar | `calendar_events` |
-
-### 5.3 Summary Fields (High-Level)
-
-The summary table stores session boundaries and major totals needed by the dashboard. Detailed data remains in source tables.
-
-Key fields include:
-
-- `session_start`, `session_end`, `duration_sec`, `timezone`
-- `primary_app`, `primary_category`
-- `total_active_time_sec`, `total_idle_time_sec`, `total_locked_time_sec`, `context_switch_count`
-- `browser_time_sec`, `tab_switch_count`, `top_domain`, `active_tab_category`
-- `vscode_time_sec`, `edit_count`, `save_count`, `active_file_name`, `active_language`
-- `calendar_meeting_time_sec`, `in_meeting`, `meeting_title`
-- `activity_type`, `activity_description`
+The `Activity Timeline Scheduler` runs every 60 seconds and rebuilds the timeline for the last 30 minutes, ensuring late-arriving data (due to offline extension buffering) is incorporated.
 
 ---
 
-## 6. Dashboard
+## 6. Dashboard & Aggregate Service
 
-**Source**: `backend/app/routes/dashboard.py`
-**URL**: `http://localhost:8000/dashboard/`
+**Source**: `backend/app/services/dashboard_service.py` and `routes/dashboard.py`
 
-The dashboard reads from the **active structured tables** to show summary cards and a 24-hour timeline chart.
+The new `DashboardService` aggregates data from raw minute-window tables.
 
-| Read From | Purpose |
-|---|---|
-| `os_minute_windows` | Count + last `window_start` |
-| `browser_minute_windows` | Count + last `window_start` |
-| `vscode_minute_windows` | Count + last `window_start` |
-| `calendar_events` | Count + last `start_time` |
+### Endpoints
+
+| Method | URL | Purpose |
+|---|---|---|
+| GET | `/dashboard/` | Debug HTML UI |
+| GET | `/dashboard/stats` | JSON summary + 24h timeline datasets |
+| GET | `/dashboard/os?user_id=...` | OS activity metrics |
+| GET | `/dashboard/ide?user_id=...` | IDE/coding metrics (`coding_time_sec`, `lines_added`) |
+| GET | `/dashboard/browser?user_id=...` | Browser classification metrics |
+| GET | `/dashboard/sessions?user_id=...` | Foreground activity timeline entries |
 
 ---
 
 ## 7. Data Source → Table Mapping
 
-Each data source writes to exactly **one table** (no dual-writes):
+Each data source writes to exactly **one table**:
 
-| Data Source | Collector | Table Written | Write Method |
-|---|---|---|---|
-| **IDE Extension** (TypeScript) | POST `/api/v1/vscode/minute-window` | `vscode_minute_windows` | Upsert (user_id + window_start + window_end) |
-| **Browser Extension** (JS) | POST `/api/v1/browser/minute-window` | `browser_minute_windows` | Upsert (user_id + window_start + window_end) |
-| **OS Collector** (background thread) | Internal — `OSMinuteWindowService` | `os_minute_windows` | Upsert (user_id + window_start + window_end) |
-| **Calendar Sync** (background thread) | Internal — `CalendarEventService` | `calendar_events` | Upsert (user_id + event_id) |
-| **Activity Session Builder** (manual) | Internal — `ActivitySessionSummaryService` | `activity_session_summary` | Upsert (user_id + session_start + session_end) |
-
-
+| Data Source | Route / Internal | Table Written |
+|---|---|---|
+| **IDE Extension** | POST `/api/v1/ide/minute-window` | `ide_minute_windows` |
+| **Browser Extension**| POST `/api/v1/browser/minute-window` | `browser_minute_windows` |
+| **OS Collector** | Internal | `os_minute_windows` |
+| **Calendar Sync** | Internal | `calendar_events` |
+| **Timeline Builder** | Internal | `activity_timeline_index` |
 
 ---
 
-## 8. Complete Table Inventory (Current)
+## 8. Complete Table Inventory (Current Schema)
 
-| # | Table Name | Columns | Writer | Reader(s) |
-|---|---|---|---|---|
-| 1 | `os_minute_windows` | 16 cols — user_id, window_start/end, timezone, active/idle/locked_time_sec, context_switch_count, top_app/sec, dominant_category/sec, app_durations_json, category_durations_json, source, schema_version, created/updated_at | `OSMinuteWindowRepository` | Dashboard, ActivitySessionSummaryService |
-| 2 | `browser_minute_windows` | 20 cols — user_id, window_start/end, timezone, browser_name, active_tab_domain/url/title/category, active/idle_time_sec, productive/neutral/distracting/communication_time_sec, tab_switch_count, unique_domains_count, source, schema_version, created/updated_at | `BrowserMinuteWindowRepository` | Dashboard, ActivitySessionSummaryService |
-| 3 | `vscode_minute_windows` | 22 cols — user_id, window_start/end, timezone, workspace_name, project_path, repo_id, git_branch, active_file_path/name, active_language, vscode_foreground_sec, active_editor_sec, idle_sec, edit/save/file_switch/terminal_command/debug_run_count, source, schema_version, created/updated_at | `VSCodeMinuteWindowRepository` | Dashboard, ActivitySessionSummaryService |
-| 4 | `calendar_events` | 12 cols — user_id, event_id, title, start/end_time, timezone, attendees_count, is_recurring, source, schema_version, created/updated_at | `CalendarEventRepository` | Dashboard, ActivitySessionSummaryService, CalendarService |
-| 5 | `activity_session_summary` | Session summary fields | `ActivitySessionSummaryRepository` | Dashboard, API |
+All raw tables include `timeline_index_id` (for synchronization) and `extra_data` (JSON blob for AI extensibility).
 
-**Total: 5 active tables.**
+| # | Table Name | Key New Fields |
+|---|---|---|
+| 1 | `os_minute_windows` | `timeline_index_id`, `extra_data` |
+| 2 | `browser_minute_windows` | `timeline_index_id`, `extra_data` |
+| 3 | `ide_minute_windows` | `lines_added`, `lines_deleted`, `ide_foreground_sec`, `timeline_index_id` |
+| 4 | `calendar_events` | `extra_data` |
+| 5 | `activity_timeline_index` | `foreground_source`, `has_ide_data`, `ide_workspace` |
 
 ---
 
 ## 9. Legacy Items Removed
 
-The following legacy items were cleaned up in this audit:
-
-### 9A. Deleted Database Models (4 classes removed from `db_models.py`)
-
-| Model | Table | Reason |
-|---|---|---|
-| `OSSignalRecord` | `os_signals` | Replaced by `OSMinuteWindowRecord` |
-| `BrowserRecord` | `browser_signals` | Replaced by `BrowserMinuteWindowRecord` |
-| `VSCodeRecord` | `vscode_signals` | Replaced by `VSCodeMinuteWindowRecord` |
-| `CalendarRecord` | `calendar_signals` | Replaced by `CalendarEventRecord` |
-
-### 9B. Deleted Code Files (14 files)
-
-| File | Was |
-|---|---|
-| `routes/os_signals.py` | Legacy POST endpoint for OS signals |
-| `routes/calendar.py` | Legacy POST endpoint for calendar |
-| `services/os_signals_service.py` | Service for legacy OS signals |
-| `services/browser_service.py` | Service for legacy browser signals |
-| `services/vscode_service.py` | Service for legacy VSCode sessions |
-| `repositories/os_signals_repository.py` | Repository for `os_signals` table |
-| `repositories/browser_repository.py` | Repository for `browser_signals` table |
-| `repositories/vscode_repository.py` | Repository for `vscode_signals` table |
-| `repositories/calendar_repository.py` | Repository for `calendar_signals` table |
-| `models/os_signals.py` | Pydantic model for OS signal payloads |
-| `models/browser.py` | Pydantic model for browser payloads |
-| `models/vscode.py` | Pydantic model for VSCode session payloads |
-| `models/calendar.py` | Pydantic model for calendar payloads |
-| `Collector_v2.py` | Standalone MongoDB-based OS collector (dead code) |
-
-### 9C. Removed Legacy Routes
-
-| Route | Status |
-|---|---|
-| `POST /api/v1/os-signals/` | ❌ Removed |
-| `POST /api/v1/calendar/` | ❌ Removed |
-| `POST /api/v1/browser/` (legacy history sync) | ❌ Removed |
-| `POST /api/v1/vscode/` (legacy session) | ❌ Removed |
-
-### 9D. Deleted ML Module (May 2026 cleanup)
-
-| Item | Reason |
-|---|---|
-| `app/ml/__init__.py` | ML module referencing deleted legacy tables |
-| `app/ml/model1_features.py` | Feature builder for deleted `os_signals`/`vscode_signals` tables |
-| `app/ml/activity_sessions.py` | Session builder depending on deleted `model1_features_10min` |
-| `scripts/build_model1_dataset.py` | Runner script for deleted ML module |
-| `scripts/build_activity_sessions.py` | Runner script for deleted ML module |
-| `scripts/debug_db.py` | Debug script importing deleted models |
-| `scripts/migrate_vscode_tables.py` | Migration script importing deleted models |
-| `scripts/migrate_activity_sessions_table.py` | Migration for deprecated table |
-| `scripts/verify_*.py` (5 files) | One-time verification scripts |
-| `scripts/test_vscode_workflow.py` | Manual test script |
-| `calender/` directory | Legacy standalone calendar module (typo in name, fully replaced) |
-| `db_dump.py`, `db_dump.json` | One-off database cleanup artifacts |
-| Root `package.json`, `package-lock.json`, `node_modules/` | Phantom Node artifacts not used by any module |
+The following legacy items were cleaned up in recent modernizations:
+- **`activity_session_summary` table**: Replaced by the lean `activity_timeline_index`.
+- **`productivity_summary_10min` table**: Removed in favor of dynamic dashboard aggregation.
+- **Legacy `_signals` tables**: (`os_signals`, `vscode_signals`, etc.) fully replaced by `_minute_windows`.
+- **Hardcoded Timezones**: Removed; system now respects dynamic local timezones and UTC server timestamps.
+- **Hardcoded Credentials**: Removed from codebase; handled via `pydantic-settings` and `.env`.
 
 ---
 
-## 10. Real Data Samples
-
-### VS Code Minute Window (actual payload from extension)
+## 10. Real Data Sample (IDE Agnostic)
 
 ```json
 {
-  "user_id": "demo_user",
-  "window_start": "2026-05-02T22:29:00+05:30",
-  "window_end": "2026-05-02T22:30:00+05:30",
+  "user_id": "speed",
+  "window_start": "2026-05-06T13:42:00+05:30",
+  "window_end": "2026-05-06T13:43:00+05:30",
   "timezone": "Asia/Colombo",
   "workspace_name": "smartdesk",
   "project_path": "C:\\Users\\speed\\Desktop\\Software project\\SmartDesk\\smartdesk",
-  "repo_id": "https://github.com/Aysha-Shahanee/smartdesk.git",
-  "git_branch": "dev",
-  "active_file_path": "backend/app/models/vscode.py",
-  "active_file_name": "vscode.py",
+  "repo_id": "4c3d2e1f",
+  "git_branch": "main",
+  "active_file_path": "backend/app/models/ide_minute_window.py",
+  "active_file_name": "ide_minute_window.py",
   "active_language": "python",
-  "vscode_foreground_sec": 45,
-  "active_editor_sec": 38,
+  "ide_foreground_sec": 60,
+  "active_editor_sec": 45,
   "idle_sec": 15,
-  "edit_count": 12,
-  "save_count": 2,
-  "file_switch_count": 3,
-  "terminal_command_count": 1,
+  "edit_count": 24,
+  "save_count": 1,
+  "file_switch_count": 0,
+  "terminal_command_count": 0,
   "debug_run_count": 0,
-  "source": "vscode_extension",
-  "schema_version": "1.0"
-}
-```
-
-### Browser Minute Window (actual payload from extension)
-
-```json
-{
-  "user_id": "demo_user",
-  "window_start": "2026-05-02T22:29:00+05:30",
-  "window_end": "2026-05-02T22:30:00+05:30",
-  "timezone": "Asia/Colombo",
-  "browser_name": "Chrome",
-  "active_tab_domain": "github.com",
-  "active_tab_url": "https://github.com/Aysha-Shahanee/smartdesk",
-  "active_tab_title": "smartdesk repository",
-  "active_tab_category": "Focused",
-  "browser_active_time_sec": 55,
-  "browser_idle_time_sec": 5,
-  "productive_time_sec": 55,
-  "neutral_time_sec": 0,
-  "distracting_time_sec": 0,
-  "communication_time_sec": 0,
-  "tab_switch_count": 2,
-  "unique_domains_count": 1,
-  "source": "browser_extension",
-  "schema_version": "1.0"
-}
-```
-
-### OS Minute Window (actual payload from collector)
-
-```json
-{
-  "user_id": "demo_user",
-  "window_start": "2026-05-02T22:29:00+05:30",
-  "window_end": "2026-05-02T22:30:00+05:30",
-  "timezone": "Asia/Colombo",
-  "active_time_sec": 52,
-  "idle_time_sec": 8,
-  "locked_time_sec": 0,
-  "context_switch_count": 4,
-  "top_app": "Code.exe",
-  "top_app_sec": 34,
-  "dominant_app_category": "ide",
-  "dominant_app_category_sec": 34,
-  "active_app_durations_json": "{\"Code.exe\": 34.2, \"chrome.exe\": 17.8}",
-  "category_durations_json": "{\"ide\": 34.2, \"browser\": 17.8}",
-  "source": "os_collector",
+  "lines_added": 12,
+  "lines_deleted": 4,
+  "source": "antigravity_extension",
   "schema_version": "1.0"
 }
 ```
@@ -471,16 +267,15 @@ The following legacy items were cleaned up in this audit:
 ## 11. Final Clean Data Flow
 
 ```
-IDE Extension ──POST──→ /vscode/minute-window ──→ vscode_minute_windows
+IDE Extension ──POST──→ /ide/minute-window     ──→ ide_minute_windows
 Browser Ext   ──POST──→ /browser/minute-window ──→ browser_minute_windows
 OS Collector  ──────────── (background thread) ──→ os_minute_windows
 Calendar Sync ──────────── (background thread) ──→ calendar_events
-                                                       │
-                     ┌─────────────────────────────────┘
+                                                        │
+                     ┌──────────────────────────────────┘
                      ▼
-Activity Sessions  derive from OS windows
-Builder        ──→ aggregates into sessions ──→ activity_session_summary
-                                                       │
-Dashboard   reads all 5 tables ◄───────────────────────┘
+Timeline Index   derives from OS windows, enriched
+Builder      ──→ with browser/ide flags ──→ activity_timeline_index
+                                                        │
+Dashboard API   reads all 5 tables ◄────────────────────┘
 ```
-

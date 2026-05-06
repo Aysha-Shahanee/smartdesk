@@ -1,16 +1,18 @@
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import HTMLResponse, JSONResponse
+from sqlalchemy.orm import Session
 
-from app.core.database import SessionLocal
+from app.core.database import SessionLocal, get_db
 from app.models.db_models import (
     OSMinuteWindowRecord,
     BrowserMinuteWindowRecord,
-    VSCodeMinuteWindowRecord,
+    IDEMinuteWindowRecord,
     CalendarEventRecord,
 )
+from app.services.dashboard_service import DashboardService
 
 
 router = APIRouter()
@@ -27,6 +29,56 @@ def _parse_iso(s: str) -> datetime | None:
         return datetime.fromisoformat(s.replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
+
+
+def get_dashboard_service(db: Session = Depends(get_db)) -> DashboardService:
+    return DashboardService(db)
+
+
+# ─── New Dashboard API Endpoints (Phase E) ───
+
+
+@router.get("/os")
+def get_os_panel(
+    user_id: str = Query(...),
+    from_dt: str = Query(..., alias="from"),
+    to_dt: str = Query(..., alias="to"),
+    svc: DashboardService = Depends(get_dashboard_service),
+):
+    return svc.get_os_summary(user_id, from_dt, to_dt)
+
+
+@router.get("/ide")
+def get_ide_panel(
+    user_id: str = Query(...),
+    from_dt: str = Query(..., alias="from"),
+    to_dt: str = Query(..., alias="to"),
+    svc: DashboardService = Depends(get_dashboard_service),
+):
+    return svc.get_ide_summary(user_id, from_dt, to_dt)
+
+
+@router.get("/browser")
+def get_browser_panel(
+    user_id: str = Query(...),
+    from_dt: str = Query(..., alias="from"),
+    to_dt: str = Query(..., alias="to"),
+    svc: DashboardService = Depends(get_dashboard_service),
+):
+    return svc.get_browser_summary(user_id, from_dt, to_dt)
+
+
+@router.get("/sessions")
+def get_sessions(
+    user_id: str = Query(...),
+    from_dt: str = Query(..., alias="from"),
+    to_dt: str = Query(..., alias="to"),
+    svc: DashboardService = Depends(get_dashboard_service),
+):
+    return svc.get_sessions(user_id, from_dt, to_dt)
+
+
+# ─── Existing Debug Dashboard (HTML + stats) ───
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -47,7 +99,7 @@ def dashboard_page() -> str:
     <header class="flex items-center justify-between">
       <div>
         <h1 class="text-2xl font-semibold">SmartDesk Data Collection</h1>
-        <p class="text-sm text-slate-400">Quick view of what your OS, VS Code, Browser and Calendar collectors are storing locally.</p>
+        <p class="text-sm text-slate-400">Quick view of what your OS, IDE, Browser and Calendar collectors are storing locally.</p>
       </div>
       <div class="flex gap-2">
         <button id="connectCalendarBtn" class="px-3 py-1.5 rounded-md bg-blue-600 text-sm font-medium hover:bg-blue-500 transition-colors">Connect Calendar</button>
@@ -76,7 +128,7 @@ def dashboard_page() -> str:
           <li class="flex items-start gap-2"><span class="mt-0.5 h-2 w-2 rounded-full bg-emerald-500"></span> Backend API running on <code class="px-1 rounded bg-slate-800 text-[10px]">http://127.0.0.1:8000</code></li>
           <li class="flex items-start gap-2"><span class="mt-0.5 h-2 w-2 rounded-full bg-emerald-500"></span> OS collector active (Windows foreground app + idle tracking)</li>
           <li class="flex items-start gap-2"><span class="mt-0.5 h-2 w-2 rounded-full bg-emerald-500"></span> Browser extension installed in Chrome / Edge / Firefox</li>
-          <li class="flex items-start gap-2"><span class="mt-0.5 h-2 w-2 rounded-full bg-emerald-500"></span> VS Code extension installed (SmartDesk IDE logger)</li>
+          <li class="flex items-start gap-2"><span class="mt-0.5 h-2 w-2 rounded-full bg-emerald-500"></span> IDE extension installed (SmartDesk IDE logger)</li>
           <li class="flex items-start gap-2"><span class="mt-0.5 h-2 w-2 rounded-full bg-emerald-500"></span> Google Calendar connected (OAuth consent completed)</li>
         </ul>
       </div>
@@ -104,7 +156,7 @@ function renderSummaryCards(perSource) {
   const items = [
     { key: 'os', label: 'OS Minute Windows' },
     { key: 'browser', label: 'Browser Minute Windows' },
-    { key: 'vscode', label: 'VS Code Minute Windows' },
+    { key: 'ide', label: 'IDE Minute Windows' },
     { key: 'calendar', label: 'Calendar Events' },
   ];
   container.innerHTML = items.map(item => {
@@ -128,7 +180,7 @@ function renderTimeline(timeseries) {
   const labels = timeseries.labels || [];
   const dsOs = timeseries.os || [];
   const dsBrowser = timeseries.browser || [];
-  const dsVsCode = timeseries.vscode || [];
+  const dsIde = timeseries.ide || [];
   const dsCalendar = timeseries.calendar || [];
 
   const config = {
@@ -138,7 +190,7 @@ function renderTimeline(timeseries) {
       datasets: [
         { label: 'OS', data: dsOs, borderColor: '#22c55e', tension: 0.25 },
         { label: 'Browser', data: dsBrowser, borderColor: '#3b82f6', tension: 0.25 },
-        { label: 'VS Code', data: dsVsCode, borderColor: '#eab308', tension: 0.25 },
+        { label: 'IDE', data: dsIde, borderColor: '#eab308', tension: 0.25 },
         { label: 'Calendar', data: dsCalendar, borderColor: '#f97316', tension: 0.25 },
       ]
     },
@@ -223,7 +275,7 @@ def dashboard_stats():
         per_source = {
             "os": summarize(OSMinuteWindowRecord),
             "browser": summarize(BrowserMinuteWindowRecord),
-            "vscode": summarize(VSCodeMinuteWindowRecord),
+            "ide": summarize(IDEMinuteWindowRecord),
             "calendar": summarize(CalendarEventRecord, "start_time"),
         }
 
@@ -237,7 +289,7 @@ def dashboard_stats():
 
         os_records = load_records(OSMinuteWindowRecord)
         browser_records = load_records(BrowserMinuteWindowRecord)
-        vscode_records = load_records(VSCodeMinuteWindowRecord)
+        ide_records = load_records(IDEMinuteWindowRecord)
         calendar_records = load_records(CalendarEventRecord, "start_time")
 
         def build_buckets(records, time_col: str = "window_start") -> Dict[str, int]:
@@ -253,7 +305,7 @@ def dashboard_stats():
 
         os_b = build_buckets(os_records)
         br_b = build_buckets(browser_records)
-        vs_b = build_buckets(vscode_records)
+        vs_b = build_buckets(ide_records)
         ca_b = build_buckets(calendar_records, "start_time")
 
         labels_set = set(os_b.keys()) | set(br_b.keys()) | set(vs_b.keys()) | set(ca_b.keys())
@@ -266,7 +318,7 @@ def dashboard_stats():
             "labels": labels,
             "os": series_for(os_b),
             "browser": series_for(br_b),
-            "vscode": series_for(vs_b),
+            "ide": series_for(vs_b),
             "calendar": series_for(ca_b),
         }
 

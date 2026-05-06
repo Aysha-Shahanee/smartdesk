@@ -1,18 +1,19 @@
 {
   "manifest_version": 3,
-  "name": "Activity Tracker",
-  "version": "1.0",
-  "description": "Tracks active tabs and page visits",
+  "name": "SmartDesk Tracker",
+  "version": "1.0.0",
+  "description": "Tracks browser activity for SmartDesk developer productivity dashboard",
   "permissions": [
     "tabs",
     "storage",
-    "downloads",
     "idle",
     "alarms"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "http://127.0.0.1/*",
+    "http://localhost/*"
   ],
+  "options_page": "options.html",
   "background": {
     "service_worker": "background.js"
   }

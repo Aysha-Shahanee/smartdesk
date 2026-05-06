@@ -1,15 +1,28 @@
-from datetime import datetime
-from zoneinfo import ZoneInfo
+import logging
+from datetime import datetime, timezone
+
 from sqlalchemy import and_
+from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
 from app.models.db_models import OSMinuteWindowRecord
 from app.models.os_minute_window import OSMinuteWindowPayload
 
+logger = logging.getLogger("smartdesk.repo.os")
+
+
+def _server_timestamp() -> str:
+    """Generate a server-side timestamp in ISO format with timezone."""
+    return datetime.now(timezone.utc).astimezone().replace(microsecond=0).isoformat()
+
 
 class OSMinuteWindowRepository:
+    def __init__(self, db: Session | None = None):
+        self.db = db
+        self._owns_session = db is None
+
     def upsert(self, payload: OSMinuteWindowPayload):
-        db = SessionLocal()
+        db = self.db or SessionLocal()
         try:
             record = (
                 db.query(OSMinuteWindowRecord)
@@ -23,7 +36,7 @@ class OSMinuteWindowRepository:
                 .one_or_none()
             )
 
-            now_iso = datetime.now(ZoneInfo("Asia/Colombo")).replace(microsecond=0).isoformat()
+            now_iso = _server_timestamp()
 
             if record:
                 record.active_time_sec = payload.active_time_sec
@@ -36,9 +49,11 @@ class OSMinuteWindowRepository:
                 record.dominant_app_category_sec = payload.dominant_app_category_sec
                 record.active_app_durations_json = payload.active_app_durations_json
                 record.category_durations_json = payload.category_durations_json
-                record.source = payload.source
+                record.extra_data = payload.extra_data
+                record.source = payload.source or "os_collector"
                 record.schema_version = payload.schema_version
-                record.updated_at = payload.updated_at or now_iso
+                # Always set updated_at server-side
+                record.updated_at = now_iso
                 db.commit()
                 return {"status": "updated", "collection": "os_minute_windows", "id": record.id}
 
@@ -57,20 +72,23 @@ class OSMinuteWindowRepository:
                 dominant_app_category_sec=payload.dominant_app_category_sec,
                 active_app_durations_json=payload.active_app_durations_json,
                 category_durations_json=payload.category_durations_json,
-                source=payload.source,
+                extra_data=payload.extra_data,
+                source=payload.source or "os_collector",
                 schema_version=payload.schema_version,
-                created_at=payload.created_at or now_iso,
-                updated_at=payload.updated_at or now_iso,
+                # Always set timestamps server-side
+                created_at=now_iso,
+                updated_at=now_iso,
             )
             db.add(record)
             db.commit()
             db.refresh(record)
             return {"status": "inserted", "collection": "os_minute_windows", "id": record.id}
         finally:
-            db.close()
+            if self._owns_session:
+                db.close()
 
     def list(self, user_id: str | None = None, start_time: str | None = None, end_time: str | None = None, limit: int = 100):
-        db = SessionLocal()
+        db = self.db or SessionLocal()
         try:
             query = db.query(OSMinuteWindowRecord)
             if user_id:
@@ -84,4 +102,5 @@ class OSMinuteWindowRepository:
                 query = query.limit(limit)
             return query.all()
         finally:
-            db.close()
+            if self._owns_session:
+                db.close()

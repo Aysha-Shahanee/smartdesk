@@ -1,8 +1,8 @@
-# SmartDesk Data Collection Layer
+# SmartDesk — Developer Productivity Tracker
 
-SmartDesk collects developer activity from four sources and stores everything locally in `backend/smartdesk.db`.
+SmartDesk collects developer activity from four sources and stores everything locally in `backend/smartdesk.db`. A centralized dashboard and API layer lets you query your productivity data across OS, browser, IDE, and calendar.
 
-**Sources:** OS activity · Browser tabs · VS Code IDE · Google Calendar
+**Sources:** OS activity · Browser tabs · IDE (VS Code, Antigravity, JetBrains, etc.) · Google Calendar
 
 **Dashboard:** http://127.0.0.1:8000/dashboard/
 
@@ -24,15 +24,18 @@ python -m uvicorn app.main:app --reload
 
 When it starts you should see:
 
-- `Initializing local SQLite database...`
-- `Starting OS Collector background service...`
-- `Starting Calendar Collector background service...`
+```
+Initializing local SQLite database...
+Starting OS Collector background service...
+Starting Calendar Collector background service...
+Starting Activity Session Scheduler...
+```
 
 ### 2. Browser Extension
 
 Folder: `browser extension/`
 
-Tracks active tabs, classifies pages as **Focused / Distracted / Neutral**, and sends 1-minute window summaries to the backend.
+Tracks active tabs, classifies pages as **Focused / Distracted / Neutral**, and sends 1-minute window summaries to the backend. Detects when the browser is in the background and correctly excludes that time from active seconds.
 
 **Chrome / Edge:**
 
@@ -47,11 +50,15 @@ Tracks active tabs, classifies pages as **Focused / Distracted / Neutral**, and 
 2. Click **Load Temporary Add-on...**
 3. Select `browser extension/manifest.json`
 
-### 3. VS Code Extension
+**Configuration:**
+
+After installing, right-click the extension icon → **Options** to set your **User ID** and **Backend URL**.
+
+### 3. IDE Extension (VS Code)
 
 Folder: `smartdesk-ide-logger/`
 
-Tracks edits, saves, file switches, debug runs, and terminal usage. Sends one payload per 1-minute window.
+Tracks edits, saves, file switches, debug runs, terminal usage, and lines added/deleted (captures all changes including Copilot completions). Sends one payload per 1-minute window. The backend accepts data from any IDE — the `source` field identifies which IDE sent it.
 
 ```powershell
 cd smartdesk-ide-logger
@@ -60,6 +67,15 @@ npx @vscode/vsce package
 ```
 
 Then in VS Code: **Extensions → ⋯ → Install from VSIX...** → select the `.vsix` file.
+
+**Configuration:**
+
+Open VS Code settings and search for `smartdesk` to configure:
+
+| Setting | Default | Description |
+|---|---|---|
+| `smartdesk.userId` | *(machine hostname)* | Your SmartDesk user ID |
+| `smartdesk.backendUrl` | `http://localhost:8000` | Backend server URL |
 
 ### 4. Google Calendar (Optional)
 
@@ -101,20 +117,83 @@ After success the token is saved to `%APPDATA%\smartdesk-calendar\token.json` an
 
 ---
 
+## Configuration
+
+All backend settings are managed via environment variables in `backend/.env`. See `backend/.env.example` for the full list.
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | `sqlite:///./smartdesk.db` | Database connection string |
+| `DEFAULT_USER_ID` | `local_user` | Default user ID for background collectors |
+| `LOG_LEVEL` | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `CALENDAR_SYNC_INTERVAL_SEC` | `900` | Calendar sync interval (seconds) |
+| `SESSION_SCHEDULER_INTERVAL_SEC` | `60` | Timeline index rebuild interval (seconds) |
+| `SMARTDESK_GOOGLE_CLIENT_ID` | — | Google OAuth client ID |
+| `SMARTDESK_GOOGLE_CLIENT_SECRET` | — | Google OAuth client secret |
+| `SMARTDESK_GOOGLE_PROJECT_ID` | — | Google Cloud project ID |
+
+---
+
 ## Architecture
 
 ```
-IDE Extension ──POST──→ /vscode/minute-window ──→ vscode_minute_windows
+IDE Extension ──POST──→ /ide/minute-window   ──→ ide_minute_windows
 Browser Ext   ──POST──→ /browser/minute-window ──→ browser_minute_windows
-OS Collector  ──────────── (background thread) ──→ os_minute_windows
-Calendar Sync ──────────── (background thread) ──→ calendar_events
-                                                       │
-                     ┌─────────────────────────────────┘
+OS Collector  ──────────── (background thread)  ──→ os_minute_windows
+Calendar Sync ──────────── (background thread)  ──→ calendar_events
+                                                        │
+                     ┌──────────────────────────────────┘
                      ▼
-Activity Sessions   derive from OS windows
-Builder        ──→ aggregates into sessions ──→ activity_session_summary
-                                                       │
-Dashboard   reads all 5 tables ◄───────────────────────┘
+Timeline Index   derives from OS windows, enriched
+Builder      ──→ with browser/ide flags ──→ activity_timeline_index
+                                                        │
+Dashboard API   reads all 5 tables ◄────────────────────┘
+```
+
+### Backend Structure
+
+```
+backend/app/
+├── core/
+│   ├── config.py              # Centralized Pydantic Settings
+│   ├── database.py            # SQLAlchemy engine + session factory
+│   ├── logging.py             # Structured logging setup
+│   ├── google_calendar_client.py
+│   └── session_watcher.py     # Windows lock/unlock detection
+├── models/
+│   ├── db_models.py           # SQLAlchemy ORM models (all tables)
+│   ├── os_minute_window.py    # Pydantic schemas (OS)
+│   ├── browser_minute_window.py
+│   ├── ide_minute_window.py
+│   ├── calendar_event.py
+│   ├── activity_session_summary.py
+│   └── dashboard.py           # Dashboard response schemas
+├── repositories/              # Data access layer
+│   ├── os_minute_window_repository.py
+│   ├── browser_minute_window_repository.py
+│   ├── ide_minute_window_repository.py
+│   ├── calendar_event_repository.py
+│   └── activity_session_summary_repository.py
+├── services/                  # Business logic layer
+│   ├── os_monitoring_service.py
+│   ├── os_minute_window_service.py
+│   ├── browser_minute_window_service.py
+│   ├── ide_minute_window_service.py
+│   ├── calendar_service.py
+│   ├── calendar_event_service.py
+│   ├── calendar_sync_service.py
+│   ├── activity_session_summary_service.py
+│   ├── activity_session_summary_scheduler.py
+│   └── dashboard_service.py   # Dashboard aggregation logic
+├── routes/                    # Thin API controllers
+│   ├── health.py
+│   ├── os_minute_window.py
+│   ├── browser.py
+│   ├── ide.py
+│   ├── calendar.py
+│   ├── activity_session_summary.py
+│   └── dashboard.py
+└── main.py                    # FastAPI app entry point
 ```
 
 ---
@@ -125,11 +204,15 @@ Dashboard   reads all 5 tables ◄───────────────�
 |---|---|---|
 | `os_minute_windows` | 1-min OS activity windows | OS Collector (background thread) |
 | `browser_minute_windows` | 1-min browser activity windows | Browser Extension (POST) |
-| `vscode_minute_windows` | 1-min VS Code activity windows | IDE Extension (POST) |
+| `ide_minute_windows` | 1-min IDE activity windows | IDE Extension (POST) |
 | `calendar_events` | Google Calendar events | Calendar Sync (background thread) |
-| `activity_session_summary` | Session-based dashboard summary | Activity Session Scheduler (background thread) |
+| `activity_timeline_index` | Lean session timeline — foreground activity index | Timeline Scheduler (background thread) |
 
-All 5 tables use **upsert** logic — duplicate windows are updated, not duplicated.
+All tables use **upsert** logic — duplicate windows are updated, not duplicated. The `source` field in `ide_minute_windows` identifies which IDE sent the data (e.g. `vscode_extension`, `antigravity_extension`).
+
+Every raw table includes:
+- `extra_data` — JSON blob for future extensibility
+- `timeline_index_id` — links to the corresponding timeline entry (OS, browser, vscode)
 
 ---
 
@@ -139,57 +222,91 @@ All 5 tables use **upsert** logic — duplicate windows are updated, not duplica
 |---|---|
 | OS collector | Every 60 seconds |
 | Browser extension | Every 1 minute |
-| VS Code extension | Every 1 minute |
+| IDE extension | Every 1 minute |
 | Calendar sync | Every 15 minutes |
-| Activity session summary | Builds latest 30-minute window every 60 seconds |
+| Activity timeline index | Builds latest 30-minute window every 60 seconds |
 
 ---
 
-## Activity Session Summary Table
+## Activity Timeline Index
 
-`activity_session_summary` is a session-based dashboard summary table. It stores the main timeline rows for the UI.
+`activity_timeline_index` is the canonical foreground activity timeline. It replaces the old `activity_session_summary` table with a lean index.
 
-OS activity defines sessions. Browser, VS Code, and calendar data are attached by time overlap.
+Each row represents one minute window and records:
+- **What was in the foreground** (app name, source, category)
+- **Which data sources have data** for that minute (`has_os_data`, `has_ide_data`, `has_browser_data`)
+- **Context links** (which IDE workspace, which browser domain)
 
-For detailed drill-downs, the backend or dashboard should query the source tables for the same `user_id` and time range:
+For detailed drill-downs, the dashboard API queries the source tables directly for the same `user_id` and time range:
 
 - `os_minute_windows`
 - `browser_minute_windows`
-- `vscode_minute_windows`
+- `ide_minute_windows`
 - `calendar_events`
-
 
 ---
 
 ## Timezone
 
-All timestamps use **Asia/Colombo** (UTC+5:30) ISO format:
+All timestamps use the **system's local timezone** dynamically:
 
 ```
 2026-05-02T22:10:00+05:30
 ```
 
-- `window_start` and `window_end` include the `+05:30` offset
-- `timezone` field is always `"Asia/Colombo"`
+- `window_start` and `window_end` include the UTC offset
+- `timezone` field stores the IANA timezone name (e.g. `Asia/Colombo`, `America/New_York`)
+- All three collectors (OS, browser, VS Code) detect timezone automatically
 
 ---
 
 ## API Endpoints
 
+### Ingest Endpoints
+
 | Method | URL | Purpose |
 |---|---|---|
-| POST | `/api/v1/vscode/minute-window` | VS Code minute window data |
+| POST | `/api/v1/ide/minute-window` | IDE minute window data |
 | POST | `/api/v1/browser/minute-window` | Browser minute window data |
+
+### Calendar Endpoints
+
+| Method | URL | Purpose |
+|---|---|---|
 | GET | `/api/v1/calendar/status` | Calendar connection status |
 | GET | `/api/v1/calendar/events` | List calendar events |
+| POST | `/api/v1/calendar/connect` | Connect Google Calendar (OAuth) |
 | POST | `/api/v1/calendar/sync` | Manual calendar sync trigger |
-| POST | `/api/v1/activity-sessions/build` | Manual session summary build |
-| GET | `/api/v1/activity-sessions` | List activity sessions |
-| GET | `/dashboard/` | Dashboard HTML page |
+
+### Dashboard API
+
+| Method | URL | Purpose |
+|---|---|---|
+| GET | `/dashboard/` | Dashboard HTML page (debug UI) |
+| GET | `/dashboard/stats` | Summary counts + 24h timeseries |
+| GET | `/dashboard/os?user_id=...&from=...&to=...` | OS activity summary |
+| GET | `/dashboard/ide?user_id=...&from=...&to=...` | IDE/coding summary |
+| GET | `/dashboard/browser?user_id=...&from=...&to=...` | Browser activity summary |
+| GET | `/dashboard/sessions?user_id=...&from=...&to=...` | Timeline session entries |
+
+### Session Endpoints
+
+| Method | URL | Purpose |
+|---|---|---|
+| GET | `/api/v1/activity-sessions` | List timeline index entries |
+| POST | `/api/v1/activity-sessions/build` | Manual timeline index rebuild |
 
 ---
 
 ## Troubleshooting
+
+### `ModuleNotFoundError: No module named 'pydantic_settings'`
+
+Install the missing dependency:
+
+```powershell
+python -m pip install pydantic-settings
+```
 
 ### `ModuleNotFoundError: No module named 'app'`
 
@@ -199,6 +316,17 @@ You started Uvicorn from the wrong folder. Run from `backend/`:
 cd backend
 python -m uvicorn app.main:app --reload
 ```
+
+### `no such column: timeline_index_id` (or similar schema errors)
+
+The database schema has changed. Delete the old database and restart:
+
+```powershell
+Remove-Item backend/smartdesk.db
+python -m uvicorn app.main:app --reload
+```
+
+The new schema will be created automatically. Data from your extensions will start flowing in again.
 
 ### Dashboard says `Needs credentials`
 
@@ -212,7 +340,23 @@ Delete `%APPDATA%\smartdesk-calendar\token.json` and click **Connect** again.
 
 ### No browser / VS Code data appears
 
-Check that the backend is running and the extension is loaded/installed.
+1. Check that the backend is running on `http://127.0.0.1:8000`
+2. Check that the extension is loaded/installed
+3. For the browser extension: right-click → **Options** → verify the Backend URL is correct
+4. For VS Code: open settings → search `smartdesk` → verify the Backend URL
+
+---
+
+## Supported IDEs
+
+The backend accepts minute-window data from any IDE. The `source` field identifies the origin:
+
+| IDE | Source Value |
+|---|---|
+| VS Code | `vscode_extension` |
+| Antigravity | `antigravity_extension` |
+| JetBrains (IntelliJ, PyCharm, etc.) | `jetbrains_extension` |
+| Other | Any string identifying the IDE |
 
 ---
 
@@ -221,4 +365,6 @@ Check that the backend is running and the extension is loaded/installed.
 - Calendar access is read-only
 - All data stays local in SQLite
 - Database file: `backend/smartdesk.db`
+- All timestamps are server-side — extensions don't set `created_at` or `updated_at`
+- Offline buffering: both extensions queue failed sends and retry on the next minute cycle
 - Use [DB Browser for SQLite](https://sqlitebrowser.org/) for manual inspection

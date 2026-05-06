@@ -1,13 +1,23 @@
-from datetime import datetime
-from zoneinfo import ZoneInfo
+import logging
+from datetime import datetime, timezone
+
 from sqlalchemy import and_
+from sqlalchemy.orm import Session
+
 from app.core.database import SessionLocal
 from app.models.db_models import BrowserMinuteWindowRecord
 from app.models.browser_minute_window import BrowserMinuteWindowPayload
 
+logger = logging.getLogger("smartdesk.repo.browser")
+
+
+def _server_timestamp() -> str:
+    """Generate a server-side timestamp in ISO format with timezone."""
+    return datetime.now(timezone.utc).astimezone().replace(microsecond=0).isoformat()
+
 
 class BrowserMinuteWindowRepository:
-    def __init__(self, db=None):
+    def __init__(self, db: Session | None = None):
         self.db = db
         self._owns_session = db is None
 
@@ -26,6 +36,8 @@ class BrowserMinuteWindowRepository:
                 .one_or_none()
             )
 
+            now_iso = _server_timestamp()
+
             if record:
                 record.timezone = payload.timezone
                 record.browser_name = payload.browser_name
@@ -41,14 +53,13 @@ class BrowserMinuteWindowRepository:
                 record.communication_time_sec = payload.communication_time_sec
                 record.tab_switch_count = payload.tab_switch_count
                 record.unique_domains_count = payload.unique_domains_count
-                record.source = payload.source
+                record.extra_data = payload.extra_data
+                record.source = payload.source or "browser_extension"
                 record.schema_version = payload.schema_version
-                record.updated_at = datetime.now(ZoneInfo("Asia/Colombo")).replace(microsecond=0).isoformat()
+                # Always set updated_at server-side
+                record.updated_at = now_iso
                 db.commit()
                 return {"status": "updated", "collection": "browser_minute_windows", "id": record.id}
-
-            created_at = payload.created_at or datetime.now(ZoneInfo("Asia/Colombo")).replace(microsecond=0).isoformat()
-            updated_at = payload.updated_at or datetime.now(ZoneInfo("Asia/Colombo")).replace(microsecond=0).isoformat()
 
             record = BrowserMinuteWindowRecord(
                 user_id=payload.user_id,
@@ -68,10 +79,12 @@ class BrowserMinuteWindowRepository:
                 communication_time_sec=payload.communication_time_sec,
                 tab_switch_count=payload.tab_switch_count,
                 unique_domains_count=payload.unique_domains_count,
-                source=payload.source,
+                extra_data=payload.extra_data,
+                source=payload.source or "browser_extension",
                 schema_version=payload.schema_version,
-                created_at=created_at,
-                updated_at=updated_at,
+                # Always set timestamps server-side
+                created_at=now_iso,
+                updated_at=now_iso,
             )
             db.add(record)
             db.commit()

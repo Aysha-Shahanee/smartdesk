@@ -11,10 +11,15 @@ class CalendarEventPayload(BaseModel):
     timezone: Optional[str] = None
     attendees_count: Optional[int] = None
     is_recurring: Optional[bool] = None
-    source: str
-    schema_version: str
-    created_at: str
-    updated_at: str
+
+    # Future extensibility
+    extra_data: Optional[str] = None
+
+    # Server-managed fields — optional from client
+    source: Optional[str] = "google_calendar"
+    schema_version: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class CalendarEventResponse(CalendarEventPayload):

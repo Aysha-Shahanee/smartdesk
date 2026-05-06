@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, JSON, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Float, Boolean, UniqueConstraint
 from app.core.database import Base
 
 
@@ -26,6 +26,12 @@ class OSMinuteWindowRecord(Base):
 
     active_app_durations_json = Column(String, nullable=True)
     category_durations_json = Column(String, nullable=True)
+
+    # Timeline synchronization
+    timeline_index_id = Column(Integer, nullable=True)
+
+    # Future extensibility
+    extra_data = Column(String, nullable=True)  # JSON blob
 
     source = Column(String, nullable=True)
     schema_version = Column(String, nullable=True)
@@ -57,16 +63,27 @@ class BrowserMinuteWindowRecord(Base):
     communication_time_sec = Column(Integer, nullable=True)
     tab_switch_count = Column(Integer, nullable=False, default=0)
     unique_domains_count = Column(Integer, nullable=False, default=0)
+
+    # Timeline synchronization
+    timeline_index_id = Column(Integer, nullable=True)
+
+    # Future extensibility
+    extra_data = Column(String, nullable=True)  # JSON blob
+
     source = Column(String, nullable=True)
     schema_version = Column(String, nullable=True)
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
 
 
-class VSCodeMinuteWindowRecord(Base):
-    __tablename__ = "vscode_minute_windows"
+class IDEMinuteWindowRecord(Base):
+    """IDE-agnostic minute window record.
+    Supports VS Code, Antigravity, JetBrains, or any IDE that sends data.
+    The `source` field identifies which IDE sent the data.
+    """
+    __tablename__ = "ide_minute_windows"
     __table_args__ = (
-        UniqueConstraint("user_id", "window_start", "window_end", name="uq_vscode_minute_window"),
+        UniqueConstraint("user_id", "window_start", "window_end", name="uq_ide_minute_window"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -81,7 +98,7 @@ class VSCodeMinuteWindowRecord(Base):
     active_file_path = Column(String, nullable=True)
     active_file_name = Column(String, nullable=True)
     active_language = Column(String, nullable=True)
-    vscode_foreground_sec = Column(Integer, nullable=True)
+    ide_foreground_sec = Column(Integer, nullable=True)
     active_editor_sec = Column(Integer, nullable=True)
     idle_sec = Column(Integer, nullable=True)
     edit_count = Column(Integer, nullable=False, default=0)
@@ -89,7 +106,18 @@ class VSCodeMinuteWindowRecord(Base):
     file_switch_count = Column(Integer, nullable=False, default=0)
     terminal_command_count = Column(Integer, nullable=False, default=0)
     debug_run_count = Column(Integer, nullable=False, default=0)
-    source = Column(String, nullable=True)
+
+    # Coding velocity metrics
+    lines_added = Column(Integer, nullable=True, default=0)
+    lines_deleted = Column(Integer, nullable=True, default=0)
+
+    # Timeline synchronization
+    timeline_index_id = Column(Integer, nullable=True)
+
+    # Future extensibility
+    extra_data = Column(String, nullable=True)  # JSON blob
+
+    source = Column(String, nullable=True)  # "vscode_extension", "antigravity_extension", etc.
     schema_version = Column(String, nullable=True)
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
@@ -110,45 +138,51 @@ class CalendarEventRecord(Base):
     timezone = Column(String, nullable=True)
     attendees_count = Column(Integer, nullable=True)
     is_recurring = Column(Integer, nullable=True)
+
+    # Future extensibility
+    extra_data = Column(String, nullable=True)  # JSON blob
+
     source = Column(String, nullable=True)
     schema_version = Column(String, nullable=True)
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
 
 
-class ActivitySessionSummaryRecord(Base):
-    __tablename__ = "activity_session_summary"
-    __table_args__ = (
-        UniqueConstraint("user_id", "session_start", "session_end", name="uq_activity_session_summary"),
-    )
+class ActivityTimelineIndex(Base):
+    """Lean session index — the canonical foreground activity timeline.
+    All detailed metrics live in the raw minute-window tables.
+    """
+    __tablename__ = "activity_timeline_index"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
+
     user_id = Column(String, index=True, nullable=False)
-    session_start = Column(String, index=True, nullable=False)
-    session_end = Column(String, index=True, nullable=False)
+
+    window_start = Column(String, index=True, nullable=False)
+    window_end = Column(String, index=True, nullable=False)
+
     timezone = Column(String, nullable=False)
-    duration_sec = Column(Integer, nullable=False)
 
-    primary_app = Column(String, nullable=True)
-    primary_category = Column(String, nullable=True)
+    # Foreground authority from OS collector
+    foreground_source = Column(String, nullable=False)
+    # os | ide | browser | terminal
 
-    total_active_time_sec = Column(Integer, nullable=True)
-    total_idle_time_sec = Column(Integer, nullable=True)
-    total_locked_time_sec = Column(Integer, nullable=True)
-    context_switch_count = Column(Integer, nullable=True)
+    foreground_app = Column(String, nullable=True)
 
-    browser_time_sec = Column(Integer, nullable=True)
-    top_domain = Column(String, nullable=True)
-    active_tab_category = Column(String, nullable=True)
+    foreground_window_title = Column(String, nullable=True)
 
-    calendar_meeting_time_sec = Column(Integer, nullable=True)
-    in_meeting = Column(Integer, nullable=True)
+    foreground_category = Column(String, nullable=True)
+    # coding | learning | distraction | communication | browsing
 
-    activity_type = Column(String, nullable=True)
-    activity_description = Column(String, nullable=True)
+    # Synchronized raw data availability
+    has_os_data = Column(Boolean, default=False)
+    has_ide_data = Column(Boolean, default=False)
+    has_browser_data = Column(Boolean, default=False)
 
-    source = Column(String, nullable=True)
-    schema_version = Column(String, nullable=True)
+    # Links/mapping metadata
+    ide_workspace = Column(String, nullable=True)
+    browser_domain = Column(String, nullable=True)
+
+    activity_confidence = Column(Float, nullable=True)
+
     created_at = Column(String, nullable=False)
-    updated_at = Column(String, nullable=False)
-
