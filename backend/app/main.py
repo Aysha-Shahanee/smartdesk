@@ -5,53 +5,65 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.core.database import Base, engine
 from app.core.logging import setup_logging
-from app.models import db_models  # noqa: F401  — registers ORM models with Base
-from app.routes import (
-    activity_session_summary,
-    browser,
-    calendar,
-    dashboard,
-    health,
-    ide,
-    os_minute_window,
-)
+from app.routes import dashboard
+from app.routes import health
+from app.routes import ingest
+from app.routes import legacy
+from app.services.os_collector import OSCollector
+from app.services.session_timeout_job import SessionTimeoutJob
+from app.services.work_period_scheduler import WorkPeriodScheduler
 
 logger = logging.getLogger("smartdesk.main")
+
+# Background jobs — instantiated at module load so they are singletons.
+_timeout_job = SessionTimeoutJob()
+_work_scheduler = WorkPeriodScheduler()
+_os_collector = OSCollector()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Configure logging first
     setup_logging(level=settings.LOG_LEVEL)
+    logger.info("SmartDesk backend started.")
 
-    # Initialize the database file and tables on startup
-    logger.info("Initializing local SQLite database...")
-    Base.metadata.create_all(bind=engine)
+    # Start background jobs
+    _timeout_job.start()
+    _work_scheduler.start()
+    _os_collector.start()
 
-    from app.services.os_monitoring_service import os_monitor
-    from app.services.calendar_sync_service import calendar_sync
-    from app.services.activity_session_summary_scheduler import activity_session_scheduler
-
-    logger.info("Starting OS Collector background service...")
-    os_monitor.start()
-    logger.info("Starting Calendar Collector background service...")
-    calendar_sync.start()
-    logger.info("Starting Activity Session Scheduler...")
-    activity_session_scheduler.start()
     yield
-    logger.info("Stopping OS Collector background service...")
-    os_monitor.stop()
-    logger.info("Stopping Calendar Collector background service...")
-    calendar_sync.stop()
-    logger.info("Stopping Activity Session Scheduler...")
-    activity_session_scheduler.stop()
+
+    # Graceful shutdown
+    _os_collector.stop()
+    _timeout_job.stop()
+    _work_scheduler.stop()
+    logger.info("SmartDesk backend stopped.")
 
 
-app = FastAPI(title="SmartDesk Data Collection Layer", lifespan=lifespan)
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
-# CORS — restricted to configured origins (extensions + local dev servers)
+app = FastAPI(title="SmartDesk Session Backend", lifespan=lifespan)
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    print(f"422 Validation Error on {request.url}:")
+    print(exc.errors())
+    body = await request.body()
+    print(f"Body: {body.decode('utf-8', errors='replace')}")
+    
+    with open("validation_errors.log", "a") as f:
+        f.write(f"URL: {request.url}\n")
+        f.write(f"Errors: {exc.errors()}\n")
+        f.write(f"Body: {body.decode('utf-8', errors='replace')}\n")
+        f.write("-" * 40 + "\n")
+
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()}
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -61,14 +73,16 @@ app.add_middleware(
 )
 
 app.include_router(health.router, prefix="/health", tags=["Health"])
-app.include_router(os_minute_window.router, prefix="/api/v1/os", tags=["OS Minute Windows"])
-app.include_router(browser.router, prefix="/api/v1/browser", tags=["Browser"])
-app.include_router(ide.router, prefix="/api/v1/ide", tags=["IDE"])
-app.include_router(calendar.router, prefix="/api/v1/calendar", tags=["Calendar"])
-app.include_router(activity_session_summary.router, prefix="/api/v1/activity-sessions", tags=["Activity Sessions"])
+app.include_router(ingest.router, prefix="/api/v1/ingest", tags=["Ingest"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
+app.include_router(legacy.router, prefix="/api/v1", tags=["Legacy (deprecated)"])
 
 
 @app.get("/")
 def root():
-    return {"message": "Welcome to SmartDesk Data Collection API"}
+    return {
+        "service": "SmartDesk Session Backend",
+        "status": "running",
+        "architecture": "session-based",
+        "background_jobs": ["session_timeout_job", "work_period_scheduler", "os_collector"],
+    }

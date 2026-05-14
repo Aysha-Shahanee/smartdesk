@@ -1,12 +1,13 @@
 fastapi
 uvicorn[standard]
+alembic
 pydantic
 pydantic-settings
 python-dotenv
-psutil
-pywin32
 sqlalchemy
-google-api-python-client
-google-auth-httplib2
-google-auth-oauthlib
 tzdata
+psutil
+requests
+# Testing
+pytest
+httpx

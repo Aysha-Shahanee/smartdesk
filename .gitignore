@@ -23,9 +23,6 @@ __pycache__/
 node_modules/
 *.vsix
 
-# IDE extension build output
-smartdesk-ide-logger/out/
-
 # OS/editor noise
 .DS_Store
 Thumbs.db
