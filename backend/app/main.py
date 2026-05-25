@@ -10,6 +10,10 @@ from app.routes import dashboard
 from app.routes import health
 from app.routes import ingest
 from app.routes import legacy
+from app.routes import calendar
+from app.services.calendar_auth_service import CalendarAuthService
+from app.services.calendar_sync_job import CalendarSyncJob
+from app.services.calendar_sync_service import CalendarSyncService
 from app.services.os_collector import OSCollector
 from app.services.session_timeout_job import SessionTimeoutJob
 from app.services.work_period_scheduler import WorkPeriodScheduler
@@ -20,6 +24,18 @@ logger = logging.getLogger("smartdesk.main")
 _timeout_job = SessionTimeoutJob()
 _work_scheduler = WorkPeriodScheduler()
 _os_collector = OSCollector()
+_calendar_auth = CalendarAuthService(
+    credentials_file=settings.GOOGLE_CALENDAR_CREDENTIALS_FILE,
+    token_file=settings.GOOGLE_CALENDAR_TOKEN_FILE,
+    scopes=settings.GOOGLE_CALENDAR_SCOPES,
+    redirect_uri=settings.GOOGLE_CALENDAR_REDIRECT_URI,
+    state_file=settings.GOOGLE_CALENDAR_OAUTH_STATE_FILE,
+)
+_calendar_sync = CalendarSyncService(
+    auth_service=_calendar_auth,
+    sync_state_file=settings.GOOGLE_CALENDAR_SYNC_STATE_FILE,
+)
+_calendar_job = CalendarSyncJob(_calendar_sync)
 
 
 @asynccontextmanager
@@ -31,6 +47,7 @@ async def lifespan(app: FastAPI):
     _timeout_job.start()
     _work_scheduler.start()
     _os_collector.start()
+    _calendar_job.start()
 
     yield
 
@@ -38,6 +55,7 @@ async def lifespan(app: FastAPI):
     _os_collector.stop()
     _timeout_job.stop()
     _work_scheduler.stop()
+    _calendar_job.stop()
     logger.info("SmartDesk backend stopped.")
 
 
@@ -74,6 +92,7 @@ app.add_middleware(
 
 app.include_router(health.router, prefix="/health", tags=["Health"])
 app.include_router(ingest.router, prefix="/api/v1/ingest", tags=["Ingest"])
+app.include_router(calendar.router, prefix="/api/v1/calendar", tags=["Calendar"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
 app.include_router(legacy.router, prefix="/api/v1", tags=["Legacy (deprecated)"])
 
@@ -84,5 +103,10 @@ def root():
         "service": "SmartDesk Session Backend",
         "status": "running",
         "architecture": "session-based",
-        "background_jobs": ["session_timeout_job", "work_period_scheduler", "os_collector"],
+        "background_jobs": [
+            "session_timeout_job",
+            "work_period_scheduler",
+            "os_collector",
+            "calendar_sync",
+        ],
     }
