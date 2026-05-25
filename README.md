@@ -61,6 +61,26 @@ That single command starts **everything**:
 - Session timeout job (background thread, runs every 60s)
 - Work period scheduler (background thread, runs every 60s)
 
+## Create VS Code Extension VSIX
+
+Build a local `.vsix` installer from the VS Code extension folder:
+
+```powershell
+cd vscode-extension
+npm install -g @vscode/vsce   # one time only
+vsce package --no-dependencies
+```
+
+The command creates a file like `smartdesk-vscode-2.0.0.vsix` in `vscode-extension/`.
+
+Install it into VS Code:
+
+```powershell
+code --install-extension .\smartdesk-vscode-2.0.0.vsix
+```
+
+After editing the extension, rerun `vsce package --no-dependencies` and reinstall the new `.vsix`.
+
 ## Verify It's Working
 
 ```text

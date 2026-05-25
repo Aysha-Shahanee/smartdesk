@@ -2,6 +2,8 @@
 
 from sqlalchemy.orm import Session
 
+from app.core.time import is_between_iso
+from app.core.time import parse_iso
 from app.models.db import WorkPeriodRecord
 
 
@@ -20,15 +22,16 @@ class WorkPeriodRepository:
         to_iso: str,
     ) -> list[WorkPeriodRecord]:
         """Return all work periods whose start falls within [from_iso, to_iso]."""
-        return (
+        rows = (
             db.query(WorkPeriodRecord)
             .filter(
                 WorkPeriodRecord.user_id == user_id,
-                WorkPeriodRecord.period_start >= from_iso,
-                WorkPeriodRecord.period_start <= to_iso,
             )
-            .order_by(WorkPeriodRecord.period_start)
             .all()
+        )
+        return sorted(
+            [row for row in rows if is_between_iso(row.period_start, from_iso, to_iso)],
+            key=lambda row: parse_iso(row.period_start),
         )
 
     def get_open_period_db(

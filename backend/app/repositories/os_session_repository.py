@@ -7,6 +7,8 @@ timezone information.
 
 from sqlalchemy.orm import Session
 
+from app.core.time import is_between_iso
+from app.core.time import parse_iso
 from app.models.db import OSSessionRecord
 
 
@@ -33,16 +35,17 @@ class OSSessionRepository:
         from_iso: str,
         to_iso: str,
     ) -> list[OSSessionRecord]:
-        return (
+        rows = (
             db.query(OSSessionRecord)
             .filter(
                 OSSessionRecord.user_id == user_id,
-                OSSessionRecord.session_start >= from_iso,
-                OSSessionRecord.session_start <= to_iso,
                 OSSessionRecord.session_end.isnot(None),
             )
-            .order_by(OSSessionRecord.session_start)
             .all()
+        )
+        return sorted(
+            [row for row in rows if is_between_iso(row.session_start, from_iso, to_iso)],
+            key=lambda row: parse_iso(row.session_start),
         )
 
     def get_open_session(

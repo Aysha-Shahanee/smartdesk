@@ -8,6 +8,3 @@ sqlalchemy
 tzdata
 psutil
 requests
-# Testing
-pytest
-httpx

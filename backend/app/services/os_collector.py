@@ -35,9 +35,9 @@ import signal
 import sys
 import threading
 import time
-from datetime import datetime
-from datetime import timezone
 from typing import Any
+
+from app.core.time import local_now_iso
 
 logger = logging.getLogger("smartdesk.os_collector")
 
@@ -57,7 +57,7 @@ INGEST_URL = f"{BACKEND_URL}/api/v1/ingest/os/event"
 # ------------------------------------------------------------------ #
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat()
+    return local_now_iso()
 
 
 def _classify_app(app_name: str) -> str:

@@ -4,6 +4,9 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
+from app.core.time import ensure_aware
+from app.core.time import parse_iso
+from app.core.time import to_local_iso
 from app.models.db import BrowserSessionRecord
 from app.models.db import OSSessionRecord
 from app.models.db import VSCodeSessionRecord
@@ -12,7 +15,6 @@ from app.models.schemas import BrowserEventType
 from app.models.schemas import IngestEventResponse
 from app.models.schemas import OSEventPayload
 from app.models.schemas import OSEventType
-from app.models.schemas import VSCodeCounters
 from app.models.schemas import VSCodeEventPayload
 from app.models.schemas import VSCodeEventType
 
@@ -23,7 +25,7 @@ class SessionCoordinator:
             self._require(payload.app_name, "app_name is required for focused OS events")
             self._close_current_os_session(payload.user_id, payload.timestamp, "next_event", db)
             session = self._open_os_session(payload, db)
-            self._update_foreground_flags(payload.process_id, db)
+            self._update_foreground_flags(payload, db)
             db.commit()
             return IngestEventResponse(status="opened", session_id=session.id)
 
@@ -60,14 +62,11 @@ class SessionCoordinator:
     ) -> IngestEventResponse:
         if payload.event == VSCodeEventType.STARTED:
             self._close_vscode_session(
-                payload.user_id,
-                payload.instance_id,
-                payload.timestamp,
+                payload,
                 "next_session",
-                None,
                 db,
             )
-            is_foreground = self._is_foreground(payload.process_id, db)
+            is_foreground = self._is_foreground(payload, db)
             session = self._open_vscode_session(payload, is_foreground, db)
             db.commit()
             return IngestEventResponse(
@@ -76,13 +75,19 @@ class SessionCoordinator:
                 is_foreground=is_foreground,
             )
 
+        if payload.event == VSCodeEventType.STATE:
+            session = self._update_vscode_session(payload, db)
+            db.commit()
+            return IngestEventResponse(
+                status="state_updated",
+                session_id=session.id if session else None,
+                is_foreground=bool(session.is_foreground) if session else None,
+            )
+
         if payload.event == VSCodeEventType.ENDED:
             session = self._close_vscode_session(
-                payload.user_id,
-                payload.instance_id,
-                payload.timestamp,
+                payload,
                 payload.trigger or "ended",
-                payload.counters,
                 db,
             )
             db.commit()
@@ -97,7 +102,12 @@ class SessionCoordinator:
         self, payload: BrowserEventPayload, db: Session
     ) -> IngestEventResponse:
         if payload.event == BrowserEventType.STATE:
-            return IngestEventResponse(status="state_accepted")
+            session = self._mark_browser_state(payload, db)
+            db.commit()
+            return IngestEventResponse(
+                status="state_accepted",
+                session_id=session.id if session else None,
+            )
 
         if payload.event == BrowserEventType.STARTED:
             self._close_browser_session(
@@ -109,7 +119,7 @@ class SessionCoordinator:
                 "next_session",
                 db,
             )
-            is_foreground = self._is_foreground(payload.process_id, db)
+            is_foreground = self._is_foreground(payload, db)
             session = self._open_browser_session(payload, is_foreground, db)
             db.commit()
             return IngestEventResponse(
@@ -210,38 +220,53 @@ class SessionCoordinator:
             id=self._new_id(),
             user_id=payload.user_id,
             instance_id=payload.instance_id,
-            process_id=payload.process_id,
-            workspace_name=payload.workspace_name,
-            project_path=payload.project_path,
-            repo_id=payload.repo_id,
-            git_branch=payload.git_branch,
-            active_file_path=payload.active_file_path,
-            active_file_name=payload.active_file_name,
-            active_language=payload.active_language,
             session_start=timestamp,
             idle_sec=0,
             is_foreground=1 if is_foreground else 0,
             foreground_sec=0,
             confirmed_by_os=1 if is_foreground else 0,
             trigger=payload.trigger,
-            extra_data=self._json(payload.extra_data),
             created_at=timestamp,
             updated_at=timestamp,
         )
+        self._apply_vscode_payload_update(session, payload)
         db.add(session)
+        db.flush()
+        return session
+
+    def _update_vscode_session(
+        self, payload: VSCodeEventPayload, db: Session
+    ) -> VSCodeSessionRecord | None:
+        session = self._get_open_vscode_session(payload.user_id, payload.instance_id, db)
+        if session is None:
+            return None
+
+        self._apply_vscode_payload_update(session, payload)
+        session.updated_at = self._iso(payload.timestamp)
         db.flush()
         return session
 
     def _close_vscode_session(
         self,
-        user_id: str,
-        instance_id: str,
-        timestamp: datetime,
+        payload: VSCodeEventPayload,
         closed_by: str,
-        counters: VSCodeCounters | None,
         db: Session,
     ) -> VSCodeSessionRecord | None:
-        session = (
+        sessions = self._get_open_vscode_sessions(payload.user_id, payload.instance_id, db)
+        if not sessions:
+            return None
+
+        session = sessions[0]
+        self._apply_vscode_payload_update(session, payload)
+        for open_session in sessions:
+            self._close_timed_session(open_session, payload.timestamp, closed_by)
+        db.flush()
+        return session
+
+    def _get_open_vscode_sessions(
+        self, user_id: str, instance_id: str, db: Session
+    ) -> list[VSCodeSessionRecord]:
+        return (
             db.query(VSCodeSessionRecord)
             .filter(
                 VSCodeSessionRecord.user_id == user_id,
@@ -249,24 +274,37 @@ class SessionCoordinator:
                 VSCodeSessionRecord.session_end.is_(None),
             )
             .order_by(VSCodeSessionRecord.session_start.desc())
-            .first()
+            .all()
         )
-        if session is None:
-            return None
 
-        if counters is not None:
-            session.edit_count = counters.edit_count
-            session.save_count = counters.save_count
-            session.lines_added = counters.lines_added
-            session.lines_deleted = counters.lines_deleted
-            session.file_switch_count = counters.file_switch_count
-            session.terminal_command_count = counters.terminal_command_count
-            session.debug_run_count = counters.debug_run_count
-            session.idle_sec = counters.idle_sec
+    def _get_open_vscode_session(
+        self, user_id: str, instance_id: str, db: Session
+    ) -> VSCodeSessionRecord | None:
+        sessions = self._get_open_vscode_sessions(user_id, instance_id, db)
+        return sessions[0] if sessions else None
 
-        self._close_timed_session(session, timestamp, closed_by)
-        db.flush()
-        return session
+    def _apply_vscode_payload_update(
+        self, session: VSCodeSessionRecord, payload: VSCodeEventPayload
+    ) -> None:
+        session.process_id = payload.process_id
+        session.workspace_name = payload.workspace_name
+        session.project_path = payload.project_path
+        session.repo_id = payload.repo_id
+        session.git_branch = payload.git_branch
+        session.active_file_path = payload.active_file_path
+        session.active_file_name = payload.active_file_name
+        session.active_language = payload.active_language
+        session.extra_data = self._json(payload.extra_data)
+
+        if payload.counters is not None:
+            session.edit_count = payload.counters.edit_count
+            session.save_count = payload.counters.save_count
+            session.lines_added = payload.counters.lines_added
+            session.lines_deleted = payload.counters.lines_deleted
+            session.file_switch_count = payload.counters.file_switch_count
+            session.terminal_command_count = payload.counters.terminal_command_count
+            session.debug_run_count = payload.counters.debug_run_count
+            session.idle_sec = payload.counters.idle_sec
 
     def _open_browser_session(
         self, payload: BrowserEventPayload, is_foreground: bool, db: Session
@@ -323,65 +361,149 @@ class SessionCoordinator:
         db.flush()
         return session
 
+    def _mark_browser_state(
+        self, payload: BrowserEventPayload, db: Session
+    ) -> BrowserSessionRecord | None:
+        query = db.query(BrowserSessionRecord).filter(
+            BrowserSessionRecord.user_id == payload.user_id,
+            BrowserSessionRecord.browser_name == payload.browser_name,
+            BrowserSessionRecord.session_end.is_(None),
+        )
+        if payload.browser_window_id is not None:
+            query = query.filter(
+                BrowserSessionRecord.browser_window_id == payload.browser_window_id
+            )
+        if payload.tab_id is not None:
+            query = query.filter(BrowserSessionRecord.tab_id == payload.tab_id)
+
+        session = query.order_by(BrowserSessionRecord.session_start.desc()).first()
+        if session is None:
+            return None
+
+        session.updated_at = self._iso(payload.timestamp)
+        if payload.title is not None:
+            session.title = payload.title
+        if payload.url is not None:
+            session.url = payload.url
+        if payload.domain is not None:
+            session.domain = payload.domain
+        if payload.category is not None:
+            session.category = payload.category.value
+        db.flush()
+        return session
+
     def _close_all_open_extension_sessions(
         self, user_id: str, timestamp: datetime, closed_by: str, db: Session
     ) -> None:
         for session in (
             db.query(VSCodeSessionRecord)
-            .filter(VSCodeSessionRecord.user_id == user_id, VSCodeSessionRecord.session_end.is_(None))
+            .filter(
+                VSCodeSessionRecord.user_id == user_id,
+                VSCodeSessionRecord.session_end.is_(None),
+            )
             .all()
         ):
             self._close_timed_session(session, timestamp, closed_by)
 
         for session in (
             db.query(BrowserSessionRecord)
-            .filter(BrowserSessionRecord.user_id == user_id, BrowserSessionRecord.session_end.is_(None))
+            .filter(
+                BrowserSessionRecord.user_id == user_id,
+                BrowserSessionRecord.session_end.is_(None),
+            )
             .all()
         ):
             self._close_timed_session(session, timestamp, closed_by)
 
         db.flush()
 
-    def _is_foreground(self, process_id: int | None, db: Session) -> bool:
-        if process_id is None:
-            return False
-        return (
+    def _is_foreground(
+        self, payload: VSCodeEventPayload | BrowserEventPayload, db: Session
+    ) -> bool:
+        active_os_session = (
             db.query(OSSessionRecord)
             .filter(
-                OSSessionRecord.process_id == process_id,
                 OSSessionRecord.session_end.is_(None),
                 OSSessionRecord.state == "active",
             )
+            .order_by(OSSessionRecord.session_start.desc())
             .first()
-            is not None
+        )
+        if active_os_session is None:
+            return False
+
+        if payload.process_id is not None and active_os_session.process_id == payload.process_id:
+            return True
+
+        if isinstance(payload, VSCodeEventPayload):
+            return self._is_vscode_os_session(active_os_session)
+
+        return False
+
+    def _update_foreground_flags(self, payload: OSEventPayload, db: Session) -> None:
+        db.query(VSCodeSessionRecord).filter(
+            VSCodeSessionRecord.session_end.is_(None)
+        ).update(
+            {"is_foreground": 0, "confirmed_by_os": 0}, synchronize_session=False
+        )
+        db.query(BrowserSessionRecord).filter(
+            BrowserSessionRecord.session_end.is_(None)
+        ).update(
+            {"is_foreground": 0, "confirmed_by_os": 0}, synchronize_session=False
         )
 
-    def _update_foreground_flags(self, foreground_pid: int | None, db: Session) -> None:
-        db.query(VSCodeSessionRecord).filter(VSCodeSessionRecord.session_end.is_(None)).update(
-            {"is_foreground": 0, "confirmed_by_os": 0},
-            synchronize_session=False,
-        )
-        db.query(BrowserSessionRecord).filter(BrowserSessionRecord.session_end.is_(None)).update(
-            {"is_foreground": 0, "confirmed_by_os": 0},
-            synchronize_session=False,
-        )
-
-        if foreground_pid is not None:
+        if payload.process_id is not None:
             db.query(VSCodeSessionRecord).filter(
                 VSCodeSessionRecord.session_end.is_(None),
-                VSCodeSessionRecord.process_id == foreground_pid,
-            ).update({"is_foreground": 1, "confirmed_by_os": 1}, synchronize_session=False)
+                VSCodeSessionRecord.process_id == payload.process_id,
+            ).update(
+                {"is_foreground": 1, "confirmed_by_os": 1},
+                synchronize_session=False,
+            )
             db.query(BrowserSessionRecord).filter(
                 BrowserSessionRecord.session_end.is_(None),
-                BrowserSessionRecord.process_id == foreground_pid,
-            ).update({"is_foreground": 1, "confirmed_by_os": 1}, synchronize_session=False)
+                BrowserSessionRecord.process_id == payload.process_id,
+            ).update(
+                {"is_foreground": 1, "confirmed_by_os": 1},
+                synchronize_session=False,
+            )
+
+        if self._is_vscode_os_payload(payload):
+            db.query(VSCodeSessionRecord).filter(
+                VSCodeSessionRecord.user_id == payload.user_id,
+                VSCodeSessionRecord.session_end.is_(None),
+            ).update(
+                {"is_foreground": 1, "confirmed_by_os": 1},
+                synchronize_session=False,
+            )
 
         db.flush()
 
+    def _is_vscode_os_payload(self, payload: OSEventPayload) -> bool:
+        app_name = (payload.app_name or "").lower()
+        window_title = (payload.window_title or "").lower()
+        return self._looks_like_vscode(app_name) or self._looks_like_vscode(window_title)
+
+    def _is_vscode_os_session(self, session: OSSessionRecord) -> bool:
+        app_name = (session.app_name or "").lower()
+        window_title = (session.window_title or "").lower()
+        return self._looks_like_vscode(app_name) or self._looks_like_vscode(window_title)
+
+    def _looks_like_vscode(self, value: str) -> bool:
+        return (
+            value == "code"
+            or "visual studio code" in value
+            or value.endswith(" - code")
+            or " - visual studio code" in value
+        )
+
     def _close_timed_session(self, session, timestamp: datetime, closed_by: str) -> None:
         end_time = self._iso(timestamp)
-        start_time = datetime.fromisoformat(session.session_start)
-        duration_sec = max(0, int((timestamp - start_time).total_seconds()))
+        start_time = parse_iso(session.session_start)
+        duration_sec = max(
+            0,
+            int((ensure_aware(timestamp) - ensure_aware(start_time)).total_seconds()),
+        )
 
         session.session_end = end_time
         session.duration_sec = duration_sec
@@ -394,7 +516,7 @@ class SessionCoordinator:
         return json.dumps(value, separators=(",", ":"), sort_keys=True)
 
     def _iso(self, value: datetime) -> str:
-        return value.isoformat()
+        return to_local_iso(value)
 
     def _new_id(self) -> str:
         return str(uuid4())
