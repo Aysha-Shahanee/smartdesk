@@ -123,9 +123,6 @@ class CalendarSyncService:
         if start_time and end_time:
             duration = self._duration_seconds(start_time, end_time)
 
-        attendees = event.get("attendees") or []
-        is_recurring = 1 if event.get("recurrence") else 0
-
         return {
             "title": event.get("summary") or "(no title)",
             "start_time": start_time,
@@ -133,8 +130,6 @@ class CalendarSyncService:
             "timezone": tz,
             "duration_sec": duration,
             "status": event.get("status"),
-            "attendees_count": len(attendees),
-            "is_recurring": is_recurring,
             "extra_data": {
                 "location": event.get("location"),
                 "organizer": (event.get("organizer") or {}).get("email"),
@@ -142,7 +137,6 @@ class CalendarSyncService:
                 "html_link": event.get("htmlLink"),
             },
             "source": "google_calendar",
-            "schema_version": "v1",
         }
 
     def _extract_time(self, payload: dict) -> tuple[str | None, str | None]:

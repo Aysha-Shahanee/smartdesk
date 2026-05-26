@@ -33,10 +33,7 @@ class CalendarEventRepository:
         row.timezone = data.get("timezone")
         row.duration_sec = data.get("duration_sec")
         row.status = data.get("status")
-        row.attendees_count = data.get("attendees_count")
-        row.is_recurring = data.get("is_recurring")
         row.extra_data = json.dumps(data.get("extra_data") or {})
         row.source = data.get("source") or "google_calendar"
-        row.schema_version = data.get("schema_version") or "v1"
         row.updated_at = now_iso
         return row

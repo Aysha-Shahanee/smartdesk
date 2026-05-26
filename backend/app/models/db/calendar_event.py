@@ -25,12 +25,8 @@ class CalendarEventRecord(Base):
     duration_sec = Column(Integer, nullable=True)
     status = Column(String, nullable=True)
 
-    attendees_count = Column(Integer, nullable=True)
-    is_recurring = Column(Integer, nullable=True)
-
     extra_data = Column(String, nullable=True)
     source = Column(String, nullable=True)
-    schema_version = Column(String, nullable=True)
 
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
