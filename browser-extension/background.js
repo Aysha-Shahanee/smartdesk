@@ -68,6 +68,18 @@ function getBrowserName() {
   return "Unknown";
 }
 
+function nowIso() {
+  const now = new Date();
+  const offsetMin = -now.getTimezoneOffset();
+  const sign = offsetMin >= 0 ? "+" : "-";
+  const absOffsetMin = Math.abs(offsetMin);
+  const hh = String(Math.floor(absOffsetMin / 60)).padStart(2, "0");
+  const mm = String(absOffsetMin % 60).padStart(2, "0");
+  const local = new Date(now.getTime() + offsetMin * 60000);
+
+  return local.toISOString().replace("Z", `${sign}${hh}:${mm}`);
+}
+
 // ─── State ────────────────────────────────────────────────────────────────────
 
 let config = { ...DEFAULT_CONFIG };
@@ -146,7 +158,7 @@ async function startSession(tab) {
     user_id: config.userId,
     event: "started",
     browser_name: getBrowserName(),
-    timestamp: new Date().toISOString(),
+    timestamp: nowIso(),
     browser_window_id: tab.windowId,
     tab_id: tab.id,
     domain,
@@ -174,7 +186,7 @@ async function endSession(trigger) {
     user_id: config.userId,
     event: "ended",
     browser_name: getBrowserName(),
-    timestamp: new Date().toISOString(),
+    timestamp: nowIso(),
     browser_window_id: activeSession.windowId,
     tab_id: activeSession.tabId,
     domain: activeSession.domain,
@@ -202,7 +214,7 @@ async function sendHeartbeat() {
     user_id: config.userId,
     event: "state",
     browser_name: getBrowserName(),
-    timestamp: new Date().toISOString(),
+    timestamp: nowIso(),
     browser_window_id: activeSession.windowId,
     tab_id: activeSession.tabId,
     domain: activeSession.domain,

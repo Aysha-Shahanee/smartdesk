@@ -2,6 +2,8 @@
 
 from sqlalchemy.orm import Session
 
+from app.core.time import is_between_iso
+from app.core.time import parse_iso
 from app.models.db import VSCodeSessionRecord
 
 
@@ -20,17 +22,18 @@ class VSCodeSessionRepository:
         Only ``is_foreground = 1`` sessions are returned so the dashboard
         shows actual active coding time, not background window time.
         """
-        return (
+        rows = (
             db.query(VSCodeSessionRecord)
             .filter(
                 VSCodeSessionRecord.user_id == user_id,
-                VSCodeSessionRecord.session_start >= from_iso,
-                VSCodeSessionRecord.session_start <= to_iso,
                 VSCodeSessionRecord.session_end.isnot(None),
                 VSCodeSessionRecord.is_foreground == 1,
             )
-            .order_by(VSCodeSessionRecord.session_start)
             .all()
+        )
+        return sorted(
+            [row for row in rows if is_between_iso(row.session_start, from_iso, to_iso)],
+            key=lambda row: parse_iso(row.session_start),
         )
 
     def get_all_sessions_db(
@@ -41,16 +44,17 @@ class VSCodeSessionRepository:
         to_iso: str,
     ) -> list[VSCodeSessionRecord]:
         """Return all (foreground + background) completed sessions."""
-        return (
+        rows = (
             db.query(VSCodeSessionRecord)
             .filter(
                 VSCodeSessionRecord.user_id == user_id,
-                VSCodeSessionRecord.session_start >= from_iso,
-                VSCodeSessionRecord.session_start <= to_iso,
                 VSCodeSessionRecord.session_end.isnot(None),
             )
-            .order_by(VSCodeSessionRecord.session_start)
             .all()
+        )
+        return sorted(
+            [row for row in rows if is_between_iso(row.session_start, from_iso, to_iso)],
+            key=lambda row: parse_iso(row.session_start),
         )
 
     def get_open_sessions_db(

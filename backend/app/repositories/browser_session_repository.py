@@ -2,6 +2,8 @@
 
 from sqlalchemy.orm import Session
 
+from app.core.time import is_between_iso
+from app.core.time import parse_iso
 from app.models.db import BrowserSessionRecord
 
 
@@ -22,18 +24,19 @@ class BrowserSessionRepository:
         (per the 3-second minimum rule in plan.md) so rapid tab-scans do not
         inflate productive/distracted time.
         """
-        return (
+        rows = (
             db.query(BrowserSessionRecord)
             .filter(
                 BrowserSessionRecord.user_id == user_id,
-                BrowserSessionRecord.session_start >= from_iso,
-                BrowserSessionRecord.session_start <= to_iso,
                 BrowserSessionRecord.session_end.isnot(None),
                 BrowserSessionRecord.is_foreground == 1,
                 BrowserSessionRecord.duration_sec >= min_duration_sec,
             )
-            .order_by(BrowserSessionRecord.session_start)
             .all()
+        )
+        return sorted(
+            [row for row in rows if is_between_iso(row.session_start, from_iso, to_iso)],
+            key=lambda row: parse_iso(row.session_start),
         )
 
     def get_all_sessions_db(
@@ -44,16 +47,17 @@ class BrowserSessionRepository:
         to_iso: str,
     ) -> list[BrowserSessionRecord]:
         """Return all completed browser sessions (no foreground/duration filter)."""
-        return (
+        rows = (
             db.query(BrowserSessionRecord)
             .filter(
                 BrowserSessionRecord.user_id == user_id,
-                BrowserSessionRecord.session_start >= from_iso,
-                BrowserSessionRecord.session_start <= to_iso,
                 BrowserSessionRecord.session_end.isnot(None),
             )
-            .order_by(BrowserSessionRecord.session_start)
             .all()
+        )
+        return sorted(
+            [row for row in rows if is_between_iso(row.session_start, from_iso, to_iso)],
+            key=lambda row: parse_iso(row.session_start),
         )
 
     def get_open_sessions_db(

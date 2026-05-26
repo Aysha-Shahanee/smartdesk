@@ -25,6 +25,7 @@ class OSEventType(str, Enum):
 
 class VSCodeEventType(str, Enum):
     STARTED = "started"
+    STATE = "state"
     ENDED = "ended"
 
 

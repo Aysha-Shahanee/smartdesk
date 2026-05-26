@@ -17,6 +17,9 @@ from fastapi import Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.time import local_day_start_iso
+from app.core.time import local_now_iso
+from app.core.time import to_local_iso
 from app.models.schemas.dashboard import (
     BrowserDashboardResponse,
     IDEDashboardResponse,
@@ -34,21 +37,20 @@ _service = DashboardService()
 # ------------------------------------------------------------------ #
 
 def _today_start() -> str:
-    now = datetime.now(timezone.utc)
-    return now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    return local_day_start_iso()
 
 
 def _today_end() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return local_now_iso()
 
 
 def _parse_dt(value: str, param_name: str) -> str:
     """Validate and normalise an ISO 8601 datetime string."""
     try:
-        dt = datetime.fromisoformat(value)
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return dt.isoformat()
+        return to_local_iso(dt)
     except ValueError as exc:
         raise HTTPException(
             status_code=422,

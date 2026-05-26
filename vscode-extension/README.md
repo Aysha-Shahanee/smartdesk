@@ -1,54 +1,49 @@
 # SmartDesk VS Code Extension
 
-Tracks IDE activity and sends session events to the SmartDesk backend.
+Tracks VS Code session activity and sends repo-aware events to the local
+SmartDesk backend.
 
-## Install
+## Create and Install a VSIX
 
-### Option 1 — VSIX (recommended, one command)
-
-From the `vscode-extension/` folder:
+From the repository root:
 
 ```powershell
-# 1. Install vsce (one time only)
+cd vscode-extension
 npm install -g @vscode/vsce
-
-# 2. Package
 vsce package --no-dependencies
-
-# 3. Install into VS Code
-code --install-extension smartdesk-vscode-2.0.0.vsix
+code --install-extension .\smartdesk-vscode-2.0.0.vsix
 ```
 
-Reload VS Code when prompted (`Ctrl+Shift+P` → **Reload Window**).
+Reload VS Code when prompted (`Ctrl+Shift+P` -> `Reload Window`).
 
-> **Already done** — `smartdesk-vscode-2.0.0.vsix` is already built and installed.
-> Only re-run steps 2–3 after making code changes.
+## Development Mode
 
-### Option 2 — Development mode (F5)
+Open `vscode-extension/` in VS Code and press `F5`.
 
-Open the `vscode-extension/` folder in VS Code and press **F5**.  
-A new Extension Development Host window opens with the extension loaded.
-
----
 ## What It Tracks
 
 | Event | When |
 |---|---|
-| `started` | VS Code gains focus / file opened / workspace opened |
-| `ended` | VS Code loses focus / window closed / workspace changes |
+| `started` | VS Code starts or regains focus with a workspace/file |
+| `state` | Periodic heartbeat while the session is active |
+| `ended` | VS Code loses focus, shuts down, or the workspace changes |
 
-Each `ended` event includes **counters** accumulated during the session:
-- `edit_count` — number of text edits
-- `save_count` — number of file saves  
-- `lines_added` / `lines_deleted`
-- `file_switch_count` — number of editor tab switches
-- `terminal_command_count` — terminal opens
-- `debug_run_count` — debug sessions started
-- `idle_sec` — seconds with no keyboard/mouse activity
+Session payloads include:
+
+- counters for edits, saves, lines added/deleted, file switches, terminal opens,
+  debug runs, and idle seconds
+- `repo_id`, a SHA-256 hash of the Git remote URL with repo path hash fallback
+- `git_branch`, when available
+- active file path/name/language
+- `extra_data.changed_files`, including workspace file create/change/delete events
+  even when files are not open in an editor
+
+AI-generated edits are not labelled separately. If they modify files through VS
+Code or the workspace filesystem, they are counted as normal development changes.
 
 ## Configuration
 
-In VS Code settings (`Ctrl+,`), search for **SmartDesk**:
+In VS Code settings (`Ctrl+,`), search for `SmartDesk`:
 
 | Setting | Default | Description |
 |---|---|---|
@@ -58,24 +53,6 @@ In VS Code settings (`Ctrl+,`), search for **SmartDesk**:
 
 ## API Endpoint
 
-```
+```text
 POST http://127.0.0.1:8000/api/v1/ingest/vscode/event
-```
-
-Example payload:
-```json
-{
-  "user_id": "local_user",
-  "event": "ended",
-  "instance_id": "uuid-here",
-  "timestamp": "2026-05-12T11:30:00Z",
-  "workspace_name": "smartdesk",
-  "active_language": "python",
-  "counters": {
-    "edit_count": 42,
-    "save_count": 7,
-    "lines_added": 120,
-    "lines_deleted": 30
-  }
-}
 ```

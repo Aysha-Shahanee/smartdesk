@@ -13,10 +13,10 @@ custom date-range queries.
 """
 
 from collections import defaultdict
-from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app.core.time import parse_iso
 from app.models.db import BrowserSessionRecord
 from app.models.db import OSSessionRecord
 from app.models.db import VSCodeSessionRecord
@@ -138,9 +138,9 @@ class DashboardService:
         summaries = [
             WorkPeriodSummary(
                 id=p.id,
-                period_start=datetime.fromisoformat(p.period_start),
+                period_start=parse_iso(p.period_start),
                 period_end=(
-                    datetime.fromisoformat(p.period_end) if p.period_end else None
+                    parse_iso(p.period_end) if p.period_end else None
                 ),
                 duration_sec=p.duration_sec,
                 primary_source=p.primary_source,
@@ -170,9 +170,9 @@ class DashboardService:
                     id=row.id,
                     source="os",
                     title=row.window_title or row.app_name,
-                    started_at=datetime.fromisoformat(row.session_start),
+                    started_at=parse_iso(row.session_start),
                     ended_at=(
-                        datetime.fromisoformat(row.session_end)
+                        parse_iso(row.session_end)
                         if row.session_end
                         else None
                     ),
@@ -187,9 +187,9 @@ class DashboardService:
                     id=row.id,
                     source="vscode",
                     title=row.active_file_name or row.workspace_name,
-                    started_at=datetime.fromisoformat(row.session_start),
+                    started_at=parse_iso(row.session_start),
                     ended_at=(
-                        datetime.fromisoformat(row.session_end)
+                        parse_iso(row.session_end)
                         if row.session_end
                         else None
                     ),
@@ -204,9 +204,9 @@ class DashboardService:
                     id=row.id,
                     source="browser",
                     title=row.title or row.domain,
-                    started_at=datetime.fromisoformat(row.session_start),
+                    started_at=parse_iso(row.session_start),
                     ended_at=(
-                        datetime.fromisoformat(row.session_end)
+                        parse_iso(row.session_end)
                         if row.session_end
                         else None
                     ),

@@ -17,13 +17,14 @@ longer than IDLE_GAP_SEC (30 minutes by default).
 
 import logging
 import threading
-from datetime import datetime
 from datetime import timedelta
-from datetime import timezone
 
 from sqlalchemy.orm import Session as DbSession
 
 from app.core.database import SessionLocal
+from app.core.time import is_at_or_after_iso
+from app.core.time import local_now
+from app.core.time import parse_iso
 from app.models.db import BrowserSessionRecord
 from app.models.db import CalendarEventRecord
 from app.models.db import OSSessionRecord
@@ -43,41 +44,29 @@ _repo = WorkPeriodRepository()
 
 def _has_activity_since(db: DbSession, user_id: str, since_iso: str) -> dict[str, bool]:
     """Check which data sources have session/event activity since ``since_iso``."""
-    has_os = (
-        db.query(OSSessionRecord)
-        .filter(
-            OSSessionRecord.user_id == user_id,
-            OSSessionRecord.session_start >= since_iso,
-        )
-        .first()
-        is not None
+    has_os = any(
+        row.session_end is None or is_at_or_after_iso(row.updated_at, since_iso)
+        for row in db.query(OSSessionRecord)
+        .filter(OSSessionRecord.user_id == user_id)
+        .all()
     )
-    has_vscode = (
-        db.query(VSCodeSessionRecord)
-        .filter(
-            VSCodeSessionRecord.user_id == user_id,
-            VSCodeSessionRecord.session_start >= since_iso,
-        )
-        .first()
-        is not None
+    has_vscode = any(
+        row.session_end is None or is_at_or_after_iso(row.updated_at, since_iso)
+        for row in db.query(VSCodeSessionRecord)
+        .filter(VSCodeSessionRecord.user_id == user_id)
+        .all()
     )
-    has_browser = (
-        db.query(BrowserSessionRecord)
-        .filter(
-            BrowserSessionRecord.user_id == user_id,
-            BrowserSessionRecord.session_start >= since_iso,
-        )
-        .first()
-        is not None
+    has_browser = any(
+        row.session_end is None or is_at_or_after_iso(row.updated_at, since_iso)
+        for row in db.query(BrowserSessionRecord)
+        .filter(BrowserSessionRecord.user_id == user_id)
+        .all()
     )
-    has_calendar = (
-        db.query(CalendarEventRecord)
-        .filter(
-            CalendarEventRecord.user_id == user_id,
-            CalendarEventRecord.start_time >= since_iso,
-        )
-        .first()
-        is not None
+    has_calendar = any(
+        row.start_time and is_at_or_after_iso(row.start_time, since_iso)
+        for row in db.query(CalendarEventRecord)
+        .filter(CalendarEventRecord.user_id == user_id)
+        .all()
     )
     return {
         "os": has_os,
@@ -96,12 +85,15 @@ def _primary_source(db: DbSession, user_id: str, since_iso: str) -> str | None:
             db.query(Model)
             .filter(
                 Model.user_id == user_id,
-                Model.session_start >= since_iso,
                 Model.session_end.isnot(None),
             )
             .all()
         )
-        return sum(getattr(r, col_name) or 0 for r in rows)
+        return sum(
+            getattr(r, col_name) or 0
+            for r in rows
+            if is_at_or_after_iso(r.session_start, since_iso)
+        )
 
     totals["os"] = _sum(OSSessionRecord, "duration_sec")
     totals["vscode"] = _sum(VSCodeSessionRecord, "duration_sec")
@@ -113,12 +105,8 @@ def _primary_source(db: DbSession, user_id: str, since_iso: str) -> str | None:
 
 
 def _seconds_between(start_iso: str, end_iso: str) -> int:
-    start = datetime.fromisoformat(start_iso)
-    end = datetime.fromisoformat(end_iso)
-    if start.tzinfo is None:
-        start = start.replace(tzinfo=timezone.utc)
-    if end.tzinfo is None:
-        end = end.replace(tzinfo=timezone.utc)
+    start = parse_iso(start_iso)
+    end = parse_iso(end_iso)
     return max(0, int((end - start).total_seconds()))
 
 
@@ -182,7 +170,7 @@ class WorkPeriodScheduler:
     def _process(self) -> None:
         db: DbSession = SessionLocal()
         try:
-            now = datetime.now(timezone.utc)
+            now = local_now()
             now_iso = now.isoformat()
             since_dt = now - timedelta(seconds=IDLE_GAP_SEC)
             since_iso = since_dt.isoformat()
