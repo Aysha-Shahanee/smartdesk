@@ -12,8 +12,7 @@ from app.services.calendar_sync_service import CalendarSyncService
 logger = logging.getLogger("smartdesk.calendar_sync_job")
 
 SYNC_INTERVAL_SEC = 10 * 60
-DAILY_FUTURE_DAYS = 30
-FREQUENT_FUTURE_DAYS = 1
+SYNC_FUTURE_DAYS = 30
 
 
 class CalendarSyncJob:
@@ -56,37 +55,18 @@ class CalendarSyncJob:
     def _run_once(self) -> None:
         db: DbSession = SessionLocal()
         try:
-            self._run_daily_wide_sync(db)
             result = self._service.sync(
                 db,
                 settings.DEFAULT_USER_ID,
-                future_days=FREQUENT_FUTURE_DAYS,
+                future_days=SYNC_FUTURE_DAYS,
             )
             logger.info(
-                "CalendarSyncJob synced %d event(s) at %s.",
+                "CalendarSyncJob synced %d event(s) for next %d days at %s.",
                 result.get("upserted", 0),
+                SYNC_FUTURE_DAYS,
                 datetime.now(timezone.utc).isoformat(),
             )
         except ValueError as exc:
             logger.warning("Calendar sync skipped: %s", exc)
         finally:
             db.close()
-
-    def _run_daily_wide_sync(self, db: DbSession) -> None:
-        sync_state = self._service._load_sync_state().get(settings.DEFAULT_USER_ID, {})
-        today = datetime.now(timezone.utc).date().isoformat()
-        if sync_state.get("last_full_sync") == today:
-            return
-
-        result = self._service.sync(
-            db,
-            settings.DEFAULT_USER_ID,
-            future_days=DAILY_FUTURE_DAYS,
-        )
-        sync_state["last_full_sync"] = today
-        self._service._save_sync_state(settings.DEFAULT_USER_ID, sync_state)
-        logger.info(
-            "CalendarSyncJob daily wide sync upserted %d event(s) for next %d days.",
-            result.get("upserted", 0),
-            DAILY_FUTURE_DAYS,
-        )

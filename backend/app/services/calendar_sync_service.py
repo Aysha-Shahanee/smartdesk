@@ -14,7 +14,7 @@ from app.services.calendar_auth_service import CalendarAuthService
 
 logger = logging.getLogger("smartdesk.calendar_sync")
 
-DEFAULT_FUTURE_DAYS = 1
+DEFAULT_FUTURE_DAYS = 30
 
 
 class CalendarSyncService:
@@ -41,7 +41,6 @@ class CalendarSyncService:
 
         service = build("calendar", "v3", credentials=creds, cache_discovery=False)
         sync_state = self._load_sync_state().get(user_id, {})
-        sync_token = sync_state.get("sync_token")
 
         now = datetime.now(timezone.utc)
         if time_min is None:
@@ -51,7 +50,6 @@ class CalendarSyncService:
             time_max = (now + timedelta(days=days)).isoformat()
 
         items = []
-        next_sync_token = None
         page_token = None
 
         def _list_events(params: dict) -> dict:
@@ -64,12 +62,9 @@ class CalendarSyncService:
                     "singleEvents": True,
                     "showDeleted": True,
                     "maxResults": 2500,
+                    "timeMin": time_min,
+                    "timeMax": time_max,
                 }
-                if sync_token and time_min and time_max and sync_state.get("use_sync_token", True):
-                    params["syncToken"] = sync_token
-                else:
-                    params["timeMin"] = time_min
-                    params["timeMax"] = time_max
                 if page_token:
                     params["pageToken"] = page_token
 
@@ -77,38 +72,46 @@ class CalendarSyncService:
                 items.extend(response.get("items", []))
                 page_token = response.get("nextPageToken")
                 if not page_token:
-                    next_sync_token = response.get("nextSyncToken")
                     break
         except HttpError as exc:
             if exc.resp is not None and exc.resp.status == 410:
-                logger.warning("Calendar sync token expired; falling back to full sync.")
-                sync_state = {"use_sync_token": False}
-                self._save_sync_state(user_id, sync_state)
+                logger.warning("Calendar sync window request expired; retrying without saved state.")
                 return self.sync(db, user_id, time_min=time_min, time_max=time_max)
             raise
 
         upserted = 0
+        skipped_cancelled = 0
         for event in items:
             event_id = event.get("id")
             if not event_id:
                 continue
 
             mapped = self._map_event(event)
+            if mapped.get("status") == "cancelled" and self._repo.get_event(db, user_id, event_id) is None:
+                skipped_cancelled += 1
+                continue
+
             self._repo.upsert_event(db, user_id, event_id, mapped)
             upserted += 1
 
+        deleted_outside_window = self._repo.delete_events_outside_window(db, user_id, time_min, time_max)
         db.commit()
-        if next_sync_token:
-            sync_state["sync_token"] = next_sync_token
-            sync_state["use_sync_token"] = True
+        sync_state.pop("sync_token", None)
+        sync_state.pop("last_full_sync", None)
+        sync_state["use_sync_token"] = False
+        sync_state["last_window_start"] = time_min
+        sync_state["last_window_end"] = time_max
         sync_state["last_sync"] = datetime.now(timezone.utc).isoformat()
         self._save_sync_state(user_id, sync_state)
 
         return {
             "upserted": upserted,
+            "skipped_cancelled": skipped_cancelled,
+            "deleted_outside_window": deleted_outside_window,
             "last_sync": sync_state.get("last_sync"),
             "time_min": time_min,
             "time_max": time_max,
+            "future_days": future_days if future_days is not None else DEFAULT_FUTURE_DAYS,
         }
 
     def _map_event(self, event: dict) -> dict:

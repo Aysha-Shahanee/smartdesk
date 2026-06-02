@@ -6,10 +6,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.repositories.calendar_event_repository import CalendarEventRepository
 from app.services.calendar_auth_service import CalendarAuthService
 from app.services.calendar_sync_service import CalendarSyncService
 
 router = APIRouter()
+_repo = CalendarEventRepository()
 
 _auth = CalendarAuthService(
     credentials_file=settings.GOOGLE_CALENDAR_CREDENTIALS_FILE,
@@ -63,3 +65,40 @@ def calendar_sync(
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     return result
+
+
+@router.get("/events")
+def calendar_events(
+    user_id: str = Query(default=None),
+    time_min: str | None = Query(default=None),
+    time_max: str | None = Query(default=None),
+    include_cancelled: bool = Query(default=False),
+    db: Session = Depends(get_db),
+):
+    target_user = user_id or settings.DEFAULT_USER_ID
+    rows = _repo.list_events(
+        db,
+        target_user,
+        time_min=time_min,
+        time_max=time_max,
+        include_cancelled=include_cancelled,
+    )
+    return {
+        "events": [
+            {
+                "event_id": row.event_id,
+                "title": row.title,
+                "start_time": row.start_time,
+                "end_time": row.end_time,
+                "timezone": row.timezone,
+                "duration_sec": row.duration_sec,
+                "status": row.status,
+                "source": row.source,
+                "extra_data": row.extra_data,
+                "updated_at": row.updated_at,
+            }
+            for row in rows
+        ],
+        "count": len(rows),
+        "include_cancelled": include_cancelled,
+    }

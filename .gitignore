@@ -1,6 +1,10 @@
 # Environment & secrets
 .env
 backend/.env
+backend/calendar/credentials.json
+backend/calendar/token.json
+backend/calendar/oauth_state.json
+backend/calendar/sync_state.json
 
 # Python virtual environments
 venv/
