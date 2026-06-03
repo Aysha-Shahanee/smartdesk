@@ -9,7 +9,6 @@ from app.core.logging import setup_logging
 from app.routes import dashboard
 from app.routes import health
 from app.routes import ingest
-from app.routes import legacy
 from app.routes import calendar
 from app.services.calendar_auth_service import CalendarAuthService
 from app.services.calendar_sync_job import CalendarSyncJob
@@ -94,7 +93,6 @@ app.include_router(health.router, prefix="/health", tags=["Health"])
 app.include_router(ingest.router, prefix="/api/v1/ingest", tags=["Ingest"])
 app.include_router(calendar.router, prefix="/api/v1/calendar", tags=["Calendar"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
-app.include_router(legacy.router, prefix="/api/v1", tags=["Legacy (deprecated)"])
 
 
 @app.get("/")

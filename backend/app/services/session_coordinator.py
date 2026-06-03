@@ -175,6 +175,7 @@ class SessionCoordinator:
             db.query(OSSessionRecord)
             .filter(OSSessionRecord.user_id == user_id, OSSessionRecord.session_end.is_(None))
             .order_by(OSSessionRecord.session_start.desc())
+            .with_for_update()
             .first()
         )
         if session is None:
@@ -190,6 +191,7 @@ class SessionCoordinator:
             db.query(OSSessionRecord)
             .filter(OSSessionRecord.user_id == payload.user_id, OSSessionRecord.session_end.is_(None))
             .order_by(OSSessionRecord.session_start.desc())
+            .with_for_update()
             .first()
         )
         if session is None:
@@ -274,6 +276,7 @@ class SessionCoordinator:
                 VSCodeSessionRecord.session_end.is_(None),
             )
             .order_by(VSCodeSessionRecord.session_start.desc())
+            .with_for_update()
             .all()
         )
 
@@ -353,7 +356,7 @@ class SessionCoordinator:
         if tab_id is not None:
             query = query.filter(BrowserSessionRecord.tab_id == tab_id)
 
-        session = query.order_by(BrowserSessionRecord.session_start.desc()).first()
+        session = query.order_by(BrowserSessionRecord.session_start.desc()).with_for_update().first()
         if session is None:
             return None
 
@@ -376,7 +379,7 @@ class SessionCoordinator:
         if payload.tab_id is not None:
             query = query.filter(BrowserSessionRecord.tab_id == payload.tab_id)
 
-        session = query.order_by(BrowserSessionRecord.session_start.desc()).first()
+        session = query.order_by(BrowserSessionRecord.session_start.desc()).with_for_update().first()
         if session is None:
             return None
 
@@ -401,6 +404,7 @@ class SessionCoordinator:
                 VSCodeSessionRecord.user_id == user_id,
                 VSCodeSessionRecord.session_end.is_(None),
             )
+            .with_for_update()
             .all()
         ):
             self._close_timed_session(session, timestamp, closed_by)
@@ -411,6 +415,7 @@ class SessionCoordinator:
                 BrowserSessionRecord.user_id == user_id,
                 BrowserSessionRecord.session_end.is_(None),
             )
+            .with_for_update()
             .all()
         ):
             self._close_timed_session(session, timestamp, closed_by)
