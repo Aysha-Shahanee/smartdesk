@@ -92,6 +92,8 @@ http://127.0.0.1:8000/dashboard/status
 http://127.0.0.1:8000/dashboard/os
 http://127.0.0.1:8000/dashboard/timeline
 http://127.0.0.1:8000/dashboard/sessions
+http://127.0.0.1:8000/api/v1/calendar/auth/status
+http://127.0.0.1:8000/api/v1/calendar/auth/start
 ```
 
 Expected root response:
@@ -103,6 +105,16 @@ Expected root response:
   "architecture": "session-based",
   "background_jobs": ["session_timeout_job", "work_period_scheduler", "os_collector"]
 }
+
+## Google Calendar Authorization and Reconnection
+
+- Access tokens refresh automatically when the saved refresh token is valid.
+- If the refresh token is expired or revoked, you must reconnect Google Calendar.
+- Check status with `GET /api/v1/calendar/auth/status`.
+- Use `GET /api/v1/calendar/auth/start` to reconnect and complete OAuth.
+- Use `POST /api/v1/calendar/sync` to manually sync events when connected.
+- If your OAuth app is in Google Testing mode, refresh tokens may expire and require reconnection.
+  For long-term usage, publish the OAuth consent app to Production and keep credentials unchanged.
 ```
 
 ## Database
@@ -116,6 +128,13 @@ Single file: `backend/smartdesk.db`
 | `browser_sessions` | One row per browser tab session (≥3s) |
 | `calendar_events` | Google Calendar events |
 | `work_periods` | 30-minute activity blocks (auto-grouped) |
+
+### VS Code Session Details
+
+In `vscode_sessions`, we track both foreground context and session aggregates:
+- **Foreground Context**: `active_file_path`, `active_file_name`, and `active_language` represent the **foreground active file** context only (updated as the active window/editor tab switches).
+- **Edit Aggregates**: Per-file edit details are captured in `edited_files_json` (a JSON array of actual edited files along with their edit counts, save counts, and line metrics).
+- **Session Metrics**: Overall session metrics are aggregated in `total_edit_count`, `total_save_count`, `total_lines_added`, `total_lines_deleted`, and `dominant_language` (computed dynamically from the files that were actually edited).
 
 Recreate the database from scratch:
 

@@ -67,6 +67,8 @@ class CalendarSyncJob:
                 datetime.now(timezone.utc).isoformat(),
             )
         except ValueError as exc:
-            logger.warning("Calendar sync skipped: %s", exc)
+            logger.warning(
+                "[Calendar Sync] Calendar not authorized. Reconnect required."
+            )
         finally:
             db.close()

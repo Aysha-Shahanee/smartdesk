@@ -52,9 +52,9 @@ class VSCodeSessionRecord(Base):
     project_path = Column(String, nullable=True)
     repo_id = Column(String, nullable=True)
     git_branch = Column(String, nullable=True)
-    active_file_path = Column(String, nullable=True)
-    active_file_name = Column(String, nullable=True)
-    active_language = Column(String, nullable=True)
+    active_file_path = Column(String, nullable=True)  # Foreground context only
+    active_file_name = Column(String, nullable=True)  # Foreground context only
+    active_language = Column(String, nullable=True)   # Foreground context only
 
     session_start = Column(String, nullable=False)
     session_end = Column(String, nullable=True)
@@ -75,6 +75,17 @@ class VSCodeSessionRecord(Base):
     file_switch_count = Column(Integer, nullable=False, default=0)
     terminal_command_count = Column(Integer, nullable=False, default=0)
     debug_run_count = Column(Integer, nullable=False, default=0)
+
+    # Session-level fields for work/edit summaries
+    edited_file_count = Column(Integer, nullable=False, default=0)
+    changed_file_count = Column(Integer, nullable=False, default=0)
+    total_edit_count = Column(Integer, nullable=False, default=0)
+    total_save_count = Column(Integer, nullable=False, default=0)
+    total_lines_added = Column(Integer, nullable=False, default=0)
+    total_lines_deleted = Column(Integer, nullable=False, default=0)
+    dominant_language = Column(String, nullable=True)
+    languages_json = Column(String, nullable=True)      # JSON storage
+    edited_files_json = Column(String, nullable=True)   # JSON storage
 
     extra_data = Column(String, nullable=True)
 

@@ -8,6 +8,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const { createHash, randomUUID } = require("crypto");
 const { URL } = require("url");
+const fs = require("fs");
 
 function cfg(key) {
   let value = vscode.workspace.getConfiguration("smartdesk").get(key);
@@ -61,6 +62,9 @@ let totalIdleSec = 0;
 
 const retryQueue = [];
 const changedFiles = new Map();
+const editedFiles = new Map();
+const fileSnapshots = new Map();
+const recentChangeCache = new Map();
 const fileEventCounts = { created: 0, modified: 0, deleted: 0 };
 
 function newCounters() {
@@ -207,6 +211,96 @@ function getExtraData() {
   };
 }
 
+function inferLanguageId(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case ".js": return "javascript";
+    case ".ts": return "typescript";
+    case ".jsx": return "javascriptreact";
+    case ".tsx": return "typescriptreact";
+    case ".py": return "python";
+    case ".html": return "html";
+    case ".css": return "css";
+    case ".json": return "json";
+    case ".md": return "markdown";
+    case ".sh": return "shellscript";
+    case ".yaml":
+    case ".yml": return "yaml";
+    case ".sql": return "sql";
+    default: return ext.slice(1) || "plaintext";
+  }
+}
+
+function diffContent(oldText, newText) {
+  const oldLines = oldText.split(/\r?\n/);
+  const newLines = newText.split(/\r?\n/);
+
+  let i = 0;
+  while (i < oldLines.length && i < newLines.length && oldLines[i] === newLines[i]) {
+    i++;
+  }
+
+  let j = 0;
+  while (j < oldLines.length - i && j < newLines.length - i && oldLines[oldLines.length - 1 - j] === newLines[newLines.length - 1 - j]) {
+    j++;
+  }
+
+  const deleted = oldLines.length - i - j;
+  const added = newLines.length - i - j;
+  return { added: Math.max(0, added), deleted: Math.max(0, deleted) };
+}
+
+function readFileLinesAndContent(filePath) {
+  try {
+    if (fs.existsSync(filePath)) {
+      const content = fs.readFileSync(filePath, "utf8");
+      const linesCount = content.split(/\r?\n/).length;
+      return { content, linesCount };
+    }
+  } catch (err) {
+    console.error(`[VSCode Tracker] Error reading file ${filePath}:`, err);
+  }
+  return { content: "", linesCount: 0 };
+}
+
+function getLanguagesSummary() {
+  const languagesMap = new Map();
+  for (const stats of editedFiles.values()) {
+    const lang = stats.language || "unknown";
+    let langStats = languagesMap.get(lang);
+    if (!langStats) {
+      langStats = { edit_count: 0, lines_added: 0, lines_deleted: 0 };
+    }
+    langStats.edit_count += stats.edit_count;
+    langStats.lines_added += stats.lines_added;
+    langStats.lines_deleted += stats.lines_deleted;
+    languagesMap.set(lang, langStats);
+  }
+
+  let dominantLanguage = null;
+  let maxLines = -1;
+  let maxEdits = -1;
+
+  for (const [lang, stats] of languagesMap.entries()) {
+    const linesTotal = stats.lines_added + stats.lines_deleted;
+    if (linesTotal > maxLines) {
+      maxLines = linesTotal;
+      maxEdits = stats.edit_count;
+      dominantLanguage = lang;
+    } else if (linesTotal === maxLines) {
+      if (stats.edit_count > maxEdits) {
+        maxEdits = stats.edit_count;
+        dominantLanguage = lang;
+      }
+    }
+  }
+
+  return {
+    languages_json: Object.fromEntries(languagesMap),
+    dominant_language: dominantLanguage,
+  };
+}
+
 function currentPayload(event, trigger) {
   if (idleStartTime) {
     counters.idle_sec =
@@ -214,6 +308,8 @@ function currentPayload(event, trigger) {
   } else {
     counters.idle_sec = totalIdleSec;
   }
+
+  const langSummary = getLanguagesSummary();
 
   return {
     user_id: cfg("userId"),
@@ -225,12 +321,25 @@ function currentPayload(event, trigger) {
     ...getWorkspaceInfo(),
     ...getActiveFileInfo(),
     counters,
+
+    // New session tracking fields
+    edited_file_count: editedFiles.size,
+    changed_file_count: changedFiles.size,
+    total_edit_count: counters.edit_count,
+    total_save_count: counters.save_count,
+    total_lines_added: counters.lines_added,
+    total_lines_deleted: counters.lines_deleted,
+    dominant_language: langSummary.dominant_language,
+    languages_json: langSummary.languages_json,
+    edited_files_json: Array.from(editedFiles.values()),
+
     extra_data: getExtraData(),
   };
 }
 
 function postEvent(payload) {
   if (!cfg("enabled")) return;
+  console.log("[SmartDesk] git info", { repo_id: payload.repo_id, git_branch: payload.git_branch });
   sendOrQueue(payload);
 }
 
@@ -294,6 +403,9 @@ function resetSessionTracking() {
   totalIdleSec = 0;
   counters = newCounters();
   changedFiles.clear();
+  editedFiles.clear();
+  fileSnapshots.clear();
+  recentChangeCache.clear();
   fileEventCounts.created = 0;
   fileEventCounts.modified = 0;
   fileEventCounts.deleted = 0;
@@ -355,13 +467,53 @@ function activate(context) {
       if (e.document.uri.scheme !== "file") return;
       recordActivity();
       if (!sessionStart) startSession("edit");
-      recordFileEvent(e.document.uri, "modified");
+
+      const filePath = e.document.uri.fsPath;
+      const isTracked = shouldTrackFile(filePath);
+      const relPath = relativeWorkspacePath(filePath);
+      const fileName = path.basename(filePath);
+      const lang = e.document.languageId;
+
+      let stats = null;
+      if (isTracked) {
+        stats = editedFiles.get(relPath) || {
+          file_path: relPath,
+          file_name: fileName,
+          language: lang,
+          edit_count: 0,
+          save_count: 0,
+          lines_added: 0,
+          lines_deleted: 0,
+        };
+      }
 
       e.contentChanges.forEach((change) => {
+        const added = Math.max(0, change.text.split("\n").length - 1);
+        const deleted = Math.max(0, change.range.end.line - change.range.start.line);
+
         counters.edit_count += 1;
-        counters.lines_added += Math.max(0, change.text.split("\n").length - 1);
-        counters.lines_deleted += Math.max(0, change.range.end.line - change.range.start.line);
+        counters.lines_added += added;
+        counters.lines_deleted += deleted;
+
+        if (stats) {
+          stats.edit_count += 1;
+          stats.lines_added += added;
+          stats.lines_deleted += deleted;
+        }
       });
+
+      if (stats) {
+        stats.change_source = "text_document";
+        editedFiles.set(relPath, stats);
+
+        const docContent = e.document.getText();
+        fileSnapshots.set(relPath, docContent);
+        recentChangeCache.set(relPath, Date.now());
+        console.log("[VSCode Tracker] Text document changed: " + relPath);
+        console.log("[VSCode Tracker] Updated edited_files_json: " + JSON.stringify(Array.from(editedFiles.values())));
+      }
+
+      recordFileEvent(e.document.uri, "modified");
     })
   );
 
@@ -370,6 +522,32 @@ function activate(context) {
       if (doc.uri.scheme !== "file") return;
       recordActivity();
       if (!sessionStart) startSession("save");
+
+      const filePath = doc.uri.fsPath;
+      if (shouldTrackFile(filePath)) {
+        const relPath = relativeWorkspacePath(filePath);
+        const fileName = path.basename(filePath);
+        const lang = doc.languageId;
+
+        const stats = editedFiles.get(relPath) || {
+          file_path: relPath,
+          file_name: fileName,
+          language: lang,
+          edit_count: 0,
+          save_count: 0,
+          lines_added: 0,
+          lines_deleted: 0,
+        };
+        stats.save_count += 1;
+        stats.change_source = "text_document";
+        editedFiles.set(relPath, stats);
+
+        const docContent = doc.getText();
+        fileSnapshots.set(relPath, docContent);
+        recentChangeCache.set(relPath, Date.now());
+        console.log("[VSCode Tracker] Text document changed (save): " + relPath);
+      }
+
       recordFileEvent(doc.uri, "modified");
       counters.save_count += 1;
     })
@@ -392,30 +570,149 @@ function activate(context) {
   context.subscriptions.push(
     watcher,
     watcher.onDidCreate((uri) => {
-      const hasActiveEditor =
-        vscode.window.activeTextEditor &&
-        vscode.window.activeTextEditor.document.uri.scheme === "file";
-      if (!hasActiveEditor && !sessionStart) return;
+      if (uri.scheme !== "file") return;
+      const filePath = uri.fsPath;
+      if (!shouldTrackFile(filePath)) return;
+
+      const relPath = relativeWorkspacePath(filePath);
+
+      if (recentChangeCache.has(relPath)) {
+        const lastTime = recentChangeCache.get(relPath);
+        if (Date.now() - lastTime < 2000) {
+          console.log(`[VSCode Tracker] File created (skipped duplicate): ${relPath}`);
+          return;
+        }
+      }
+
+      console.log(`[VSCode Tracker] File created: ${relPath}`);
       recordActivity();
-      if (!sessionStart) startSession("file_create");
+
+      if (!sessionStart) {
+        const hasActiveEditor =
+          vscode.window.activeTextEditor &&
+          vscode.window.activeTextEditor.document.uri.scheme === "file";
+        if (!hasActiveEditor) return;
+        startSession("file_create");
+      }
+
+      const fileName = path.basename(filePath);
+      const lang = inferLanguageId(filePath);
+
+      const { content, linesCount } = readFileLinesAndContent(filePath);
+      fileSnapshots.set(relPath, content);
+      recentChangeCache.set(relPath, Date.now());
+
+      const stats = editedFiles.get(relPath) || {
+        file_path: relPath,
+        file_name: fileName,
+        language: lang,
+        edit_count: 0,
+        save_count: 0,
+        lines_added: 0,
+        lines_deleted: 0,
+      };
+
+      stats.change_source = "filesystem_created";
+      stats.edit_count += 1;
+      stats.lines_added += linesCount;
+      editedFiles.set(relPath, stats);
+
+      counters.edit_count += 1;
+      counters.lines_added += linesCount;
+
       recordFileEvent(uri, "created");
+      console.log(`[VSCode Tracker] Updated edited_files_json: ` + JSON.stringify(Array.from(editedFiles.values())));
     }),
     watcher.onDidChange((uri) => {
-      const hasActiveEditor =
-        vscode.window.activeTextEditor &&
-        vscode.window.activeTextEditor.document.uri.scheme === "file";
-      if (!hasActiveEditor && !sessionStart) return;
+      if (uri.scheme !== "file") return;
+      const filePath = uri.fsPath;
+      if (!shouldTrackFile(filePath)) return;
+
+      const relPath = relativeWorkspacePath(filePath);
+
+      if (recentChangeCache.has(relPath)) {
+        const lastTime = recentChangeCache.get(relPath);
+        if (Date.now() - lastTime < 2000) {
+          console.log(`[VSCode Tracker] File changed (skipped duplicate): ${relPath}`);
+          return;
+        }
+      }
+
+      console.log(`[VSCode Tracker] File changed: ${relPath}`);
       recordActivity();
-      if (!sessionStart) startSession("file_change");
+
+      if (!sessionStart) {
+        const hasActiveEditor =
+          vscode.window.activeTextEditor &&
+          vscode.window.activeTextEditor.document.uri.scheme === "file";
+        if (!hasActiveEditor) return;
+        startSession("file_change");
+      }
+
+      const fileName = path.basename(filePath);
+      const lang = inferLanguageId(filePath);
+
+      const { content, linesCount } = readFileLinesAndContent(filePath);
+
+      let added = 0;
+      let deleted = 0;
+
+      const prevContent = fileSnapshots.get(relPath);
+      if (prevContent !== undefined && prevContent !== null) {
+        const diff = diffContent(prevContent, content);
+        added = diff.added;
+        deleted = diff.deleted;
+      } else {
+        added = 0;
+        deleted = 0;
+      }
+
+      fileSnapshots.set(relPath, content);
+      recentChangeCache.set(relPath, Date.now());
+
+      const stats = editedFiles.get(relPath) || {
+        file_path: relPath,
+        file_name: fileName,
+        language: lang,
+        edit_count: 0,
+        save_count: 0,
+        lines_added: 0,
+        lines_deleted: 0,
+      };
+
+      stats.change_source = "filesystem_changed";
+      stats.edit_count += 1;
+      stats.lines_added += added;
+      stats.lines_deleted += deleted;
+      editedFiles.set(relPath, stats);
+
+      counters.edit_count += 1;
+      counters.lines_added += added;
+      counters.lines_deleted += deleted;
+
       recordFileEvent(uri, "modified");
+      console.log(`[VSCode Tracker] Updated edited_files_json: ` + JSON.stringify(Array.from(editedFiles.values())));
     }),
     watcher.onDidDelete((uri) => {
-      const hasActiveEditor =
-        vscode.window.activeTextEditor &&
-        vscode.window.activeTextEditor.document.uri.scheme === "file";
-      if (!hasActiveEditor && !sessionStart) return;
+      if (uri.scheme !== "file") return;
+      const filePath = uri.fsPath;
+      if (!shouldTrackFile(filePath)) return;
+
+      const relPath = relativeWorkspacePath(filePath);
+      console.log(`[VSCode Tracker] File deleted: ${relPath}`);
       recordActivity();
-      if (!sessionStart) startSession("file_delete");
+
+      if (!sessionStart) {
+        const hasActiveEditor =
+          vscode.window.activeTextEditor &&
+          vscode.window.activeTextEditor.document.uri.scheme === "file";
+        if (!hasActiveEditor) return;
+        startSession("file_delete");
+      }
+
+      fileSnapshots.delete(relPath);
+      recentChangeCache.delete(relPath);
+
       recordFileEvent(uri, "deleted");
     })
   );
@@ -470,3 +767,5 @@ function deactivate() {
 }
 
 module.exports = { activate, deactivate };
+
+

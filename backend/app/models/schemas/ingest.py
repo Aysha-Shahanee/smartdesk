@@ -93,6 +93,18 @@ class VSCodeEventPayload(StrictSchema):
     active_file_name: str | None = None
     active_language: str | None = None
     counters: VSCodeCounters | None = None
+    
+    # New session tracking fields
+    edited_file_count: int | None = None
+    changed_file_count: int | None = None
+    total_edit_count: int | None = None
+    total_save_count: int | None = None
+    total_lines_added: int | None = None
+    total_lines_deleted: int | None = None
+    dominant_language: str | None = None
+    languages_json: dict[str, Any] | None = None
+    edited_files_json: list[dict[str, Any]] | None = None
+
     extra_data: dict[str, Any] | None = None
 
 

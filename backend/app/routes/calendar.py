@@ -34,6 +34,25 @@ def calendar_status():
     }
 
 
+@router.get("/auth/status")
+def calendar_auth_status():
+    creds = _auth.get_credentials()
+    if creds is None:
+        return {
+            "authorized": False,
+            "status": "not_connected",
+            "message": "Google Calendar is not authorized. Please reconnect Google Calendar.",
+            "requires_reconnect": True,
+            "auth_url": "/api/v1/calendar/auth/start",
+        }
+    return {
+        "authorized": True,
+        "status": "connected",
+        "message": "Google Calendar is connected.",
+        "requires_reconnect": False,
+    }
+
+
 @router.get("/auth/start")
 def calendar_auth_start():
     try:
@@ -60,11 +79,24 @@ def calendar_sync(
     db: Session = Depends(get_db),
 ):
     target_user = user_id or settings.DEFAULT_USER_ID
+
     try:
         result = _sync_service.sync(db, target_user, time_min=time_min, time_max=time_max)
     except ValueError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-    return result
+        return {
+            "success": False,
+            "authorized": False,
+            "message": "Calendar is not connected. Please reconnect Google Calendar.",
+            "auth_url": "/api/v1/calendar/auth/start",
+            "error": str(exc),
+        }
+
+    return {
+        "success": True,
+        "authorized": True,
+        "message": "Calendar sync completed successfully.",
+        "result": result,
+    }
 
 
 @router.get("/events")

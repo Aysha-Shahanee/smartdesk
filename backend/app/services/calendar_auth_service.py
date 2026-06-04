@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 from uuid import uuid4
 
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -86,10 +87,26 @@ class CalendarAuthService:
             try:
                 creds.refresh(Request())
                 self._save_credentials(creds)
+            except RefreshError as exc:
+                if "invalid_grant" in str(exc).lower():
+                    logger.warning(
+                        "Calendar refresh token invalid; reconnect required."
+                    )
+                    self.clear_token()
+                    return None
+                logger.exception("Failed to refresh calendar credentials.")
+                return None
             except Exception:
                 logger.exception("Failed to refresh calendar credentials.")
                 return None
         return creds
+
+    def clear_token(self) -> None:
+        try:
+            if self._token_file.exists():
+                self._token_file.unlink()
+        except OSError:
+            logger.exception("Failed to delete calendar token file.")
 
     def _save_credentials(self, creds: Credentials) -> None:
         self._token_file.parent.mkdir(parents=True, exist_ok=True)

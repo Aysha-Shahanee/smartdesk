@@ -299,6 +299,17 @@ class SessionCoordinator:
         session.active_language = payload.active_language
         session.extra_data = self._json(payload.extra_data)
 
+        # Map new tracking fields
+        session.edited_file_count = payload.edited_file_count or 0
+        session.changed_file_count = payload.changed_file_count or 0
+        session.total_edit_count = payload.total_edit_count or 0
+        session.total_save_count = payload.total_save_count or 0
+        session.total_lines_added = payload.total_lines_added or 0
+        session.total_lines_deleted = payload.total_lines_deleted or 0
+        session.dominant_language = payload.dominant_language
+        session.languages_json = self._json(payload.languages_json)
+        session.edited_files_json = self._json(payload.edited_files_json)
+
         if payload.counters is not None:
             session.edit_count = payload.counters.edit_count
             session.save_count = payload.counters.save_count
@@ -515,7 +526,7 @@ class SessionCoordinator:
         session.closed_by = closed_by
         session.updated_at = end_time
 
-    def _json(self, value: dict | None) -> str | None:
+    def _json(self, value: dict | list | None) -> str | None:
         if value is None:
             return None
         return json.dumps(value, separators=(",", ":"), sort_keys=True)
