@@ -2,7 +2,10 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.models.db.sessions import Base
+# Import all models so every table is registered with Base.metadata
+import app.models.db  # noqa: F401 — side-effect import, registers all ORM models
+
+from app.core.database import Base
 from app.main import app
 from fastapi.testclient import TestClient
 from app.core.database import get_db
@@ -14,9 +17,9 @@ engine = create_engine(
 )
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+
 @pytest.fixture(scope="function")
 def db_session():
-    # Create the database
     Base.metadata.create_all(bind=engine)
     db = TestingSessionLocal()
     try:
@@ -24,6 +27,7 @@ def db_session():
     finally:
         db.close()
         Base.metadata.drop_all(bind=engine)
+
 
 @pytest.fixture(scope="function")
 def client(db_session):

@@ -2,8 +2,7 @@
 
 from sqlalchemy.orm import Session
 
-from app.core.time import is_between_iso
-from app.core.time import parse_iso
+from app.core.time import parse_iso_utc
 from app.models.db import BrowserSessionRecord
 
 
@@ -18,25 +17,21 @@ class BrowserSessionRepository:
         to_iso: str,
         min_duration_sec: int = 3,
     ) -> list[BrowserSessionRecord]:
-        """Return completed foreground browser sessions in the time window.
-
-        Sessions under ``min_duration_sec`` are excluded from duration totals
-        (per the 3-second minimum rule in plan.md) so rapid tab-scans do not
-        inflate productive/distracted time.
-        """
-        rows = (
+        """Return completed foreground browser sessions in the time window."""
+        from_dt = parse_iso_utc(from_iso)
+        to_dt = parse_iso_utc(to_iso)
+        return (
             db.query(BrowserSessionRecord)
             .filter(
                 BrowserSessionRecord.user_id == user_id,
                 BrowserSessionRecord.session_end.isnot(None),
                 BrowserSessionRecord.is_foreground == 1,
                 BrowserSessionRecord.duration_sec >= min_duration_sec,
+                BrowserSessionRecord.session_start >= from_dt,
+                BrowserSessionRecord.session_start <= to_dt,
             )
+            .order_by(BrowserSessionRecord.session_start)
             .all()
-        )
-        return sorted(
-            [row for row in rows if is_between_iso(row.session_start, from_iso, to_iso)],
-            key=lambda row: parse_iso(row.session_start),
         )
 
     def get_all_sessions_db(
@@ -47,17 +42,18 @@ class BrowserSessionRepository:
         to_iso: str,
     ) -> list[BrowserSessionRecord]:
         """Return all completed browser sessions (no foreground/duration filter)."""
-        rows = (
+        from_dt = parse_iso_utc(from_iso)
+        to_dt = parse_iso_utc(to_iso)
+        return (
             db.query(BrowserSessionRecord)
             .filter(
                 BrowserSessionRecord.user_id == user_id,
                 BrowserSessionRecord.session_end.isnot(None),
+                BrowserSessionRecord.session_start >= from_dt,
+                BrowserSessionRecord.session_start <= to_dt,
             )
+            .order_by(BrowserSessionRecord.session_start)
             .all()
-        )
-        return sorted(
-            [row for row in rows if is_between_iso(row.session_start, from_iso, to_iso)],
-            key=lambda row: parse_iso(row.session_start),
         )
 
     def get_open_sessions_db(

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Index, Integer, String
+from sqlalchemy import Column, DateTime, Index, Integer, String
 from app.core.database import Base
 
 
@@ -22,16 +22,16 @@ class OSSessionRecord(Base):
     is_idle = Column(Integer, nullable=False, default=0)
     is_locked = Column(Integer, nullable=False, default=0)
 
-    session_start = Column(String, nullable=False)
-    session_end = Column(String, nullable=True)
+    session_start = Column(DateTime(timezone=True), nullable=False)
+    session_end = Column(DateTime(timezone=True), nullable=True)
     duration_sec = Column(Integer, nullable=True)
 
     trigger = Column(String, nullable=True)
     closed_by = Column(String, nullable=True)
     extra_data = Column(String, nullable=True)
 
-    created_at = Column(String, nullable=False)
-    updated_at = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
 
 
 class VSCodeSessionRecord(Base):
@@ -56,8 +56,8 @@ class VSCodeSessionRecord(Base):
     active_file_name = Column(String, nullable=True)  # Foreground context only
     active_language = Column(String, nullable=True)   # Foreground context only
 
-    session_start = Column(String, nullable=False)
-    session_end = Column(String, nullable=True)
+    session_start = Column(DateTime(timezone=True), nullable=False)
+    session_end = Column(DateTime(timezone=True), nullable=True)
     duration_sec = Column(Integer, nullable=True)
     idle_sec = Column(Integer, nullable=True, default=0)
 
@@ -89,8 +89,8 @@ class VSCodeSessionRecord(Base):
 
     extra_data = Column(String, nullable=True)
 
-    created_at = Column(String, nullable=False)
-    updated_at = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
 
 
 class BrowserSessionRecord(Base):
@@ -114,8 +114,8 @@ class BrowserSessionRecord(Base):
     title = Column(String, nullable=True)
     category = Column(String, nullable=True)
 
-    session_start = Column(String, nullable=False)
-    session_end = Column(String, nullable=True)
+    session_start = Column(DateTime(timezone=True), nullable=False)
+    session_end = Column(DateTime(timezone=True), nullable=True)
     duration_sec = Column(Integer, nullable=True)
 
     is_foreground = Column(Integer, nullable=False, default=0)
@@ -126,5 +126,5 @@ class BrowserSessionRecord(Base):
 
     extra_data = Column(String, nullable=True)
 
-    created_at = Column(String, nullable=False)
-    updated_at = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)

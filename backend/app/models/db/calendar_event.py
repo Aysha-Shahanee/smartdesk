@@ -1,4 +1,5 @@
 from sqlalchemy import Column
+from sqlalchemy import DateTime
 from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import String
@@ -19,8 +20,8 @@ class CalendarEventRecord(Base):
     event_id = Column(String, nullable=False, index=True)
 
     title = Column(String, nullable=True)
-    start_time = Column(String, nullable=True)
-    end_time = Column(String, nullable=True)
+    start_time = Column(DateTime(timezone=True), nullable=True)
+    end_time = Column(DateTime(timezone=True), nullable=True)
     timezone = Column(String, nullable=True)
     duration_sec = Column(Integer, nullable=True)
     status = Column(String, nullable=True)
@@ -28,5 +29,5 @@ class CalendarEventRecord(Base):
     extra_data = Column(String, nullable=True)
     source = Column(String, nullable=True)
 
-    created_at = Column(String, nullable=False)
-    updated_at = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)

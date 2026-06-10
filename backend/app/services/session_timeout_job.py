@@ -11,13 +11,13 @@ WITHOUT any update are treated as stale.  Normal sessions update their
 
 import logging
 import threading
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session as DbSession
 
 from app.core.database import SessionLocal
+from app.core.time import ensure_aware
 from app.core.time import local_now
-from app.core.time import parse_iso
 from app.models.db import BrowserSessionRecord
 from app.models.db import OSSessionRecord
 from app.models.db import VSCodeSessionRecord
@@ -32,11 +32,9 @@ BROKEN_SESSION_TIMEOUT_SEC: int = 30 * 60  # 30 minutes
 JOB_INTERVAL_SEC: int = 60
 
 
-def _seconds_between(start_iso: str, end_iso: str) -> int:
-    """Return the whole-second difference between two ISO 8601 strings."""
-    start = parse_iso(start_iso)
-    end = parse_iso(end_iso)
-    return max(0, int((end - start).total_seconds()))
+def _seconds_between(start: datetime, end: datetime) -> int:
+    """Return the whole-second difference between two datetime objects."""
+    return max(0, int((ensure_aware(end) - ensure_aware(start)).total_seconds()))
 
 
 class SessionTimeoutJob:
@@ -102,19 +100,18 @@ class SessionTimeoutJob:
         try:
             now = local_now()
             threshold_dt = now - timedelta(seconds=BROKEN_SESSION_TIMEOUT_SEC)
-            now_iso = now.isoformat()
 
             total_closed = 0
             for Model in (OSSessionRecord, VSCodeSessionRecord, BrowserSessionRecord):
                 open_rows = db.query(Model).filter(Model.session_end.is_(None)).all()
                 stale_rows = [
-                    row for row in open_rows if parse_iso(row.updated_at) < threshold_dt
+                    row for row in open_rows if ensure_aware(row.updated_at) < threshold_dt
                 ]
                 for row in stale_rows:
-                    row.session_end = now_iso
-                    row.duration_sec = _seconds_between(row.session_start, now_iso)
+                    row.session_end = now
+                    row.duration_sec = _seconds_between(row.session_start, now)
                     row.closed_by = "timeout"
-                    row.updated_at = now_iso
+                    row.updated_at = now
                     total_closed += 1
 
             if total_closed:
@@ -138,20 +135,19 @@ class SessionTimeoutJob:
         db: DbSession = SessionLocal()
         now = local_now()
         threshold_dt = now - timedelta(seconds=BROKEN_SESSION_TIMEOUT_SEC)
-        now_iso = now.isoformat()
 
         total_closed = 0
         try:
             for Model in (OSSessionRecord, VSCodeSessionRecord, BrowserSessionRecord):
                 open_rows = db.query(Model).filter(Model.session_end.is_(None)).all()
                 stale_rows = [
-                    row for row in open_rows if parse_iso(row.updated_at) < threshold_dt
+                    row for row in open_rows if ensure_aware(row.updated_at) < threshold_dt
                 ]
                 for row in stale_rows:
-                    row.session_end = now_iso
-                    row.duration_sec = _seconds_between(row.session_start, now_iso)
+                    row.session_end = now
+                    row.duration_sec = _seconds_between(row.session_start, now)
                     row.closed_by = "timeout"
-                    row.updated_at = now_iso
+                    row.updated_at = now
                     total_closed += 1
             db.commit()
         except Exception:

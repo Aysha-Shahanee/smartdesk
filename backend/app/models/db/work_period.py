@@ -1,4 +1,5 @@
 from sqlalchemy import Column
+from sqlalchemy import DateTime
 from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import String
@@ -16,8 +17,8 @@ class WorkPeriodRecord(Base):
     id = Column(String, primary_key=True)
     user_id = Column(String, nullable=False, index=True)
 
-    period_start = Column(String, nullable=False, index=True)
-    period_end = Column(String, nullable=True)
+    period_start = Column(DateTime(timezone=True), nullable=False, index=True)
+    period_end = Column(DateTime(timezone=True), nullable=True)
     duration_sec = Column(Integer, nullable=True)
 
     primary_source = Column(String, nullable=True)
@@ -33,5 +34,5 @@ class WorkPeriodRecord(Base):
     session_count = Column(Integer, nullable=False, default=0)
     extra_data = Column(String, nullable=True)
 
-    created_at = Column(String, nullable=False)
-    updated_at = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)

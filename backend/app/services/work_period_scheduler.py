@@ -17,14 +17,13 @@ longer than IDLE_GAP_SEC (30 minutes by default).
 
 import logging
 import threading
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session as DbSession
 
 from app.core.database import SessionLocal
-from app.core.time import is_at_or_after_iso
+from app.core.time import ensure_aware, to_utc
 from app.core.time import local_now
-from app.core.time import parse_iso
 from app.models.db import BrowserSessionRecord
 from app.models.db import CalendarEventRecord
 from app.models.db import OSSessionRecord
@@ -42,28 +41,29 @@ SCHEDULER_INTERVAL_SEC: int = 60
 _repo = WorkPeriodRepository()
 
 
-def _has_activity_since(db: DbSession, user_id: str, since_iso: str) -> dict[str, bool]:
-    """Check which data sources have session/event activity since ``since_iso``."""
+def _has_activity_since(db: DbSession, user_id: str, since_dt: datetime) -> dict[str, bool]:
+    """Check which data sources have session/event activity since ``since_dt``."""
+    since = ensure_aware(since_dt)
     has_os = any(
-        row.session_end is None or is_at_or_after_iso(row.updated_at, since_iso)
+        row.session_end is None or ensure_aware(row.updated_at) >= since
         for row in db.query(OSSessionRecord)
         .filter(OSSessionRecord.user_id == user_id)
         .all()
     )
     has_vscode = any(
-        row.session_end is None or is_at_or_after_iso(row.updated_at, since_iso)
+        row.session_end is None or ensure_aware(row.updated_at) >= since
         for row in db.query(VSCodeSessionRecord)
         .filter(VSCodeSessionRecord.user_id == user_id)
         .all()
     )
     has_browser = any(
-        row.session_end is None or is_at_or_after_iso(row.updated_at, since_iso)
+        row.session_end is None or ensure_aware(row.updated_at) >= since
         for row in db.query(BrowserSessionRecord)
         .filter(BrowserSessionRecord.user_id == user_id)
         .all()
     )
     has_calendar = any(
-        row.start_time and is_at_or_after_iso(row.start_time, since_iso)
+        row.start_time is not None and ensure_aware(row.start_time) >= since
         for row in db.query(CalendarEventRecord)
         .filter(CalendarEventRecord.user_id == user_id)
         .all()
@@ -76,8 +76,9 @@ def _has_activity_since(db: DbSession, user_id: str, since_iso: str) -> dict[str
     }
 
 
-def _primary_source(db: DbSession, user_id: str, since_iso: str) -> str | None:
+def _primary_source(db: DbSession, user_id: str, since_dt: datetime) -> str | None:
     """Return whichever source contributed the most session duration."""
+    since = to_utc(since_dt)
     totals: dict[str, int] = {}
 
     def _sum(Model, col_name: str) -> int:
@@ -86,14 +87,11 @@ def _primary_source(db: DbSession, user_id: str, since_iso: str) -> str | None:
             .filter(
                 Model.user_id == user_id,
                 Model.session_end.isnot(None),
+                Model.session_start >= since,
             )
             .all()
         )
-        return sum(
-            getattr(r, col_name) or 0
-            for r in rows
-            if is_at_or_after_iso(r.session_start, since_iso)
-        )
+        return sum(getattr(r, col_name) or 0 for r in rows)
 
     totals["os"] = _sum(OSSessionRecord, "duration_sec")
     totals["vscode"] = _sum(VSCodeSessionRecord, "duration_sec")
@@ -104,10 +102,8 @@ def _primary_source(db: DbSession, user_id: str, since_iso: str) -> str | None:
     return max(totals, key=lambda k: totals[k])
 
 
-def _seconds_between(start_iso: str, end_iso: str) -> int:
-    start = parse_iso(start_iso)
-    end = parse_iso(end_iso)
-    return max(0, int((end - start).total_seconds()))
+def _seconds_between(start: datetime, end: datetime) -> int:
+    return max(0, int((ensure_aware(end) - ensure_aware(start)).total_seconds()))
 
 
 # Default user_id used when no multi-user support is in place yet.
@@ -171,27 +167,23 @@ class WorkPeriodScheduler:
         db: DbSession = SessionLocal()
         try:
             now = local_now()
-            now_iso = now.isoformat()
             since_dt = now - timedelta(seconds=IDLE_GAP_SEC)
-            since_iso = since_dt.isoformat()
 
-            activity = _has_activity_since(db, self._user_id, since_iso)
+            activity = _has_activity_since(db, self._user_id, since_dt)
             any_activity = any(activity.values())
 
             open_period = _repo.get_open_period_db(db, self._user_id)
 
             if any_activity:
                 if open_period is None:
-                    # Start a new work period
                     open_period = _repo.open_period_db(
                         db,
                         user_id=self._user_id,
-                        period_start=now_iso,
-                        now_iso=now_iso,
+                        period_start=now,
+                        now_dt=now,
                     )
                     logger.info("WorkPeriodScheduler opened new work period %s.", open_period.id)
 
-                # Refresh source flags
                 primary = _primary_source(db, self._user_id, open_period.period_start)
                 _repo.update_flags_db(
                     db,
@@ -201,18 +193,17 @@ class WorkPeriodScheduler:
                     has_browser=activity["browser"],
                     has_calendar=activity["calendar"],
                     primary_source=primary,
-                    now_iso=now_iso,
+                    now_dt=now,
                 )
             else:
-                # No activity in the last IDLE_GAP_SEC — close the open period
                 if open_period is not None:
-                    duration = _seconds_between(open_period.period_start, now_iso)
+                    duration = _seconds_between(open_period.period_start, now)
                     _repo.close_period_db(
                         db,
                         period=open_period,
-                        period_end=now_iso,
+                        period_end=now,
                         duration_sec=duration,
-                        now_iso=now_iso,
+                        now_dt=now,
                     )
                     logger.info(
                         "WorkPeriodScheduler closed work period %s (%ds).",

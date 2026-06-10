@@ -3,6 +3,9 @@ from datetime import datetime
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import field_serializer
+
+from app.core.time import to_colombo_iso
 
 
 class DashboardSchema(BaseModel):
@@ -64,6 +67,10 @@ class WorkPeriodSummary(DashboardSchema):
     has_browser_data: bool = False
     has_calendar_data: bool = False
 
+    @field_serializer("period_start", "period_end")
+    def _as_colombo(self, dt: datetime | None) -> str | None:
+        return to_colombo_iso(dt)
+
 
 class TimelineDashboardResponse(DashboardSchema):
     work_periods: list[WorkPeriodSummary] = Field(default_factory=list)
@@ -77,6 +84,10 @@ class SessionSummary(DashboardSchema):
     ended_at: datetime | None = None
     duration_sec: int | None = Field(default=None, ge=0)
     is_foreground: bool | None = None
+
+    @field_serializer("started_at", "ended_at")
+    def _as_colombo(self, dt: datetime | None) -> str | None:
+        return to_colombo_iso(dt)
 
 
 class SessionsDashboardResponse(DashboardSchema):

@@ -16,7 +16,6 @@ from collections import defaultdict
 
 from sqlalchemy.orm import Session
 
-from app.core.time import parse_iso
 from app.models.db import BrowserSessionRecord
 from app.models.db import OSSessionRecord
 from app.models.db import VSCodeSessionRecord
@@ -138,10 +137,8 @@ class DashboardService:
         summaries = [
             WorkPeriodSummary(
                 id=p.id,
-                period_start=parse_iso(p.period_start),
-                period_end=(
-                    parse_iso(p.period_end) if p.period_end else None
-                ),
+                period_start=p.period_start,
+                period_end=p.period_end,
                 duration_sec=p.duration_sec,
                 primary_source=p.primary_source,
                 has_os_data=bool(p.has_os_data),
@@ -170,12 +167,8 @@ class DashboardService:
                     id=row.id,
                     source="os",
                     title=row.window_title or row.app_name,
-                    started_at=parse_iso(row.session_start),
-                    ended_at=(
-                        parse_iso(row.session_end)
-                        if row.session_end
-                        else None
-                    ),
+                    started_at=row.session_start,
+                    ended_at=row.session_end,
                     duration_sec=row.duration_sec,
                     is_foreground=None,
                 )
@@ -187,12 +180,8 @@ class DashboardService:
                     id=row.id,
                     source="vscode",
                     title=row.active_file_name or row.workspace_name,
-                    started_at=parse_iso(row.session_start),
-                    ended_at=(
-                        parse_iso(row.session_end)
-                        if row.session_end
-                        else None
-                    ),
+                    started_at=row.session_start,
+                    ended_at=row.session_end,
                     duration_sec=row.duration_sec,
                     is_foreground=bool(row.is_foreground),
                 )
@@ -204,12 +193,8 @@ class DashboardService:
                     id=row.id,
                     source="browser",
                     title=row.title or row.domain,
-                    started_at=parse_iso(row.session_start),
-                    ended_at=(
-                        parse_iso(row.session_end)
-                        if row.session_end
-                        else None
-                    ),
+                    started_at=row.session_start,
+                    ended_at=row.session_end,
                     duration_sec=row.duration_sec,
                     is_foreground=bool(row.is_foreground),
                 )

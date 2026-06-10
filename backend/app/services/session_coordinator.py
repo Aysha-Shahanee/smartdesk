@@ -4,9 +4,7 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.core.time import ensure_aware
-from app.core.time import parse_iso
-from app.core.time import to_local_iso
+from app.core.time import ensure_aware, to_utc
 from app.models.db import BrowserSessionRecord
 from app.models.db import OSSessionRecord
 from app.models.db import VSCodeSessionRecord
@@ -147,7 +145,7 @@ class SessionCoordinator:
         return IngestEventResponse(status="ignored", accepted=True)
 
     def _open_os_session(self, payload: OSEventPayload, db: Session) -> OSSessionRecord:
-        timestamp = self._iso(payload.timestamp)
+        timestamp = self._dt(payload.timestamp)
         session = OSSessionRecord(
             id=self._new_id(),
             user_id=payload.user_id,
@@ -210,14 +208,14 @@ class SessionCoordinator:
             session.state = "active"
             session.is_locked = 0
 
-        session.updated_at = self._iso(payload.timestamp)
+        session.updated_at = self._dt(payload.timestamp)
         db.flush()
         return session
 
     def _open_vscode_session(
         self, payload: VSCodeEventPayload, is_foreground: bool, db: Session
     ) -> VSCodeSessionRecord:
-        timestamp = self._iso(payload.timestamp)
+        timestamp = self._dt(payload.timestamp)
         session = VSCodeSessionRecord(
             id=self._new_id(),
             user_id=payload.user_id,
@@ -244,7 +242,7 @@ class SessionCoordinator:
             return None
 
         self._apply_vscode_payload_update(session, payload)
-        session.updated_at = self._iso(payload.timestamp)
+        session.updated_at = self._dt(payload.timestamp)
         db.flush()
         return session
 
@@ -323,7 +321,7 @@ class SessionCoordinator:
     def _open_browser_session(
         self, payload: BrowserEventPayload, is_foreground: bool, db: Session
     ) -> BrowserSessionRecord:
-        timestamp = self._iso(payload.timestamp)
+        timestamp = self._dt(payload.timestamp)
         session = BrowserSessionRecord(
             id=self._new_id(),
             user_id=payload.user_id,
@@ -394,7 +392,7 @@ class SessionCoordinator:
         if session is None:
             return None
 
-        session.updated_at = self._iso(payload.timestamp)
+        session.updated_at = self._dt(payload.timestamp)
         if payload.title is not None:
             session.title = payload.title
         if payload.url is not None:
@@ -514,11 +512,10 @@ class SessionCoordinator:
         )
 
     def _close_timed_session(self, session, timestamp: datetime, closed_by: str) -> None:
-        end_time = self._iso(timestamp)
-        start_time = parse_iso(session.session_start)
+        end_time = self._dt(timestamp)
         duration_sec = max(
             0,
-            int((ensure_aware(timestamp) - ensure_aware(start_time)).total_seconds()),
+            int((ensure_aware(timestamp) - ensure_aware(session.session_start)).total_seconds()),
         )
 
         session.session_end = end_time
@@ -531,8 +528,8 @@ class SessionCoordinator:
             return None
         return json.dumps(value, separators=(",", ":"), sort_keys=True)
 
-    def _iso(self, value: datetime) -> str:
-        return to_local_iso(value)
+    def _dt(self, value: datetime) -> datetime:
+        return to_utc(value)
 
     def _new_id(self) -> str:
         return str(uuid4())
