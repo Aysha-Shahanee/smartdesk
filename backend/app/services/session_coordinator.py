@@ -8,15 +8,45 @@ from app.core.time import ensure_aware
 from app.core.time import parse_iso
 from app.core.time import to_local_iso
 from app.models.db import BrowserSessionRecord
+from app.models.db import IDESessionRecord
 from app.models.db import OSSessionRecord
-from app.models.db import VSCodeSessionRecord
 from app.models.schemas import BrowserEventPayload
 from app.models.schemas import BrowserEventType
+from app.models.schemas import IDEEventPayload
+from app.models.schemas import IDEEventType
 from app.models.schemas import IngestEventResponse
 from app.models.schemas import OSEventPayload
 from app.models.schemas import OSEventType
-from app.models.schemas import VSCodeEventPayload
-from app.models.schemas import VSCodeEventType
+
+# Process names / window-title fragments that identify an IDE. Used as a
+# fallback when PID matching fails (extension host PID != window owner PID).
+IDE_NAME_KEYWORDS = (
+    "code",            # VS Code (Code.exe)
+    "visual studio code",
+    "antigravity",     # Antigravity IDE
+    "cursor",
+    "windsurf",
+    "zed",
+    "pycharm", "intellij", "idea", "clion", "goland", "webstorm", "datagrip", "rider",
+    "sublime",
+)
+
+BROWSER_NAME_KEYWORDS = (
+    "chrome", "firefox", "edge", "msedge", "safari", "brave", "opera",
+    "comet", "arc", "vivaldi",
+)
+
+
+def _looks_like_ide(value: str) -> bool:
+    value = (value or "").lower()
+    return any(k in value for k in IDE_NAME_KEYWORDS)
+
+
+def _looks_like_browser(value: str, browser_name: str | None = None) -> bool:
+    value = (value or "").lower()
+    if browser_name and browser_name.lower() in value:
+        return True
+    return any(k in value for k in BROWSER_NAME_KEYWORDS)
 
 
 class SessionCoordinator:
@@ -57,17 +87,17 @@ class SessionCoordinator:
 
         return IngestEventResponse(status="ignored", accepted=True)
 
-    def handle_vscode_event(
-        self, payload: VSCodeEventPayload, db: Session
+    def handle_ide_event(
+        self, payload: IDEEventPayload, db: Session
     ) -> IngestEventResponse:
-        if payload.event == VSCodeEventType.STARTED:
-            self._close_vscode_session(
+        if payload.event == IDEEventType.STARTED:
+            self._close_ide_session(
                 payload,
                 "next_session",
                 db,
             )
             is_foreground = self._is_foreground(payload, db)
-            session = self._open_vscode_session(payload, is_foreground, db)
+            session = self._open_ide_session(payload, is_foreground, db)
             db.commit()
             return IngestEventResponse(
                 status="opened",
@@ -75,17 +105,29 @@ class SessionCoordinator:
                 is_foreground=is_foreground,
             )
 
-        if payload.event == VSCodeEventType.STATE:
-            session = self._update_vscode_session(payload, db)
+        if payload.event == IDEEventType.STATE:
+            session = self._update_ide_session(payload, db)
+            if session is None:
+                # The extension thinks its session is alive but the backend
+                # closed it (server restart, timeout). Re-open instead of
+                # silently dropping the data until the next started event.
+                is_foreground = self._is_foreground(payload, db)
+                session = self._open_ide_session(payload, is_foreground, db)
+                db.commit()
+                return IngestEventResponse(
+                    status="reopened",
+                    session_id=session.id,
+                    is_foreground=is_foreground,
+                )
             db.commit()
             return IngestEventResponse(
                 status="state_updated",
-                session_id=session.id if session else None,
-                is_foreground=bool(session.is_foreground) if session else None,
+                session_id=session.id,
+                is_foreground=bool(session.is_foreground),
             )
 
-        if payload.event == VSCodeEventType.ENDED:
-            session = self._close_vscode_session(
+        if payload.event == IDEEventType.ENDED:
+            session = self._close_ide_session(
                 payload,
                 payload.trigger or "ended",
                 db,
@@ -103,10 +145,21 @@ class SessionCoordinator:
     ) -> IngestEventResponse:
         if payload.event == BrowserEventType.STATE:
             session = self._mark_browser_state(payload, db)
+            if session is None:
+                # Same desync healing as the IDE layer: heartbeat for a
+                # session the backend already closed — re-open it.
+                is_foreground = self._is_foreground(payload, db)
+                session = self._open_browser_session(payload, is_foreground, db)
+                db.commit()
+                return IngestEventResponse(
+                    status="reopened",
+                    session_id=session.id,
+                    is_foreground=is_foreground,
+                )
             db.commit()
             return IngestEventResponse(
                 status="state_accepted",
-                session_id=session.id if session else None,
+                session_id=session.id,
             )
 
         if payload.event == BrowserEventType.STARTED:
@@ -212,11 +265,11 @@ class SessionCoordinator:
         db.flush()
         return session
 
-    def _open_vscode_session(
-        self, payload: VSCodeEventPayload, is_foreground: bool, db: Session
-    ) -> VSCodeSessionRecord:
+    def _open_ide_session(
+        self, payload: IDEEventPayload, is_foreground: bool, db: Session
+    ) -> IDESessionRecord:
         timestamp = self._iso(payload.timestamp)
-        session = VSCodeSessionRecord(
+        session = IDESessionRecord(
             id=self._new_id(),
             user_id=payload.user_id,
             instance_id=payload.instance_id,
@@ -225,76 +278,96 @@ class SessionCoordinator:
             is_foreground=1 if is_foreground else 0,
             foreground_sec=0,
             confirmed_by_os=1 if is_foreground else 0,
+            collection_reason="foreground" if is_foreground else "background_ai",
             trigger=payload.trigger,
             created_at=timestamp,
             updated_at=timestamp,
         )
-        self._apply_vscode_payload_update(session, payload)
+        self._apply_ide_payload_update(session, payload)
         db.add(session)
         db.flush()
         return session
 
-    def _update_vscode_session(
-        self, payload: VSCodeEventPayload, db: Session
-    ) -> VSCodeSessionRecord | None:
-        session = self._get_open_vscode_session(payload.user_id, payload.instance_id, db)
+    def _update_ide_session(
+        self, payload: IDEEventPayload, db: Session
+    ) -> IDESessionRecord | None:
+        session = self._get_open_ide_session(payload.user_id, payload.instance_id, db)
         if session is None:
             return None
 
-        self._apply_vscode_payload_update(session, payload)
+        self._apply_ide_payload_update(session, payload)
         session.updated_at = self._iso(payload.timestamp)
         db.flush()
         return session
 
-    def _close_vscode_session(
+    def _close_ide_session(
         self,
-        payload: VSCodeEventPayload,
+        payload: IDEEventPayload,
         closed_by: str,
         db: Session,
-    ) -> VSCodeSessionRecord | None:
-        sessions = self._get_open_vscode_sessions(payload.user_id, payload.instance_id, db)
+    ) -> IDESessionRecord | None:
+        sessions = self._get_open_ide_sessions(payload.user_id, payload.instance_id, db)
         if not sessions:
             return None
 
         session = sessions[0]
-        self._apply_vscode_payload_update(session, payload)
+        self._apply_ide_payload_update(session, payload)
         for open_session in sessions:
             self._close_timed_session(open_session, payload.timestamp, closed_by)
         db.flush()
         return session
 
-    def _get_open_vscode_sessions(
+    def _get_open_ide_sessions(
         self, user_id: str, instance_id: str, db: Session
-    ) -> list[VSCodeSessionRecord]:
+    ) -> list[IDESessionRecord]:
         return (
-            db.query(VSCodeSessionRecord)
+            db.query(IDESessionRecord)
             .filter(
-                VSCodeSessionRecord.user_id == user_id,
-                VSCodeSessionRecord.instance_id == instance_id,
-                VSCodeSessionRecord.session_end.is_(None),
+                IDESessionRecord.user_id == user_id,
+                IDESessionRecord.instance_id == instance_id,
+                IDESessionRecord.session_end.is_(None),
             )
-            .order_by(VSCodeSessionRecord.session_start.desc())
+            .order_by(IDESessionRecord.session_start.desc())
             .all()
         )
 
-    def _get_open_vscode_session(
+    def _get_open_ide_session(
         self, user_id: str, instance_id: str, db: Session
-    ) -> VSCodeSessionRecord | None:
-        sessions = self._get_open_vscode_sessions(user_id, instance_id, db)
+    ) -> IDESessionRecord | None:
+        sessions = self._get_open_ide_sessions(user_id, instance_id, db)
         return sessions[0] if sessions else None
 
-    def _apply_vscode_payload_update(
-        self, session: VSCodeSessionRecord, payload: VSCodeEventPayload
+    def _apply_ide_payload_update(
+        self, session: IDESessionRecord, payload: IDEEventPayload
     ) -> None:
-        session.process_id = payload.process_id
-        session.workspace_name = payload.workspace_name
-        session.project_path = payload.project_path
-        session.repo_id = payload.repo_id
-        session.git_branch = payload.git_branch
-        session.active_file_path = payload.active_file_path
-        session.active_file_name = payload.active_file_name
-        session.active_language = payload.active_language
-        session.extra_data = self._json(payload.extra_data)
+        # Context fields keep their last-known value: heartbeats fired while
+        # focus is on a non-editor panel arrive without them, and overwriting
+        # with NULL would erase what we already know about the session.
+        session.ide_name = payload.ide_name or session.ide_name
+        session.process_id = payload.process_id or session.process_id
+        session.parent_process_id = payload.parent_process_id or session.parent_process_id
+        session.workspace_name = payload.workspace_name or session.workspace_name
+        session.project_path = payload.project_path or session.project_path
+        session.repo_id = payload.repo_id or session.repo_id
+        session.git_branch = payload.git_branch or session.git_branch
+        session.active_file_path = payload.active_file_path or session.active_file_path
+        session.active_file_name = payload.active_file_name or session.active_file_name
+        session.active_language = payload.active_language or session.active_language
+        if payload.extra_data is not None:
+            session.extra_data = self._json(payload.extra_data)
+
+        if payload.edited_file_count is not None:
+            session.edited_file_count = payload.edited_file_count
+        if payload.changed_file_count is not None:
+            session.changed_file_count = payload.changed_file_count
+        if payload.dominant_language is not None:
+            session.dominant_language = payload.dominant_language
+        if payload.languages_json is not None:
+            session.languages_json = self._json(payload.languages_json)
+        if payload.edited_files_json is not None:
+            session.edited_files_json = json.dumps(
+                payload.edited_files_json, separators=(",", ":")
+            )
 
         if payload.counters is not None:
             session.edit_count = payload.counters.edit_count
@@ -396,10 +469,10 @@ class SessionCoordinator:
         self, user_id: str, timestamp: datetime, closed_by: str, db: Session
     ) -> None:
         for session in (
-            db.query(VSCodeSessionRecord)
+            db.query(IDESessionRecord)
             .filter(
-                VSCodeSessionRecord.user_id == user_id,
-                VSCodeSessionRecord.session_end.is_(None),
+                IDESessionRecord.user_id == user_id,
+                IDESessionRecord.session_end.is_(None),
             )
             .all()
         ):
@@ -417,8 +490,18 @@ class SessionCoordinator:
 
         db.flush()
 
+    # ------------------------------------------------------------------ #
+    # Foreground detection                                                 #
+    # ------------------------------------------------------------------ #
+    #
+    # The OS collector is the ground truth: it reports the PID of the
+    # window that owns the foreground window. Extension host processes
+    # (IDE extensions) report their own PID *and* their parent PID, since
+    # the extension host's PID never matches the window-owner PID. If
+    # neither PID matches, fall back to name/category matching.
+
     def _is_foreground(
-        self, payload: VSCodeEventPayload | BrowserEventPayload, db: Session
+        self, payload: IDEEventPayload | BrowserEventPayload, db: Session
     ) -> bool:
         active_os_session = (
             db.query(OSSessionRecord)
@@ -432,17 +515,32 @@ class SessionCoordinator:
         if active_os_session is None:
             return False
 
-        if payload.process_id is not None and active_os_session.process_id == payload.process_id:
-            return True
+        os_pid = active_os_session.process_id
+        if os_pid is not None:
+            candidate_pids = {payload.process_id}
+            if isinstance(payload, IDEEventPayload):
+                candidate_pids.add(payload.parent_process_id)
+            candidate_pids.discard(None)
+            if os_pid in candidate_pids:
+                return True
 
-        if isinstance(payload, VSCodeEventPayload):
-            return self._is_vscode_os_session(active_os_session)
+        if isinstance(payload, IDEEventPayload):
+            # The extension itself knows whether its window has focus;
+            # require OS agreement that *some* IDE is foreground.
+            if payload.is_window_focused is False:
+                return False
+            return self._is_ide_os_session(active_os_session)
 
-        return False
+        # Browser extensions cannot report a useful PID — match by app
+        # name/category against the OS foreground session instead.
+        return (
+            (active_os_session.app_category or "").lower() == "browser"
+            and _looks_like_browser(active_os_session.app_name, payload.browser_name)
+        )
 
     def _update_foreground_flags(self, payload: OSEventPayload, db: Session) -> None:
-        db.query(VSCodeSessionRecord).filter(
-            VSCodeSessionRecord.session_end.is_(None)
+        db.query(IDESessionRecord).filter(
+            IDESessionRecord.session_end.is_(None)
         ).update(
             {"is_foreground": 0, "confirmed_by_os": 0}, synchronize_session=False
         )
@@ -453,11 +551,18 @@ class SessionCoordinator:
         )
 
         if payload.process_id is not None:
-            db.query(VSCodeSessionRecord).filter(
-                VSCodeSessionRecord.session_end.is_(None),
-                VSCodeSessionRecord.process_id == payload.process_id,
+            # Match the IDE session whose extension-host PID *or* parent
+            # PID equals the OS foreground window PID.
+            db.query(IDESessionRecord).filter(
+                IDESessionRecord.session_end.is_(None),
+                (IDESessionRecord.process_id == payload.process_id)
+                | (IDESessionRecord.parent_process_id == payload.process_id),
             ).update(
-                {"is_foreground": 1, "confirmed_by_os": 1},
+                {
+                    "is_foreground": 1,
+                    "confirmed_by_os": 1,
+                    "collection_reason": "foreground",
+                },
                 synchronize_session=False,
             )
             db.query(BrowserSessionRecord).filter(
@@ -468,10 +573,28 @@ class SessionCoordinator:
                 synchronize_session=False,
             )
 
-        if self._is_vscode_os_payload(payload):
-            db.query(VSCodeSessionRecord).filter(
-                VSCodeSessionRecord.user_id == payload.user_id,
-                VSCodeSessionRecord.session_end.is_(None),
+        if self._is_ide_os_payload(payload):
+            # Promote open IDE sessions — except background_ai rows, which
+            # belong to a blurred window doing AI work; the extension closes
+            # them itself and opens a fresh foreground row on refocus.
+            db.query(IDESessionRecord).filter(
+                IDESessionRecord.user_id == payload.user_id,
+                IDESessionRecord.session_end.is_(None),
+                (IDESessionRecord.collection_reason.is_(None))
+                | (IDESessionRecord.collection_reason != "background_ai"),
+            ).update(
+                {
+                    "is_foreground": 1,
+                    "confirmed_by_os": 1,
+                    "collection_reason": "foreground",
+                },
+                synchronize_session=False,
+            )
+
+        if self._is_browser_os_payload(payload):
+            db.query(BrowserSessionRecord).filter(
+                BrowserSessionRecord.user_id == payload.user_id,
+                BrowserSessionRecord.session_end.is_(None),
             ).update(
                 {"is_foreground": 1, "confirmed_by_os": 1},
                 synchronize_session=False,
@@ -479,22 +602,20 @@ class SessionCoordinator:
 
         db.flush()
 
-    def _is_vscode_os_payload(self, payload: OSEventPayload) -> bool:
-        app_name = (payload.app_name or "").lower()
-        window_title = (payload.window_title or "").lower()
-        return self._looks_like_vscode(app_name) or self._looks_like_vscode(window_title)
+    def _is_ide_os_payload(self, payload: OSEventPayload) -> bool:
+        if payload.app_category:
+            return payload.app_category.lower() == "ide"
+        return _looks_like_ide(payload.app_name) or _looks_like_ide(payload.window_title)
 
-    def _is_vscode_os_session(self, session: OSSessionRecord) -> bool:
-        app_name = (session.app_name or "").lower()
-        window_title = (session.window_title or "").lower()
-        return self._looks_like_vscode(app_name) or self._looks_like_vscode(window_title)
+    def _is_ide_os_session(self, session: OSSessionRecord) -> bool:
+        if session.app_category:
+            return session.app_category.lower() == "ide"
+        return _looks_like_ide(session.app_name) or _looks_like_ide(session.window_title)
 
-    def _looks_like_vscode(self, value: str) -> bool:
+    def _is_browser_os_payload(self, payload: OSEventPayload) -> bool:
         return (
-            value == "code"
-            or "visual studio code" in value
-            or value.endswith(" - code")
-            or " - visual studio code" in value
+            (payload.app_category or "").lower() == "browser"
+            or _looks_like_browser(payload.app_name)
         )
 
     def _close_timed_session(self, session, timestamp: datetime, closed_by: str) -> None:

@@ -64,7 +64,8 @@ def _classify_app(app_name: str) -> str:
     """Return a broad category for a given app name."""
     name_lower = app_name.lower()
     if any(k in name_lower for k in (
-        "code",         # VS Code, Antigravity (runs inside Code.exe)
+        "code",         # VS Code (Code.exe)
+        "antigravity",  # Antigravity IDE
         "cursor",       # Cursor AI editor
         "windsurf",     # Windsurf editor
         "zed",          # Zed editor
@@ -75,7 +76,10 @@ def _classify_app(app_name: str) -> str:
         "xcode",
     )):
         return "IDE"
-    if any(k in name_lower for k in ("chrome", "firefox", "edge", "safari", "brave", "opera")):
+    if any(k in name_lower for k in (
+        "chrome", "firefox", "edge", "safari", "brave", "opera",
+        "comet", "arc", "vivaldi",
+    )):
         return "Browser"
     if any(k in name_lower for k in ("slack", "teams", "discord", "zoom", "meet", "outlook", "mail")):
         return "Communication"
@@ -222,13 +226,14 @@ class OSCollector:
         )
 
     def stop(self) -> None:
-        """Signal the polling loop to exit and send a shutdown event."""
+        """Signal the polling loop to exit.
+
+        Deliberately does NOT emit a "shutdown" event: the backend stopping
+        (e.g. a --reload restart) does not mean the user stopped working,
+        and the shutdown event would force-close every open IDE/browser
+        session. Genuinely abandoned sessions are closed by the timeout job.
+        """
         self._running = False
-        _post_event({
-            "user_id": USER_ID,
-            "event": "shutdown",
-            "timestamp": _now_iso(),
-        })
         logger.info("OSCollector stopped.")
 
     def _run_blocking(self) -> None:

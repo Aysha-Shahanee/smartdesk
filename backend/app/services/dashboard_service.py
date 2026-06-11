@@ -13,13 +13,18 @@ custom date-range queries.
 """
 
 from collections import defaultdict
+from datetime import timedelta
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
+from app.core.time import local_now
+from app.core.time import local_now_iso
 from app.core.time import parse_iso
+from app.models.db import CalendarEventRecord
 from app.models.db import BrowserSessionRecord
+from app.models.db import IDESessionRecord
 from app.models.db import OSSessionRecord
-from app.models.db import VSCodeSessionRecord
 from app.models.db import WorkPeriodRecord
 from app.models.schemas.dashboard import (
     AppDuration,
@@ -34,17 +39,22 @@ from app.models.schemas.dashboard import (
     WorkPeriodSummary,
 )
 from app.repositories.browser_session_repository import BrowserSessionRepository
+from app.repositories.ide_session_repository import IDESessionRepository
 from app.repositories.os_session_repository import OSSessionRepository
-from app.repositories.vscode_session_repository import VSCodeSessionRepository
 from app.repositories.work_period_repository import WorkPeriodRepository
 
 _os_repo = OSSessionRepository()
-_vscode_repo = VSCodeSessionRepository()
+_ide_repo = IDESessionRepository()
 _browser_repo = BrowserSessionRepository()
 _work_repo = WorkPeriodRepository()
 
 # How many items to return in "top N" lists.
 TOP_N = 10
+
+# A collection layer is "ok" when its newest row was updated within this window.
+HEALTH_WINDOW_SEC = 15 * 60
+# How many recent rows the monitoring overview shows per layer.
+RECENT_N = 5
 
 
 class DashboardService:
@@ -81,7 +91,7 @@ class DashboardService:
         from_iso: str,
         to_iso: str,
     ) -> IDEDashboardResponse:
-        rows = _vscode_repo.get_foreground_sessions_db(db, user_id, from_iso, to_iso)
+        rows = _ide_repo.get_foreground_sessions_db(db, user_id, from_iso, to_iso)
 
         return IDEDashboardResponse(
             coding_time_sec=sum(
@@ -145,7 +155,7 @@ class DashboardService:
                 duration_sec=p.duration_sec,
                 primary_source=p.primary_source,
                 has_os_data=bool(p.has_os_data),
-                has_vscode_data=bool(p.has_vscode_data),
+                has_ide_data=bool(p.has_ide_data),
                 has_browser_data=bool(p.has_browser_data),
                 has_calendar_data=bool(p.has_calendar_data),
             )
@@ -181,11 +191,11 @@ class DashboardService:
                 )
             )
 
-        for row in _vscode_repo.get_all_sessions_db(db, user_id, from_iso, to_iso):
+        for row in _ide_repo.get_all_sessions_db(db, user_id, from_iso, to_iso):
             results.append(
                 SessionSummary(
                     id=row.id,
-                    source="vscode",
+                    source="ide",
                     title=row.active_file_name or row.workspace_name,
                     started_at=parse_iso(row.session_start),
                     ended_at=(
@@ -218,6 +228,110 @@ class DashboardService:
         # Sort chronologically
         results.sort(key=lambda s: s.started_at)
         return SessionsDashboardResponse(sessions=results)
+
+    def get_overview(self, db: Session, user_id: str) -> dict:
+        """Monitoring overview: per-layer health, totals, and recent rows.
+
+        Used by the small health-check dashboard at /dashboard/ui to verify
+        all four collection layers are actually receiving data.
+        """
+        from app.services.calendar_service import CalendarService
+
+        def layer(Model, recent_fields) -> dict:
+            total = db.query(Model).filter(Model.user_id == user_id).count()
+            open_count = (
+                db.query(Model)
+                .filter(Model.user_id == user_id, Model.session_end.is_(None))
+                .count()
+            )
+            # Newest N rows, displayed in ascending time order.
+            rows = (
+                db.query(Model)
+                .filter(Model.user_id == user_id)
+                .order_by(Model.updated_at.desc())
+                .limit(RECENT_N)
+                .all()
+            )
+            last_at = rows[0].updated_at if rows else None
+            rows.sort(key=lambda r: r.session_start or "")
+            return {
+                "total": total,
+                "open": open_count,
+                "last_event_at": last_at,
+                "status": self._health(last_at),
+                "recent": [
+                    {field: getattr(r, field, None) for field in recent_fields}
+                    for r in rows
+                ],
+            }
+
+        os_layer = layer(
+            OSSessionRecord,
+            ("app_name", "app_category", "window_title", "state",
+             "session_start", "session_end", "duration_sec"),
+        )
+        ide_layer = layer(
+            IDESessionRecord,
+            ("ide_name", "workspace_name", "active_file_name", "active_language",
+             "is_foreground", "collection_reason", "edit_count",
+             "session_start", "session_end", "duration_sec"),
+        )
+        browser_layer = layer(
+            BrowserSessionRecord,
+            ("browser_name", "domain", "title", "category", "is_foreground",
+             "session_start", "session_end", "duration_sec"),
+        )
+
+        calendar_service = CalendarService()
+        cal_status = calendar_service.status(user_id, db)
+        # Upcoming/nearest events first: newest-synced window, ascending start.
+        cal_rows = (
+            db.query(CalendarEventRecord)
+            .filter(CalendarEventRecord.user_id == user_id)
+            .order_by(CalendarEventRecord.start_time.desc())
+            .limit(RECENT_N)
+            .all()
+        )
+        cal_rows.reverse()
+        calendar_layer = {
+            "total": cal_status["event_count"],
+            "configured": cal_status["configured"],
+            "connected": cal_status["connected"],
+            "last_sync": cal_status["last_sync"],
+            "status": (
+                "ok" if cal_status["connected"] and cal_status["last_sync"]
+                else "not_connected" if not cal_status["connected"]
+                else "no_data"
+            ),
+            "recent": [
+                {
+                    "title": r.title,
+                    "start_time": r.start_time,
+                    "end_time": r.end_time,
+                    "status": r.status,
+                    "is_all_day": bool(r.is_all_day),
+                }
+                for r in cal_rows
+            ],
+        }
+
+        return {
+            "generated_at": local_now_iso(),
+            "timezone": settings.TIMEZONE,
+            "user_id": user_id,
+            "layers": {
+                "os": os_layer,
+                "ide": ide_layer,
+                "browser": browser_layer,
+                "calendar": calendar_layer,
+            },
+        }
+
+    def _health(self, last_iso: str | None) -> str:
+        if not last_iso:
+            return "no_data"
+        cutoff = local_now() - timedelta(seconds=HEALTH_WINDOW_SEC)
+        return "ok" if parse_iso(last_iso) >= cutoff else "stale"
 
     # ------------------------------------------------------------------ #
     # Aggregation helpers                                                  #

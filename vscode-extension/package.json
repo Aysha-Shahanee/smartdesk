@@ -1,8 +1,8 @@
 {
-  "name": "smartdesk-vscode",
+  "name": "smartdesk-ide",
   "displayName": "SmartDesk",
-  "description": "SmartDesk session tracker — sends IDE events to the local SmartDesk backend.",
-  "version": "2.0.0",
+  "description": "SmartDesk session tracker — sends IDE events to the local SmartDesk backend. Works in VS Code, Antigravity, Cursor, and other VS Code-based IDEs.",
+  "version": "3.1.0",
   "publisher": "smartdesk",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Other"],

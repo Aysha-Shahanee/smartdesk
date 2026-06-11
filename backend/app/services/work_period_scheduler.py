@@ -27,8 +27,8 @@ from app.core.time import local_now
 from app.core.time import parse_iso
 from app.models.db import BrowserSessionRecord
 from app.models.db import CalendarEventRecord
+from app.models.db import IDESessionRecord
 from app.models.db import OSSessionRecord
-from app.models.db import VSCodeSessionRecord
 from app.repositories.work_period_repository import WorkPeriodRepository
 
 logger = logging.getLogger("smartdesk.work_period_scheduler")
@@ -50,10 +50,10 @@ def _has_activity_since(db: DbSession, user_id: str, since_iso: str) -> dict[str
         .filter(OSSessionRecord.user_id == user_id)
         .all()
     )
-    has_vscode = any(
+    has_ide = any(
         row.session_end is None or is_at_or_after_iso(row.updated_at, since_iso)
-        for row in db.query(VSCodeSessionRecord)
-        .filter(VSCodeSessionRecord.user_id == user_id)
+        for row in db.query(IDESessionRecord)
+        .filter(IDESessionRecord.user_id == user_id)
         .all()
     )
     has_browser = any(
@@ -70,7 +70,7 @@ def _has_activity_since(db: DbSession, user_id: str, since_iso: str) -> dict[str
     )
     return {
         "os": has_os,
-        "vscode": has_vscode,
+        "ide": has_ide,
         "browser": has_browser,
         "calendar": has_calendar,
     }
@@ -96,7 +96,7 @@ def _primary_source(db: DbSession, user_id: str, since_iso: str) -> str | None:
         )
 
     totals["os"] = _sum(OSSessionRecord, "duration_sec")
-    totals["vscode"] = _sum(VSCodeSessionRecord, "duration_sec")
+    totals["ide"] = _sum(IDESessionRecord, "duration_sec")
     totals["browser"] = _sum(BrowserSessionRecord, "duration_sec")
 
     if not any(totals.values()):
@@ -197,7 +197,7 @@ class WorkPeriodScheduler:
                     db,
                     period=open_period,
                     has_os=activity["os"],
-                    has_vscode=activity["vscode"],
+                    has_ide=activity["ide"],
                     has_browser=activity["browser"],
                     has_calendar=activity["calendar"],
                     primary_source=primary,

@@ -59,18 +59,3 @@ class BrowserSessionRepository:
             [row for row in rows if is_between_iso(row.session_start, from_iso, to_iso)],
             key=lambda row: parse_iso(row.session_start),
         )
-
-    def get_open_sessions_db(
-        self,
-        db: Session,
-        user_id: str,
-    ) -> list[BrowserSessionRecord]:
-        """Return all currently open browser sessions."""
-        return (
-            db.query(BrowserSessionRecord)
-            .filter(
-                BrowserSessionRecord.user_id == user_id,
-                BrowserSessionRecord.session_end.is_(None),
-            )
-            .all()
-        )

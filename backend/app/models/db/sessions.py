@@ -34,19 +34,21 @@ class OSSessionRecord(Base):
     updated_at = Column(String, nullable=False)
 
 
-class VSCodeSessionRecord(Base):
-    __tablename__ = "vscode_sessions"
+class IDESessionRecord(Base):
+    __tablename__ = "ide_sessions"
     __table_args__ = (
-        Index("ix_vscode_sessions_user_start", "user_id", "session_start"),
-        Index("ix_vscode_sessions_instance_id", "instance_id"),
-        Index("ix_vscode_sessions_process_id", "process_id"),
-        Index("ix_vscode_sessions_is_foreground", "is_foreground"),
+        Index("ix_ide_sessions_user_start", "user_id", "session_start"),
+        Index("ix_ide_sessions_instance_id", "instance_id"),
+        Index("ix_ide_sessions_process_id", "process_id"),
+        Index("ix_ide_sessions_is_foreground", "is_foreground"),
     )
 
     id = Column(String, primary_key=True)
     user_id = Column(String, nullable=False)
+    ide_name = Column(String, nullable=True)
     instance_id = Column(String, nullable=False)
     process_id = Column(Integer, nullable=True)
+    parent_process_id = Column(Integer, nullable=True)
 
     workspace_name = Column(String, nullable=True)
     project_path = Column(String, nullable=True)
@@ -64,6 +66,9 @@ class VSCodeSessionRecord(Base):
     is_foreground = Column(Integer, nullable=False, default=0)
     foreground_sec = Column(Integer, nullable=True, default=0)
     confirmed_by_os = Column(Integer, nullable=False, default=0)
+    # "foreground" — IDE was the OS foreground app
+    # "background_ai" — IDE blurred but edits kept arriving (AI agent working)
+    collection_reason = Column(String, nullable=True)
 
     trigger = Column(String, nullable=True)
     closed_by = Column(String, nullable=True)
@@ -75,6 +80,12 @@ class VSCodeSessionRecord(Base):
     file_switch_count = Column(Integer, nullable=False, default=0)
     terminal_command_count = Column(Integer, nullable=False, default=0)
     debug_run_count = Column(Integer, nullable=False, default=0)
+
+    edited_file_count = Column(Integer, nullable=True, default=0)
+    changed_file_count = Column(Integer, nullable=True, default=0)
+    dominant_language = Column(String, nullable=True)
+    languages_json = Column(String, nullable=True)
+    edited_files_json = Column(String, nullable=True)
 
     extra_data = Column(String, nullable=True)
 

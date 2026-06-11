@@ -5,9 +5,9 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.schemas import BrowserEventPayload
+from app.models.schemas import IDEEventPayload
 from app.models.schemas import IngestEventResponse
 from app.models.schemas import OSEventPayload
-from app.models.schemas import VSCodeEventPayload
 from app.services.session_coordinator import SessionCoordinator
 
 router = APIRouter()
@@ -21,7 +21,7 @@ def ingest_status():
         "phase": "session_lifecycle",
         "endpoints": [
             "/api/v1/ingest/os/event",
-            "/api/v1/ingest/vscode/event",
+            "/api/v1/ingest/ide/event",
             "/api/v1/ingest/browser/event",
         ],
     }
@@ -35,12 +35,19 @@ def ingest_os_event(payload: OSEventPayload, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/vscode/event", response_model=IngestEventResponse)
-def ingest_vscode_event(payload: VSCodeEventPayload, db: Session = Depends(get_db)):
+@router.post("/ide/event", response_model=IngestEventResponse)
+def ingest_ide_event(payload: IDEEventPayload, db: Session = Depends(get_db)):
     try:
-        return coordinator.handle_vscode_event(payload, db)
+        return coordinator.handle_ide_event(payload, db)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# Compatibility alias for older extension builds that still POST to the
+# vscode-named endpoint. Same handler, same table (ide_sessions).
+@router.post("/vscode/event", response_model=IngestEventResponse, deprecated=True)
+def ingest_vscode_event_alias(payload: IDEEventPayload, db: Session = Depends(get_db)):
+    return ingest_ide_event(payload, db)
 
 
 @router.post("/browser/event", response_model=IngestEventResponse)

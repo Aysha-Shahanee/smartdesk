@@ -19,8 +19,8 @@ from app.core.database import SessionLocal
 from app.core.time import local_now
 from app.core.time import parse_iso
 from app.models.db import BrowserSessionRecord
+from app.models.db import IDESessionRecord
 from app.models.db import OSSessionRecord
-from app.models.db import VSCodeSessionRecord
 
 logger = logging.getLogger("smartdesk.timeout_job")
 
@@ -105,7 +105,7 @@ class SessionTimeoutJob:
             now_iso = now.isoformat()
 
             total_closed = 0
-            for Model in (OSSessionRecord, VSCodeSessionRecord, BrowserSessionRecord):
+            for Model in (OSSessionRecord, IDESessionRecord, BrowserSessionRecord):
                 open_rows = db.query(Model).filter(Model.session_end.is_(None)).all()
                 stale_rows = [
                     row for row in open_rows if parse_iso(row.updated_at) < threshold_dt
@@ -142,7 +142,7 @@ class SessionTimeoutJob:
 
         total_closed = 0
         try:
-            for Model in (OSSessionRecord, VSCodeSessionRecord, BrowserSessionRecord):
+            for Model in (OSSessionRecord, IDESessionRecord, BrowserSessionRecord):
                 open_rows = db.query(Model).filter(Model.session_end.is_(None)).all()
                 stale_rows = [
                     row for row in open_rows if parse_iso(row.updated_at) < threshold_dt

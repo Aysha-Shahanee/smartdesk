@@ -60,7 +60,7 @@ class WorkPeriodSummary(DashboardSchema):
     duration_sec: int | None = Field(default=None, ge=0)
     primary_source: str | None = None
     has_os_data: bool = False
-    has_vscode_data: bool = False
+    has_ide_data: bool = False
     has_browser_data: bool = False
     has_calendar_data: bool = False
 

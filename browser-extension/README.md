@@ -17,11 +17,14 @@ Tracks active browser tab sessions and sends them to the SmartDesk backend.
 
 | Event | When |
 |---|---|
-| `started` | User switches to a new tab or URL changes |
+| `started` | User switches to a new tab or URL changes (carries a `trigger`: `tab_switch`, `navigation`, `focus`, `install`, `wakeup`) |
 | `ended` | Tab closes, URL changes away, or browser loses focus |
 | `state` | Heartbeat every 30 seconds while tab is active |
 
 Sessions shorter than **3 seconds** are silently dropped (matches backend filter).
+Collection only happens while the browser window is focused — wakeups and
+installs while the browser sits in the background do not open sessions.
+Works in Chromium browsers including Comet, Brave, Edge, and Arc.
 
 ## Domain Categories
 
@@ -56,7 +59,7 @@ Example payload:
   "user_id": "local_user",
   "event": "started",
   "browser_name": "Chrome",
-  "timestamp": "2026-05-12T11:30:00Z",
+  "timestamp": "2026-06-11T11:30:00+05:30",
   "browser_window_id": 1,
   "tab_id": 42,
   "domain": "github.com",

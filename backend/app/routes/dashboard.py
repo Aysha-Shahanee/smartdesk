@@ -9,11 +9,13 @@ Each endpoint accepts:
 
 from datetime import datetime
 from datetime import timezone
+from pathlib import Path
 
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Query
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -73,8 +75,30 @@ def dashboard_status():
             "/dashboard/browser",
             "/dashboard/timeline",
             "/dashboard/sessions",
+            "/dashboard/overview",
+            "/dashboard/ui",
         ],
     }
+
+
+# ------------------------------------------------------------------ #
+# Monitoring overview + UI                                             #
+# ------------------------------------------------------------------ #
+
+@router.get("/overview")
+def get_overview(
+    user_id: str = Query(default="local_user"),
+    db: Session = Depends(get_db),
+):
+    """Health-check overview of all four collection layers."""
+    return _service.get_overview(db, user_id)
+
+
+@router.get("/ui", include_in_schema=False)
+def dashboard_ui():
+    """Small static monitoring dashboard."""
+    page = Path(__file__).resolve().parent.parent / "static" / "dashboard.html"
+    return FileResponse(page, media_type="text/html")
 
 
 # ------------------------------------------------------------------ #

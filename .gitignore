@@ -35,3 +35,6 @@ Thumbs.db
 
 # Archive files (don't commit large zips)
 *.zip
+
+# Google Calendar OAuth secrets & sync state (never commit)
+backend/calendar_store/

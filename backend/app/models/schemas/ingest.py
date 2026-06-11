@@ -23,7 +23,7 @@ class OSEventType(str, Enum):
     SHUTDOWN = "shutdown"
 
 
-class VSCodeEventType(str, Enum):
+class IDEEventType(str, Enum):
     STARTED = "started"
     STATE = "state"
     ENDED = "ended"
@@ -60,7 +60,7 @@ class OSEventPayload(StrictSchema):
     extra_data: dict[str, Any] | None = None
 
 
-class VSCodeCounters(StrictSchema):
+class IDECounters(StrictSchema):
     edit_count: int = Field(default=0, ge=0)
     save_count: int = Field(default=0, ge=0)
     lines_added: int = Field(default=0, ge=0)
@@ -71,7 +71,7 @@ class VSCodeCounters(StrictSchema):
     idle_sec: int = Field(default=0, ge=0)
 
 
-class VSCodeEventPayload(StrictSchema):
+class IDEEventPayload(StrictSchema):
     user_id: str = Field(min_length=0, default="local_user")
 
     @field_validator("user_id", mode="before")
@@ -79,11 +79,14 @@ class VSCodeEventPayload(StrictSchema):
         if not v or not str(v).strip():
             return "local_user"
         return str(v).strip()
-    event: VSCodeEventType
+    event: IDEEventType
     instance_id: str = Field(min_length=1)
     timestamp: datetime
 
-    process_id: int | None = None
+    ide_name: str | None = None         # e.g. "vscode", "antigravity", "cursor"
+    process_id: int | None = None       # extension host PID
+    parent_process_id: int | None = None  # parent PID — matched against OS foreground PID
+    is_window_focused: bool | None = None  # extension's own focus signal
     trigger: str | None = None          # e.g. "activation", "blur", "shutdown"
     workspace_name: str | None = None
     project_path: str | None = None
@@ -92,7 +95,21 @@ class VSCodeEventPayload(StrictSchema):
     active_file_path: str | None = None
     active_file_name: str | None = None
     active_language: str | None = None
-    counters: VSCodeCounters | None = None
+    counters: IDECounters | None = None
+
+    edited_file_count: int | None = None
+    changed_file_count: int | None = None
+    dominant_language: str | None = None
+    languages_json: dict[str, Any] | None = None
+    edited_files_json: list[dict[str, Any]] | None = None
+
+    # Accepted but ignored — sent by older extension builds; dropped from the
+    # final schema because the per-session counters already hold the totals.
+    total_edit_count: int | None = Field(default=None, deprecated=True)
+    total_save_count: int | None = Field(default=None, deprecated=True)
+    total_lines_added: int | None = Field(default=None, deprecated=True)
+    total_lines_deleted: int | None = Field(default=None, deprecated=True)
+
     extra_data: dict[str, Any] | None = None
 
 

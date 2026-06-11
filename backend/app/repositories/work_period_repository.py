@@ -50,19 +50,6 @@ class WorkPeriodRepository:
             .first()
         )
 
-    def get_latest_period_db(
-        self,
-        db: Session,
-        user_id: str,
-    ) -> WorkPeriodRecord | None:
-        """Return the most recent work period (open or closed)."""
-        return (
-            db.query(WorkPeriodRecord)
-            .filter(WorkPeriodRecord.user_id == user_id)
-            .order_by(WorkPeriodRecord.period_start.desc())
-            .first()
-        )
-
     # ------------------------------------------------------------------ #
     # Write                                                                #
     # ------------------------------------------------------------------ #
@@ -84,7 +71,7 @@ class WorkPeriodRepository:
             period_end=None,
             duration_sec=None,
             has_os_data=0,
-            has_vscode_data=0,
+            has_ide_data=0,
             has_browser_data=0,
             has_calendar_data=0,
             primary_source=None,
@@ -115,7 +102,7 @@ class WorkPeriodRepository:
         db: Session,
         period: WorkPeriodRecord,
         has_os: bool,
-        has_vscode: bool,
+        has_ide: bool,
         has_browser: bool,
         has_calendar: bool,
         primary_source: str | None,
@@ -123,7 +110,7 @@ class WorkPeriodRepository:
     ) -> None:
         """Update source-availability flags on an open period."""
         period.has_os_data = 1 if has_os else 0
-        period.has_vscode_data = 1 if has_vscode else 0
+        period.has_ide_data = 1 if has_ide else 0
         period.has_browser_data = 1 if has_browser else 0
         period.has_calendar_data = 1 if has_calendar else 0
         period.primary_source = primary_source

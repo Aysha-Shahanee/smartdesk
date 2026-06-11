@@ -136,7 +136,7 @@ async function loadConfig() {
 
 // ─── Session lifecycle ────────────────────────────────────────────────────────
 
-async function startSession(tab) {
+async function startSession(tab, trigger) {
   await endSession("navigation"); // Close any existing session first
 
   if (!tab?.url || tab.url.startsWith("chrome://") || tab.url.startsWith("about:")) {
@@ -165,6 +165,7 @@ async function startSession(tab) {
     url: tab.url,
     title: tab.title,
     category: classifyDomain(domain),
+    trigger: trigger || "navigation",
   });
 
   scheduleHeartbeat();
@@ -246,7 +247,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
   await loadConfig();
   try {
     const tab = await chrome.tabs.get(tabId);
-    await startSession(tab);
+    await startSession(tab, "tab_switch");
   } catch {
     // Tab may have been closed already
   }
@@ -257,7 +258,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (!changeInfo.url) return;
   if (!tab.active) return;
   await loadConfig();
-  await startSession(tab);
+  await startSession(tab, "navigation");
 });
 
 // Tab closed
@@ -277,18 +278,30 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
   await loadConfig();
   try {
     const [tab] = await chrome.tabs.query({ active: true, windowId });
-    if (tab) await startSession(tab);
+    if (tab) await startSession(tab, "focus");
   } catch {
     // Ignore
   }
 });
 
+// Only collect while the browser is actually the focused window — a wakeup
+// or install while the browser sits in the background must not open sessions.
+async function isBrowserFocused() {
+  try {
+    const win = await chrome.windows.getLastFocused();
+    return Boolean(win && win.focused);
+  } catch {
+    return false;
+  }
+}
+
 // Extension installed / updated → pick up the current active tab
 chrome.runtime.onInstalled.addListener(async () => {
   await loadConfig();
+  if (!(await isBrowserFocused())) return;
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab) await startSession(tab);
+    if (tab) await startSession(tab, "install");
   } catch {
     // Ignore
   }
@@ -297,9 +310,10 @@ chrome.runtime.onInstalled.addListener(async () => {
 // Service worker wakeup → re-attach to current tab
 (async () => {
   await loadConfig();
+  if (!(await isBrowserFocused())) return;
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab) await startSession(tab);
+    if (tab) await startSession(tab, "wakeup");
   } catch {
     // Ignore
   }

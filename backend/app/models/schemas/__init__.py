@@ -11,12 +11,12 @@ from app.models.schemas.dashboard import WorkPeriodSummary
 from app.models.schemas.ingest import BrowserCategory
 from app.models.schemas.ingest import BrowserEventPayload
 from app.models.schemas.ingest import BrowserEventType
+from app.models.schemas.ingest import IDECounters
+from app.models.schemas.ingest import IDEEventPayload
+from app.models.schemas.ingest import IDEEventType
 from app.models.schemas.ingest import IngestEventResponse
 from app.models.schemas.ingest import OSEventPayload
 from app.models.schemas.ingest import OSEventType
-from app.models.schemas.ingest import VSCodeCounters
-from app.models.schemas.ingest import VSCodeEventPayload
-from app.models.schemas.ingest import VSCodeEventType
 
 __all__ = [
     "AppDuration",
@@ -25,7 +25,10 @@ __all__ = [
     "BrowserEventPayload",
     "BrowserEventType",
     "CategoryDuration",
+    "IDECounters",
     "IDEDashboardResponse",
+    "IDEEventPayload",
+    "IDEEventType",
     "IngestEventResponse",
     "NamedDuration",
     "OSDashboardResponse",
@@ -34,8 +37,5 @@ __all__ = [
     "SessionSummary",
     "SessionsDashboardResponse",
     "TimelineDashboardResponse",
-    "VSCodeCounters",
-    "VSCodeEventPayload",
-    "VSCodeEventType",
     "WorkPeriodSummary",
 ]

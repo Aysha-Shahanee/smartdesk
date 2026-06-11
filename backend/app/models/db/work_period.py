@@ -26,7 +26,7 @@ class WorkPeriodRecord(Base):
     primary_domain = Column(String, nullable=True)
 
     has_os_data = Column(Integer, nullable=False, default=0)
-    has_vscode_data = Column(Integer, nullable=False, default=0)
+    has_ide_data = Column(Integer, nullable=False, default=0)
     has_browser_data = Column(Integer, nullable=False, default=0)
     has_calendar_data = Column(Integer, nullable=False, default=0)
 

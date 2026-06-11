@@ -1,5 +1,14 @@
-// SmartDesk VS Code Extension - v2.0.0
+// SmartDesk IDE Extension - v3.0.0
 // Session-based architecture: emits "started", "state", and "ended" events.
+//
+// Works in any VS Code-based IDE (VS Code, Antigravity, Cursor, Windsurf...).
+// Collection rules:
+//   - IDE window focused           -> collect normally (foreground).
+//   - IDE blurred but edits arrive -> AI working in background: keep
+//     collecting, flagged is_window_focused=false (backend stores
+//     is_foreground=0 / collection_reason=background_ai).
+//   - IDE blurred and idle         -> session ends after a grace period;
+//     nothing is collected until focus or activity returns.
 
 const vscode = require("vscode");
 const http = require("http");
@@ -20,11 +29,15 @@ function cfg(key) {
   return value;
 }
 
-const INGEST_PATH = "/api/v1/ingest/vscode/event";
+const INGEST_PATH = "/api/v1/ingest/ide/event";
 const IDLE_THRESHOLD_MS = 2 * 60 * 1000;
 const STATE_INTERVAL_MS = 45 * 1000;
+// How long the IDE may stay blurred with no edit activity before the
+// session is closed (covers short blips and background AI pauses).
+const BLUR_GRACE_MS = 60 * 1000;
 const RETRY_QUEUE_MAX = 50;
 const MAX_CHANGED_FILES = 500;
+const MAX_EDITED_FILES = 200;
 const IGNORED_PATH_PARTS = new Set([
   ".git",
   "node_modules",
@@ -58,9 +71,12 @@ let counters = newCounters();
 let lastActivityTime = Date.now();
 let idleStartTime = null;
 let totalIdleSec = 0;
+let windowFocused = vscode.window.state ? vscode.window.state.focused : true;
+let lastEditActivityTime = Date.now();
 
 const retryQueue = [];
-const changedFiles = new Map();
+const changedFiles = new Map(); // disk-level changes (file watcher)
+const editedFiles = new Map();  // editor-level edits, incl. AI edits to non-active files
 const fileEventCounts = { created: 0, modified: 0, deleted: 0 };
 
 function newCounters() {
@@ -74,6 +90,15 @@ function newCounters() {
     debug_run_count: 0,
     idle_sec: 0,
   };
+}
+
+function getIdeName() {
+  const appName = (vscode.env.appName || "").toLowerCase();
+  if (appName.includes("antigravity")) return "antigravity";
+  if (appName.includes("cursor")) return "cursor";
+  if (appName.includes("windsurf")) return "windsurf";
+  if (appName.includes("visual studio code")) return "vscode";
+  return appName.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "unknown_ide";
 }
 
 function nowIso() {
@@ -145,19 +170,20 @@ function getWorkspaceInfo() {
   };
 }
 
+let lastActiveFileInfo = {};
+
+// Falls back to the last-known file so heartbeats fired while focus sits on
+// a non-editor panel (terminal, chat, settings) don't blank these fields.
 function getActiveFileInfo() {
   const editor = vscode.window.activeTextEditor;
-  if (!editor || editor.document.uri.scheme !== "file") return {};
+  if (!editor || editor.document.uri.scheme !== "file") return lastActiveFileInfo;
   const doc = editor.document;
-  return {
+  lastActiveFileInfo = {
     active_file_path: doc.uri.fsPath,
     active_file_name: path.basename(doc.fileName),
     active_language: doc.languageId,
   };
-}
-
-function getProcessId() {
-  return process.pid;
+  return lastActiveFileInfo;
 }
 
 function relativeWorkspacePath(filePath) {
@@ -199,10 +225,58 @@ function recordFileEvent(uri, eventType) {
   }
 }
 
+function recordEditedFile(doc, linesAdded, linesDeleted) {
+  if (!shouldTrackFile(doc.uri.fsPath)) return;
+
+  const relPath = relativeWorkspacePath(doc.uri.fsPath);
+  const entry = editedFiles.get(relPath) || {
+    path: relPath,
+    language: doc.languageId,
+    edits: 0,
+    lines_added: 0,
+    lines_deleted: 0,
+    by_ai_while_blurred: false,
+  };
+
+  entry.language = doc.languageId;
+  entry.edits += 1;
+  entry.lines_added += linesAdded;
+  entry.lines_deleted += linesDeleted;
+  if (!windowFocused) {
+    entry.by_ai_while_blurred = true;
+  }
+  editedFiles.set(relPath, entry);
+
+  if (editedFiles.size > MAX_EDITED_FILES) {
+    const firstKey = editedFiles.keys().next().value;
+    editedFiles.delete(firstKey);
+  }
+}
+
+function languageBreakdown() {
+  const langs = {};
+  for (const entry of editedFiles.values()) {
+    const lang = entry.language || "unknown";
+    langs[lang] = (langs[lang] || 0) + entry.edits;
+  }
+  return langs;
+}
+
+function dominantLanguage(langs) {
+  let best = null;
+  let bestCount = 0;
+  for (const [lang, count] of Object.entries(langs)) {
+    if (count > bestCount) {
+      best = lang;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
 function getExtraData() {
   return {
     changed_files: Array.from(changedFiles.values()),
-    changed_file_count: changedFiles.size,
     file_event_counts: { ...fileEventCounts },
   };
 }
@@ -215,16 +289,26 @@ function currentPayload(event, trigger) {
     counters.idle_sec = totalIdleSec;
   }
 
+  const langs = languageBreakdown();
+
   return {
     user_id: cfg("userId"),
     event,
     instance_id: instanceId,
     timestamp: nowIso(),
-    process_id: getProcessId(),
+    ide_name: getIdeName(),
+    process_id: process.pid,
+    parent_process_id: process.ppid || null,
+    is_window_focused: windowFocused,
     trigger,
     ...getWorkspaceInfo(),
     ...getActiveFileInfo(),
     counters,
+    edited_file_count: editedFiles.size,
+    changed_file_count: changedFiles.size,
+    dominant_language: dominantLanguage(langs),
+    languages_json: langs,
+    edited_files_json: Array.from(editedFiles.values()),
     extra_data: getExtraData(),
   };
 }
@@ -294,6 +378,7 @@ function resetSessionTracking() {
   totalIdleSec = 0;
   counters = newCounters();
   changedFiles.clear();
+  editedFiles.clear();
   fileEventCounts.created = 0;
   fileEventCounts.modified = 0;
   fileEventCounts.deleted = 0;
@@ -304,7 +389,7 @@ function startSession(trigger) {
   sessionStart = nowIso();
   resetSessionTracking();
   postEvent({ ...currentPayload("started", trigger || "activation"), timestamp: sessionStart });
-  console.log("[SmartDesk] Session started.");
+  console.log("[SmartDesk] Session started:", trigger);
 }
 
 function sendState(trigger) {
@@ -320,7 +405,7 @@ function endSession(trigger) {
   }
   counters.idle_sec = totalIdleSec;
   postEvent(currentPayload("ended", trigger || "deactivation"));
-  console.log("[SmartDesk] Session ended.");
+  console.log("[SmartDesk] Session ended:", trigger);
   sessionStart = null;
   resetSessionTracking();
 }
@@ -334,6 +419,14 @@ function recordActivity() {
   lastActivityTime = now;
 }
 
+// Edit-shaped activity (typing, AI edits, saves, file changes). This is the
+// signal that keeps a blurred session alive — focus alone is handled by
+// recordActivity().
+function recordEditActivity() {
+  recordActivity();
+  lastEditActivityTime = Date.now();
+}
+
 function checkIdle() {
   const now = Date.now();
   const elapsed = now - lastActivityTime;
@@ -343,8 +436,18 @@ function checkIdle() {
   }
 }
 
+// While blurred: end the session once no edits arrived for BLUR_GRACE_MS.
+// While AI keeps editing in the background, the session stays open and is
+// reported with is_window_focused=false.
+function checkBlurredSession() {
+  if (windowFocused || !sessionStart) return;
+  if (Date.now() - lastEditActivityTime >= BLUR_GRACE_MS) {
+    endSession("blur_idle");
+  }
+}
+
 function activate(context) {
-  console.log("[SmartDesk] Extension activating...");
+  console.log(`[SmartDesk] Extension activating in ${getIdeName()}...`);
 
   if (vscode.workspace.workspaceFolders?.length || vscode.window.activeTextEditor) {
     startSession("activation");
@@ -353,23 +456,31 @@ function activate(context) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((e) => {
       if (e.document.uri.scheme !== "file") return;
-      recordActivity();
-      if (!sessionStart) startSession("edit");
+      recordEditActivity();
+      // Edits while blurred mean an AI agent is working — keep collecting.
+      if (!sessionStart) startSession(windowFocused ? "edit" : "background_ai_edit");
       recordFileEvent(e.document.uri, "modified");
 
+      let linesAdded = 0;
+      let linesDeleted = 0;
       e.contentChanges.forEach((change) => {
         counters.edit_count += 1;
-        counters.lines_added += Math.max(0, change.text.split("\n").length - 1);
-        counters.lines_deleted += Math.max(0, change.range.end.line - change.range.start.line);
+        const added = Math.max(0, change.text.split("\n").length - 1);
+        const deleted = Math.max(0, change.range.end.line - change.range.start.line);
+        counters.lines_added += added;
+        counters.lines_deleted += deleted;
+        linesAdded += added;
+        linesDeleted += deleted;
       });
+      recordEditedFile(e.document, linesAdded, linesDeleted);
     })
   );
 
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((doc) => {
       if (doc.uri.scheme !== "file") return;
-      recordActivity();
-      if (!sessionStart) startSession("save");
+      recordEditActivity();
+      if (!sessionStart) startSession(windowFocused ? "save" : "background_ai_save");
       recordFileEvent(doc.uri, "modified");
       counters.save_count += 1;
     })
@@ -381,7 +492,7 @@ function activate(context) {
       const newFile = editor.document.uri.fsPath;
       if (newFile !== lastActiveFile) {
         recordActivity();
-        if (!sessionStart) startSession("file_switch");
+        if (!sessionStart && windowFocused) startSession("file_switch");
         counters.file_switch_count += 1;
         lastActiveFile = newFile;
       }
@@ -392,29 +503,20 @@ function activate(context) {
   context.subscriptions.push(
     watcher,
     watcher.onDidCreate((uri) => {
-      const hasActiveEditor =
-        vscode.window.activeTextEditor &&
-        vscode.window.activeTextEditor.document.uri.scheme === "file";
-      if (!hasActiveEditor && !sessionStart) return;
-      recordActivity();
+      if (!sessionStart && !windowFocused) return;
+      recordEditActivity();
       if (!sessionStart) startSession("file_create");
       recordFileEvent(uri, "created");
     }),
     watcher.onDidChange((uri) => {
-      const hasActiveEditor =
-        vscode.window.activeTextEditor &&
-        vscode.window.activeTextEditor.document.uri.scheme === "file";
-      if (!hasActiveEditor && !sessionStart) return;
-      recordActivity();
+      if (!sessionStart && !windowFocused) return;
+      recordEditActivity();
       if (!sessionStart) startSession("file_change");
       recordFileEvent(uri, "modified");
     }),
     watcher.onDidDelete((uri) => {
-      const hasActiveEditor =
-        vscode.window.activeTextEditor &&
-        vscode.window.activeTextEditor.document.uri.scheme === "file";
-      if (!hasActiveEditor && !sessionStart) return;
-      recordActivity();
+      if (!sessionStart && !windowFocused) return;
+      recordEditActivity();
       if (!sessionStart) startSession("file_delete");
       recordFileEvent(uri, "deleted");
     })
@@ -423,7 +525,7 @@ function activate(context) {
   context.subscriptions.push(
     vscode.window.onDidOpenTerminal(() => {
       recordActivity();
-      if (!sessionStart) startSession("terminal");
+      if (!sessionStart && windowFocused) startSession("terminal");
       counters.terminal_command_count += 1;
     })
   );
@@ -431,18 +533,27 @@ function activate(context) {
   context.subscriptions.push(
     vscode.debug.onDidStartDebugSession(() => {
       recordActivity();
-      if (!sessionStart) startSession("debug");
+      if (!sessionStart && windowFocused) startSession("debug");
       counters.debug_run_count += 1;
     })
   );
 
   context.subscriptions.push(
     vscode.window.onDidChangeWindowState((state) => {
-      if (!state.focused) {
-        endSession("blur");
-      } else {
+      windowFocused = state.focused;
+      if (state.focused) {
         recordActivity();
-        if (!sessionStart) startSession("focus");
+        // A session that was open while blurred is background-AI work —
+        // close it so foreground work starts a clean row (one row never
+        // mixes foreground and background time).
+        if (sessionStart) endSession("refocus");
+        startSession("focus");
+      } else if (sessionStart) {
+        // Close the foreground row at the blur boundary. If AI keeps
+        // editing in the background, the next edit opens a new session
+        // flagged is_window_focused=false (background_ai).
+        endSession("blur");
+        lastEditActivityTime = Date.now();
       }
     })
   );
@@ -455,9 +566,11 @@ function activate(context) {
   );
 
   const idleTimer = setInterval(checkIdle, 30_000);
+  const blurTimer = setInterval(checkBlurredSession, 15_000);
   const stateTimer = setInterval(() => sendState("heartbeat"), STATE_INTERVAL_MS);
   context.subscriptions.push(
     { dispose: () => clearInterval(idleTimer) },
+    { dispose: () => clearInterval(blurTimer) },
     { dispose: () => clearInterval(stateTimer) }
   );
 
