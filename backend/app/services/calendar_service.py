@@ -31,6 +31,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.config import SCHEMA_VERSION
 from app.core.config import settings
 from app.core.time import APP_TZ
 from app.core.time import local_now_iso
@@ -41,7 +42,6 @@ from app.models.db import CalendarEventRecord
 logger = logging.getLogger("smartdesk.calendar")
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
-SCHEMA_VERSION = "2"
 
 # Google may return more scopes than requested (e.g. when the account
 # already granted this app other scopes in the past). Without this flag
@@ -330,6 +330,7 @@ class CalendarService:
         if record is None:
             record = CalendarEventRecord(
                 user_id=user_id,
+                device_id=settings.DEVICE_ID,
                 event_id=event_id,
                 source="google",
                 schema_version=SCHEMA_VERSION,
@@ -344,6 +345,7 @@ class CalendarService:
         else:
             for key, value in fields.items():
                 setattr(record, key, value)
+            record.device_id = settings.DEVICE_ID
             record.google_updated_at = google_updated
             record.last_synced_at = now_iso
             record.updated_at = now_iso

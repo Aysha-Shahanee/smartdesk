@@ -122,6 +122,8 @@ Also: `GET /` (service status), `GET /health/`, `GET /docs` (Swagger UI).
 
 Single file: `backend/smartdesk.db` (SQLite).
 
+Every row carries `device_id` (which machine collected it — auto-detected hostname) and `schema_version`, so data from multiple devices can be merged and used for training/aggregation without ambiguity.
+
 | Table | Purpose |
 |---|---|
 | `os_sessions` | One row per foreground window focus period |
@@ -147,6 +149,7 @@ Set in `backend/.env` (see `backend/.env.example`):
 |---|---|---|
 | `DATABASE_URL` | `sqlite:///./smartdesk.db` | SQLAlchemy DB URL |
 | `TIMEZONE` | `Asia/Colombo` | Timezone for all stored timestamps |
+| `DEVICE_ID` | _(hostname)_ | Identifies which device collected each row; auto-detected when empty |
 | `LOG_LEVEL` | `INFO` | Logging level |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | _(empty)_ | Calendar OAuth client (option A) |
 | `GOOGLE_CREDENTIALS_FILE` | `./calendar_store/credentials.json` | Calendar OAuth client (option B) |

@@ -318,6 +318,7 @@ class DashboardService:
         return {
             "generated_at": local_now_iso(),
             "timezone": settings.TIMEZONE,
+            "device_id": settings.DEVICE_ID,
             "user_id": user_id,
             "layers": {
                 "os": os_layer,

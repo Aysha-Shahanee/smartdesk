@@ -64,9 +64,13 @@ class WorkPeriodRepository:
         """Create and flush a new open work period row."""
         from uuid import uuid4
 
+        from app.core.config import SCHEMA_VERSION, settings
+
         period = WorkPeriodRecord(
             id=str(uuid4()),
             user_id=user_id,
+            device_id=settings.DEVICE_ID,
+            schema_version=SCHEMA_VERSION,
             period_start=period_start,
             period_end=None,
             duration_sec=None,

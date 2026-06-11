@@ -1,6 +1,11 @@
+import socket
 from typing import List
 
 from pydantic_settings import BaseSettings
+
+# Stamped on every collected row. Bump when the row shape changes so
+# training/aggregation pipelines can tell schema generations apart.
+SCHEMA_VERSION = "3"
 
 
 class Settings(BaseSettings):
@@ -10,6 +15,10 @@ class Settings(BaseSettings):
 
     # All stored/returned timestamps use this timezone.
     TIMEZONE: str = "Asia/Colombo"
+
+    # Identifies which device collected each row (multi-device aggregation).
+    # Empty = auto-detect the machine hostname.
+    DEVICE_ID: str = ""
 
     # ── Google Calendar ────────────────────────────────────────────────
     # Developers can supply credentials either via env vars (client id +
@@ -41,3 +50,6 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+if not settings.DEVICE_ID:
+    settings.DEVICE_ID = socket.gethostname().lower()

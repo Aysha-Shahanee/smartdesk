@@ -22,6 +22,8 @@ def upgrade() -> None:
         "os_sessions",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("user_id", sa.String(), nullable=False),
+        sa.Column("device_id", sa.String(), nullable=True),
+        sa.Column("schema_version", sa.String(), nullable=True),
         sa.Column("app_name", sa.String(), nullable=False),
         sa.Column("app_category", sa.String(), nullable=True),
         sa.Column("window_title", sa.String(), nullable=True),
@@ -42,11 +44,14 @@ def upgrade() -> None:
     op.create_index("ix_os_sessions_app_name", "os_sessions", ["app_name"])
     op.create_index("ix_os_sessions_process_id", "os_sessions", ["process_id"])
     op.create_index("ix_os_sessions_user_start", "os_sessions", ["user_id", "session_start"])
+    op.create_index("ix_os_sessions_device_id", "os_sessions", ["device_id"])
 
     op.create_table(
         "ide_sessions",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("user_id", sa.String(), nullable=False),
+        sa.Column("device_id", sa.String(), nullable=True),
+        sa.Column("schema_version", sa.String(), nullable=True),
         sa.Column("ide_name", sa.String(), nullable=True),
         sa.Column("instance_id", sa.String(), nullable=False),
         sa.Column("process_id", sa.Integer(), nullable=True),
@@ -89,11 +94,14 @@ def upgrade() -> None:
     op.create_index("ix_ide_sessions_is_foreground", "ide_sessions", ["is_foreground"])
     op.create_index("ix_ide_sessions_process_id", "ide_sessions", ["process_id"])
     op.create_index("ix_ide_sessions_user_start", "ide_sessions", ["user_id", "session_start"])
+    op.create_index("ix_ide_sessions_device_id", "ide_sessions", ["device_id"])
 
     op.create_table(
         "browser_sessions",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("user_id", sa.String(), nullable=False),
+        sa.Column("device_id", sa.String(), nullable=True),
+        sa.Column("schema_version", sa.String(), nullable=True),
         sa.Column("browser_name", sa.String(), nullable=False),
         sa.Column("browser_window_id", sa.Integer(), nullable=True),
         sa.Column("tab_id", sa.Integer(), nullable=True),
@@ -120,11 +128,13 @@ def upgrade() -> None:
     op.create_index(
         "ix_browser_sessions_user_start", "browser_sessions", ["user_id", "session_start"]
     )
+    op.create_index("ix_browser_sessions_device_id", "browser_sessions", ["device_id"])
 
     op.create_table(
         "calendar_events",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("user_id", sa.String(), nullable=False),
+        sa.Column("device_id", sa.String(), nullable=True),
         sa.Column("event_id", sa.String(), nullable=False),
         sa.Column("title", sa.String(), nullable=True),
         sa.Column("description", sa.String(), nullable=True),
@@ -160,6 +170,8 @@ def upgrade() -> None:
         "work_periods",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("user_id", sa.String(), nullable=False),
+        sa.Column("device_id", sa.String(), nullable=True),
+        sa.Column("schema_version", sa.String(), nullable=True),
         sa.Column("period_start", sa.String(), nullable=False),
         sa.Column("period_end", sa.String(), nullable=True),
         sa.Column("duration_sec", sa.Integer(), nullable=True),
@@ -180,6 +192,7 @@ def upgrade() -> None:
     op.create_index("ix_work_periods_primary_source", "work_periods", ["primary_source"])
     op.create_index("ix_work_periods_user_id", "work_periods", ["user_id"])
     op.create_index("ix_work_periods_user_start", "work_periods", ["user_id", "period_start"])
+    op.create_index("ix_work_periods_device_id", "work_periods", ["device_id"])
 
 
 def downgrade() -> None:

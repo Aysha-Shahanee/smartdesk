@@ -15,6 +15,8 @@ class WorkPeriodRecord(Base):
 
     id = Column(String, primary_key=True)
     user_id = Column(String, nullable=False, index=True)
+    device_id = Column(String, nullable=True, index=True)
+    schema_version = Column(String, nullable=True)
 
     period_start = Column(String, nullable=False, index=True)
     period_end = Column(String, nullable=True)

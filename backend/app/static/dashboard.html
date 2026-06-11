@@ -143,7 +143,8 @@ async function refresh() {
     const res = await fetch("/dashboard/overview");
     const data = await res.json();
     document.getElementById("meta").textContent =
-      "timezone " + data.timezone + " · updated " + fmtTime(data.generated_at);
+      "device " + data.device_id + " · timezone " + data.timezone +
+      " · updated " + fmtTime(data.generated_at);
 
     const os = data.layers.os;
     setDot("os", os.status);

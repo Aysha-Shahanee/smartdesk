@@ -53,6 +53,7 @@ class OSEventPayload(StrictSchema):
     event: OSEventType
     timestamp: datetime
 
+    device_id: str | None = None        # defaults to the backend's own DEVICE_ID
     app_name: str | None = None
     app_category: str | None = None
     window_title: str | None = None
@@ -83,6 +84,7 @@ class IDEEventPayload(StrictSchema):
     instance_id: str = Field(min_length=1)
     timestamp: datetime
 
+    device_id: str | None = None        # defaults to the backend's own DEVICE_ID
     ide_name: str | None = None         # e.g. "vscode", "antigravity", "cursor"
     process_id: int | None = None       # extension host PID
     parent_process_id: int | None = None  # parent PID — matched against OS foreground PID
@@ -125,6 +127,7 @@ class BrowserEventPayload(StrictSchema):
     browser_name: str = Field(min_length=1)
     timestamp: datetime
 
+    device_id: str | None = None        # defaults to the backend's own DEVICE_ID
     browser_window_id: int | None = None
     tab_id: int | None = None
     process_id: int | None = None

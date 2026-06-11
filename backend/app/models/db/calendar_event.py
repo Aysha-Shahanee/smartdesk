@@ -16,6 +16,8 @@ class CalendarEventRecord(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String, nullable=False, index=True)
+    # Which device performed the sync that created/updated this row.
+    device_id = Column(String, nullable=True)
     # Google event id — (user_id, event_id) is the upsert key: a re-sync
     # updates the existing row in place, never inserting a duplicate.
     event_id = Column(String, nullable=False, index=True)

@@ -8,10 +8,13 @@ class OSSessionRecord(Base):
         Index("ix_os_sessions_user_start", "user_id", "session_start"),
         Index("ix_os_sessions_process_id", "process_id"),
         Index("ix_os_sessions_app_name", "app_name"),
+        Index("ix_os_sessions_device_id", "device_id"),
     )
 
     id = Column(String, primary_key=True)
     user_id = Column(String, nullable=False)
+    device_id = Column(String, nullable=True)
+    schema_version = Column(String, nullable=True)
 
     app_name = Column(String, nullable=False)
     app_category = Column(String, nullable=True)
@@ -41,10 +44,13 @@ class IDESessionRecord(Base):
         Index("ix_ide_sessions_instance_id", "instance_id"),
         Index("ix_ide_sessions_process_id", "process_id"),
         Index("ix_ide_sessions_is_foreground", "is_foreground"),
+        Index("ix_ide_sessions_device_id", "device_id"),
     )
 
     id = Column(String, primary_key=True)
     user_id = Column(String, nullable=False)
+    device_id = Column(String, nullable=True)
+    schema_version = Column(String, nullable=True)
     ide_name = Column(String, nullable=True)
     instance_id = Column(String, nullable=False)
     process_id = Column(Integer, nullable=True)
@@ -100,10 +106,13 @@ class BrowserSessionRecord(Base):
         Index("ix_browser_sessions_window_id", "browser_window_id"),
         Index("ix_browser_sessions_domain", "domain"),
         Index("ix_browser_sessions_is_foreground", "is_foreground"),
+        Index("ix_browser_sessions_device_id", "device_id"),
     )
 
     id = Column(String, primary_key=True)
     user_id = Column(String, nullable=False)
+    device_id = Column(String, nullable=True)
+    schema_version = Column(String, nullable=True)
     browser_name = Column(String, nullable=False)
     browser_window_id = Column(Integer, nullable=True)
     tab_id = Column(Integer, nullable=True)

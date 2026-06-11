@@ -4,6 +4,8 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
+from app.core.config import SCHEMA_VERSION
+from app.core.config import settings
 from app.core.time import ensure_aware
 from app.core.time import parse_iso
 from app.core.time import to_local_iso
@@ -204,6 +206,8 @@ class SessionCoordinator:
         session = OSSessionRecord(
             id=self._new_id(),
             user_id=payload.user_id,
+            device_id=payload.device_id or settings.DEVICE_ID,
+            schema_version=SCHEMA_VERSION,
             app_name=payload.app_name or "Unknown",
             app_category=payload.app_category,
             window_title=payload.window_title,
@@ -272,6 +276,8 @@ class SessionCoordinator:
         session = IDESessionRecord(
             id=self._new_id(),
             user_id=payload.user_id,
+            device_id=payload.device_id or settings.DEVICE_ID,
+            schema_version=SCHEMA_VERSION,
             instance_id=payload.instance_id,
             session_start=timestamp,
             idle_sec=0,
@@ -386,6 +392,8 @@ class SessionCoordinator:
         session = BrowserSessionRecord(
             id=self._new_id(),
             user_id=payload.user_id,
+            device_id=payload.device_id or settings.DEVICE_ID,
+            schema_version=SCHEMA_VERSION,
             browser_name=payload.browser_name,
             browser_window_id=payload.browser_window_id,
             tab_id=payload.tab_id,
