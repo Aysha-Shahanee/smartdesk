@@ -1,0 +1,11 @@
+venv/
+**pycache**/
+*.pth
+*.pt
+
+FER2013/
+emotion_model.pth
+RAF-DB/
+data/
+
+*.pyc
