@@ -189,3 +189,8 @@ backend/
 vscode-extension/       IDE extension (VS Code, Antigravity, Cursor, ...)
 browser-extension/      Chromium extension (Manifest V3)
 ```
+
+i am testing how is the ide working.
+
+hey, hello! world.
+

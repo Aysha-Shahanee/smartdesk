@@ -376,6 +376,12 @@ function sendOrQueue(payload) {
 
 function resetSessionTracking() {
   totalIdleSec = 0;
+  // Drop any idle baseline carried over from a previous or blurred period.
+  // Without this, idle that accrued before the session existed leaked into
+  // the new row on the next refocus (producing idle_sec > duration_sec).
+  idleStartTime = null;
+  lastActivityTime = Date.now();
+  lastEditActivityTime = Date.now();
   counters = newCounters();
   changedFiles.clear();
   editedFiles.clear();
@@ -428,11 +434,22 @@ function recordEditActivity() {
 }
 
 function checkIdle() {
+  // Idle only accrues inside a focused session. Time spent blurred or
+  // between sessions is not idle: the row is closed at the blur boundary,
+  // and AI work in a blurred window arrives as edits (activity), not idle.
+  // Gating here also stops idle from a prior away-period from leaking into
+  // the next session.
+  if (!sessionStart || !windowFocused) return;
+
   const now = Date.now();
   const elapsed = now - lastActivityTime;
 
+  // Count the whole inactivity stretch from the last real activity (not from
+  // threshold + onward). This also captures laptop-sleep gaps: while
+  // suspended the timer is frozen and no input or AI edits occur, so on the
+  // first tick after resume the full gap is attributed to idle.
   if (elapsed >= IDLE_THRESHOLD_MS && !idleStartTime) {
-    idleStartTime = lastActivityTime + IDLE_THRESHOLD_MS;
+    idleStartTime = lastActivityTime;
   }
 }
 

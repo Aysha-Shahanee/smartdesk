@@ -547,17 +547,16 @@ class SessionCoordinator:
         )
 
     def _update_foreground_flags(self, payload: OSEventPayload, db: Session) -> None:
-        db.query(IDESessionRecord).filter(
-            IDESessionRecord.session_end.is_(None)
-        ).update(
-            {"is_foreground": 0, "confirmed_by_os": 0}, synchronize_session=False
-        )
-        db.query(BrowserSessionRecord).filter(
-            BrowserSessionRecord.session_end.is_(None)
-        ).update(
-            {"is_foreground": 0, "confirmed_by_os": 0}, synchronize_session=False
-        )
-
+        # Promote-only. We never blank open sessions to is_foreground=0 here:
+        # the extensions open a fresh row at every focus/blur boundary (one row
+        # is a clean foreground OR background period), so demotion is the
+        # extension's job — it closes the foreground row on blur and opens a
+        # new background row if work continues. Blanking here used to race the
+        # extension's blur event: when focus moved to a non-IDE/non-browser app
+        # (terminal, explorer), the still-open IDE row was reset to 0 and never
+        # re-promoted, then closed by blur — persisting is_foreground=0 with
+        # collection_reason='foreground'. This method now only *confirms*
+        # foreground sessions the OS can positively identify.
         if payload.process_id is not None:
             # Match the IDE session whose extension-host PID *or* parent
             # PID equals the OS foreground window PID.
