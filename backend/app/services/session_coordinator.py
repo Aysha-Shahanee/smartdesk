@@ -1,4 +1,5 @@
 import json
+import threading
 from datetime import datetime
 from uuid import uuid4
 
@@ -38,6 +39,11 @@ BROWSER_NAME_KEYWORDS = (
     "comet", "arc", "vivaldi",
 )
 
+# IDE focus flicker (VS Code emits redundant/rapid window-state events) opens
+# 0–2s sessions with no edits. Like the browser layer's <3s rule, drop these
+# empty slivers on close so the timeline reads one row per real focus period.
+MIN_IDE_SESSION_SEC = 3
+
 
 def _looks_like_ide(value: str) -> bool:
     value = (value or "").lower()
@@ -52,6 +58,17 @@ def _looks_like_browser(value: str, browser_name: str | None = None) -> bool:
 
 
 class SessionCoordinator:
+    def __init__(self) -> None:
+        # The IDE extension fires "ended" + "started" as two separate async
+        # POSTs at every focus change, and FastAPI runs the sync ingest
+        # endpoints on a threadpool — so two events for one instance_id can be
+        # processed concurrently, each with its own DB connection. Without
+        # serialization, two "started" events both pass the
+        # close-then-open check and insert overlapping duplicate rows (the
+        # same wall-clock span counted N times). One lock per coordinator
+        # (the router holds a single instance) makes IDE handling atomic.
+        self._ide_lock = threading.Lock()
+
     def handle_os_event(self, payload: OSEventPayload, db: Session) -> IngestEventResponse:
         if payload.event == OSEventType.FOCUSED:
             self._require(payload.app_name, "app_name is required for focused OS events")
@@ -92,11 +109,25 @@ class SessionCoordinator:
     def handle_ide_event(
         self, payload: IDEEventPayload, db: Session
     ) -> IngestEventResponse:
+        with self._ide_lock:
+            return self._handle_ide_event_locked(payload, db)
+
+    def _handle_ide_event_locked(
+        self, payload: IDEEventPayload, db: Session
+    ) -> IngestEventResponse:
         if payload.event == IDEEventType.STARTED:
+            # Close any orphaned open session, but do NOT adopt this started
+            # event's counters into it: a "started" payload carries freshly
+            # reset counters (idle_sec=0, edit_count=0, ...) that belong to the
+            # NEW session. Applying them clobbered the closing row's accrued
+            # idle/edits — e.g. a 5-minute idle period closed by the next
+            # started event was wiped to idle_sec=0. Keep the row's own
+            # last-heartbeat values instead.
             self._close_ide_session(
                 payload,
                 "next_session",
                 db,
+                apply_payload=False,
             )
             is_foreground = self._is_foreground(payload, db)
             session = self._open_ide_session(payload, is_foreground, db)
@@ -311,17 +342,46 @@ class SessionCoordinator:
         payload: IDEEventPayload,
         closed_by: str,
         db: Session,
+        apply_payload: bool = True,
     ) -> IDESessionRecord | None:
         sessions = self._get_open_ide_sessions(payload.user_id, payload.instance_id, db)
         if not sessions:
             return None
 
-        session = sessions[0]
-        self._apply_ide_payload_update(session, payload)
+        # Only an ENDED event carries the session's real final counters; a
+        # STARTED-path close must not overwrite them with the new session's
+        # zeros (see the STARTED handler).
+        if apply_payload:
+            self._apply_ide_payload_update(sessions[0], payload)
+        survivor: IDESessionRecord | None = None
         for open_session in sessions:
             self._close_timed_session(open_session, payload.timestamp, closed_by)
+            # Drop rows that captured nothing worth keeping:
+            #  - empty background_ai: a blurred IDE produced no edits, so per
+            #    policy "blurred + idle -> collect nothing".
+            #  - empty sliver: a sub-3s foreground row from focus flicker.
+            if self._is_empty_background(open_session) or self._is_empty_sliver(open_session):
+                db.delete(open_session)
+            elif survivor is None:
+                survivor = open_session
         db.flush()
-        return session
+        return survivor
+
+    @staticmethod
+    def _is_empty_background(session: IDESessionRecord) -> bool:
+        return (
+            session.collection_reason == "background_ai"
+            and not session.edit_count
+            and not session.save_count
+        )
+
+    @staticmethod
+    def _is_empty_sliver(session: IDESessionRecord) -> bool:
+        return (
+            (session.duration_sec or 0) < MIN_IDE_SESSION_SEC
+            and not session.edit_count
+            and not session.save_count
+        )
 
     def _get_open_ide_sessions(
         self, user_id: str, instance_id: str, db: Session
@@ -626,17 +686,30 @@ class SessionCoordinator:
         )
 
     def _close_timed_session(self, session, timestamp: datetime, closed_by: str) -> None:
-        end_time = self._iso(timestamp)
-        start_time = parse_iso(session.session_start)
-        duration_sec = max(
-            0,
-            int((ensure_aware(timestamp) - ensure_aware(start_time)).total_seconds()),
-        )
+        start_dt = ensure_aware(parse_iso(session.session_start))
+        end_dt = ensure_aware(timestamp)
+        # Never stamp an end before the start. The extension fires ended +
+        # started as two async POSTs, so a close can arrive carrying an
+        # out-of-order (earlier) timestamp; the old max(0, ...) clamped the
+        # duration to 0 but still wrote end<start, silently dropping the row's
+        # real time. Pin the end to the start in that case (0-length close).
+        if end_dt < start_dt:
+            end_dt = start_dt
+        duration_sec = int((end_dt - start_dt).total_seconds())
 
+        end_time = to_local_iso(end_dt)
         session.session_end = end_time
         session.duration_sec = duration_sec
         session.closed_by = closed_by
         session.updated_at = end_time
+
+        # Idle can never exceed the session's wall-clock span. The extension's
+        # idle counter is wall-clock based and can drift past the backend's
+        # event-timestamp duration, so clamp it as a safety net (otherwise the
+        # dashboard reports idle_sec > duration_sec).
+        idle = getattr(session, "idle_sec", None)
+        if idle is not None and idle > duration_sec:
+            session.idle_sec = duration_sec
 
     def _json(self, value: dict | None) -> str | None:
         if value is None:

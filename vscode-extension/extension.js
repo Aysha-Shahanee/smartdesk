@@ -1,4 +1,4 @@
-// SmartDesk IDE Extension - v3.0.0
+// SmartDesk IDE Extension - v3.1.2
 // Session-based architecture: emits "started", "state", and "ended" events.
 //
 // Works in any VS Code-based IDE (VS Code, Antigravity, Cursor, Windsurf...).
@@ -519,19 +519,29 @@ function activate(context) {
   const watcher = vscode.workspace.createFileSystemWatcher("**/*");
   context.subscriptions.push(
     watcher,
+    // The watcher fires for EVERY file in the workspace, including writes the
+    // user never made: the SmartDesk backend churns smartdesk.db-wal/-journal
+    // continuously when it runs inside this workspace. Gate the whole handler
+    // on shouldTrackFile FIRST — otherwise recordEditActivity() reset the
+    // blur-grace timer on that churn and kept blurred sessions alive for
+    // hours (the multi-hour background_ai rows). The ignore filter inside
+    // recordFileEvent ran too late to prevent that.
     watcher.onDidCreate((uri) => {
+      if (uri.scheme !== "file" || !shouldTrackFile(uri.fsPath)) return;
       if (!sessionStart && !windowFocused) return;
       recordEditActivity();
       if (!sessionStart) startSession("file_create");
       recordFileEvent(uri, "created");
     }),
     watcher.onDidChange((uri) => {
+      if (uri.scheme !== "file" || !shouldTrackFile(uri.fsPath)) return;
       if (!sessionStart && !windowFocused) return;
       recordEditActivity();
       if (!sessionStart) startSession("file_change");
       recordFileEvent(uri, "modified");
     }),
     watcher.onDidDelete((uri) => {
+      if (uri.scheme !== "file" || !shouldTrackFile(uri.fsPath)) return;
       if (!sessionStart && !windowFocused) return;
       recordEditActivity();
       if (!sessionStart) startSession("file_delete");
@@ -557,6 +567,10 @@ function activate(context) {
 
   context.subscriptions.push(
     vscode.window.onDidChangeWindowState((state) => {
+      // VS Code emits redundant window-state events (the focus value doesn't
+      // actually change — e.g. on internal popups/quick-inputs). Ignore those:
+      // otherwise each one closes+reopens a 0-second sliver row ("by refocus").
+      if (state.focused === windowFocused) return;
       windowFocused = state.focused;
       if (state.focused) {
         recordActivity();

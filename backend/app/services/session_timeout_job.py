@@ -39,6 +39,21 @@ def _seconds_between(start_iso: str, end_iso: str) -> int:
     return max(0, int((end - start).total_seconds()))
 
 
+def _is_empty_background_ide(row) -> bool:
+    """True for an IDE background_ai row that captured no edits.
+
+    Mirrors SessionCoordinator's policy: a blurred IDE window with no edit
+    activity is not collected, so the safety net drops these instead of
+    closing them into multi-hour ``is_foreground=0`` rows.
+    """
+    return (
+        isinstance(row, IDESessionRecord)
+        and row.collection_reason == "background_ai"
+        and not row.edit_count
+        and not row.save_count
+    )
+
+
 class SessionTimeoutJob:
     """Background safety-net: closes abandoned/broken open sessions.
 
@@ -111,6 +126,12 @@ class SessionTimeoutJob:
                     row for row in open_rows if parse_iso(row.updated_at) < threshold_dt
                 ]
                 for row in stale_rows:
+                    if _is_empty_background_ide(row):
+                        # A blurred IDE window with no edits collects nothing.
+                        # These otherwise survive as multi-hour timeout rows.
+                        db.delete(row)
+                        total_closed += 1
+                        continue
                     row.session_end = now_iso
                     row.duration_sec = _seconds_between(row.session_start, now_iso)
                     row.closed_by = "timeout"
@@ -148,6 +169,10 @@ class SessionTimeoutJob:
                     row for row in open_rows if parse_iso(row.updated_at) < threshold_dt
                 ]
                 for row in stale_rows:
+                    if _is_empty_background_ide(row):
+                        db.delete(row)
+                        total_closed += 1
+                        continue
                     row.session_end = now_iso
                     row.duration_sec = _seconds_between(row.session_start, now_iso)
                     row.closed_by = "timeout"
