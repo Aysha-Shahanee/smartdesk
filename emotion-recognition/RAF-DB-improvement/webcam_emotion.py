@@ -1,9 +1,12 @@
 import cv2
 import torch
 import torch.nn as nn
+import time
+from pathlib import Path
 from torchvision import models, transforms
 from PIL import Image
-from collections import deque
+
+from emotion_block_aggregator import EmotionBlockAggregator
 
 # ------------------ DEVICE ------------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -13,11 +16,12 @@ print("Using device:", device)
 model = models.mobilenet_v3_small(weights=None)
 model.classifier[3] = nn.Linear(model.classifier[3].in_features, 4)
 
-model.load_state_dict(torch.load("emotion_model_raf.pth", map_location=device))
+model_path = Path(__file__).with_name("emotion_model_raf.pth")
+model.load_state_dict(torch.load(model_path, map_location=device))
 model.to(device)
 model.eval()
 
-class_names = ["angry", "happy", "neutral", "surprise"]
+class_names = ["Angry", "Happy", "Neutral", "Surprise"]
 
 # ------------------ FACE DETECTOR ------------------
 face_cascade = cv2.CascadeClassifier(
@@ -37,9 +41,9 @@ cap = cv2.VideoCapture(0)
 
 frame_count = 0
 face_box = None
-
-# emotion smoothing buffer
-emotion_buffer = deque(maxlen=5)
+last_processed_at = 0.0
+latest_emotion = "Unknown"
+aggregator = EmotionBlockAggregator(Path(__file__).with_name("emotion_15min_blocks.jsonl"))
 
 while True:
     ret, frame = cap.read()
@@ -47,6 +51,8 @@ while True:
         break
 
     frame_count += 1
+    for block in aggregator.complete_expired_blocks():
+        print("Saved 15-minute emotion block:", block)
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
@@ -66,24 +72,33 @@ while True:
         x, y, w, h = face_box
         face = frame[y:y+h, x:x+w]
 
-        if face.size != 0:
+        now = time.monotonic()
+        should_process_frame = now - last_processed_at >= 1.0
+
+        if face.size != 0 and should_process_frame:
+            last_processed_at = now
             face_pil = Image.fromarray(cv2.cvtColor(face, cv2.COLOR_BGR2RGB))
             face_tensor = transform(face_pil).unsqueeze(0).to(device)
 
             with torch.no_grad():
                 outputs = model(face_tensor)
-                _, pred = torch.max(outputs, 1)
-                emotion = class_names[pred.item()]
+                probabilities = torch.softmax(outputs, dim=1).squeeze(0).cpu().tolist()
 
-            # ------------------ SMOOTHING ------------------
-            emotion_buffer.append(emotion)
-            final_emotion = max(set(emotion_buffer), key=emotion_buffer.count)
+            emotion_probabilities = {
+                class_name: probabilities[index]
+                for index, class_name in enumerate(class_names)
+            }
+            latest_emotion = max(emotion_probabilities, key=emotion_probabilities.get)
+            completed_blocks = aggregator.add_frame(emotion_probabilities)
+
+            for block in completed_blocks:
+                print("Saved 15-minute emotion block:", block)
 
             # draw box + label
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-            cv2.putText(frame, final_emotion, (x, y-10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1,
-                        (0, 255, 0), 2)
+        cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+        cv2.putText(frame, latest_emotion, (x, y-10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1,
+                    (0, 255, 0), 2)
 
     cv2.imshow("Emotion Detector (Stable)", frame)
 
@@ -91,4 +106,7 @@ while True:
         break
 
 cap.release()
+final_block = aggregator.flush()
+if final_block is not None:
+    print("Saved final partial emotion block:", final_block)
 cv2.destroyAllWindows()
