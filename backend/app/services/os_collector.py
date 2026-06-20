@@ -92,9 +92,18 @@ def _post_event(payload: dict[str, Any]) -> bool:
         import requests  # type: ignore[import]
         resp = requests.post(INGEST_URL, json=payload, timeout=5)
         resp.raise_for_status()
+        logger.info(
+            "OS_IdleEvent_HTTPResponse: event=%s status_code=%s",
+            payload.get("event"),
+            resp.status_code,
+        )
         return True
     except Exception as exc:
-        logger.warning("Failed to POST event: %s", exc)
+        logger.warning(
+            "Failed to POST event: event=%s error=%s",
+            payload.get("event"),
+            exc,
+        )
         return False
 
 
@@ -156,10 +165,16 @@ def _get_idle_seconds() -> float:
 
         lii = LASTINPUTINFO()
         lii.cbSize = ctypes.sizeof(lii)
-        ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii))
+        success = ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii))
+
+        if not success:
+            logger.error("GetLastInputInfo failed")
+            return 0.0
+
         millis = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
         return millis / 1000.0
     except Exception:
+        logger.exception("Error in _get_idle_seconds")
         return 0.0
 
 
@@ -200,6 +215,7 @@ class OSCollector:
         self._is_idle: bool = False
         self._running: bool = False
         self._thread: threading.Thread | None = None
+        self._last_idle_log_bucket: int = -1
 
     # ------------------------------------------------------------------ #
     # Public API                                                           #
@@ -250,19 +266,57 @@ class OSCollector:
         idle_sec = _get_idle_seconds()
         is_idle = idle_sec >= IDLE_THRESHOLD_SEC
 
+        # Bucket-based logging to avoid spam (every 15 seconds)
+        bucket = int(idle_sec // 15)
+        if bucket != self._last_idle_log_bucket:
+            self._last_idle_log_bucket = bucket
+            logger.info(
+                "OS_IdleCheck: idle_sec=%.1f threshold=%d was_idle=%s now_idle=%s",
+                idle_sec,
+                IDLE_THRESHOLD_SEC,
+                self._is_idle,
+                is_idle,
+            )
+
         # ── Idle / active ─────────────────────────────────────────────
         if is_idle and not self._is_idle:
             self._is_idle = True
             payload = self._build("idle_start")
             # Include actual idle duration for accurate session splitting
             payload["extra_data"] = (payload.get("extra_data") or {}) | {"idle_sec": idle_sec}
-            _post_event(payload)
+
+            # Clear log immediately before posting
+            logger.info(
+                "OS_IdleEvent_Posting: event=%s timestamp=%s idle_sec=%.1f",
+                payload["event"],
+                payload["timestamp"],
+                idle_sec,
+            )
+            success = _post_event(payload)
+            logger.info(
+                "OS_IdleEvent_Response: event=%s status_code=%s",
+                payload.get("event"),
+                "success" if success else "failed",
+            )
         elif not is_idle and self._is_idle:
             self._is_idle = False
             payload = self._build("idle_end")
             # Include actual idle duration for accurate session splitting
             payload["extra_data"] = (payload.get("extra_data") or {}) | {"idle_sec": idle_sec}
-            _post_event(payload)
+
+            # Clear log immediately before posting
+            logger.info(
+                "OS_IdleEvent_Posting: event=%s timestamp=%s idle_sec=%.1f",
+                payload["event"],
+                payload["timestamp"],
+                idle_sec,
+            )
+            success = _post_event(payload)
+            logger.info(
+                "OS_IdleEvent_Response: event=%s status_code=%s",
+                payload.get("event"),
+                "success" if success else "failed",
+            )
 
         # ── Foreground window ─────────────────────────────────────────
         info = _get_foreground_info()

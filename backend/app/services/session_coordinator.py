@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 from app.core.config import SCHEMA_VERSION
 from app.core.config import settings
 from app.core.time import ensure_aware
-from app.core.time import local_now_iso
 from app.core.time import parse_iso
 from app.core.time import to_local_iso
 from app.models.db import BrowserSessionRecord
@@ -21,6 +20,10 @@ from app.models.schemas import IDEEventType
 from app.models.schemas import IngestEventResponse
 from app.models.schemas import OSEventPayload
 from app.models.schemas import OSEventType
+
+import logging
+
+logger = logging.getLogger("smartdesk.session_coordinator")
 
 # Process names / window-title fragments that identify an IDE. Used as a
 # fallback when PID matching fails (extension host PID != window owner PID).
@@ -88,8 +91,39 @@ class SessionCoordinator:
             OSEventType.IDLE_START,
             OSEventType.IDLE_END,
         }:
+            # Log event received
+            logger.info(
+                "Coordinator_IDLE_Event_Received: event=%s user_id=%s timestamp=%s extra_data=%s",
+                payload.event.value,
+                payload.user_id,
+                payload.timestamp,
+                payload.extra_data,
+            )
+
+            # Log current open OS session ID
+            current_session = (
+                db.query(OSSessionRecord)
+                .filter(OSSessionRecord.user_id == payload.user_id, OSSessionRecord.session_end.is_(None))
+                .order_by(OSSessionRecord.session_start.desc())
+                .first()
+            )
+            logger.info(
+                "Coordinator_IDLE_CurrentSession: user_id=%s session_id=%s state=%s",
+                payload.user_id,
+                current_session.id if current_session else "None",
+                current_session.state if current_session else "None",
+            )
+
             session = self._mark_current_os_state(payload, db)
             db.commit()
+
+            # Log commit completed
+            logger.info(
+                "Coordinator_IDLE_Event_Committed: event=%s session_id=%s",
+                payload.event.value,
+                session.id if session else None,
+            )
+
             return IngestEventResponse(
                 status="state_updated",
                 session_id=session.id if session else None,
@@ -284,7 +318,9 @@ class SessionCoordinator:
         if session is None:
             return None
 
-        event_timestamp = self._iso(payload.timestamp)
+        # Keep timestamp as datetime for calculations, convert to string only for storage
+        event_timestamp_dt = payload.timestamp
+        event_timestamp_str = self._iso(event_timestamp_dt)
         extra_data = payload.extra_data or {}
 
         if payload.event == OSEventType.IDLE_START:
@@ -295,12 +331,26 @@ class SessionCoordinator:
                 # Calculate the real idle start time using the idle_sec from extra_data
                 idle_sec = extra_data.get("idle_sec", 0)
                 # The idle period began 'idle_sec' seconds ago
-                real_idle_start = event_timestamp - timedelta(seconds=idle_sec)
+                real_idle_start = event_timestamp_dt - timedelta(seconds=idle_sec)
                 self._idle_start_timestamp = real_idle_start
 
+                # Log calculated real idle start
+                logger.info(
+                    "Coordinator_IDLE_START_Calc: idle_sec=%d real_idle_start=%s event_timestamp=%s",
+                    idle_sec,
+                    real_idle_start.isoformat(),
+                    event_timestamp_dt.isoformat(),
+                )
+
                 # Close the current active session at the REAL idle start time
-                self._close_current_os_session(
+                closed_session = self._close_current_os_session(
                     payload.user_id, self._idle_start_timestamp, "idle_start", db
+                )
+
+                # Log session closed
+                logger.info(
+                    "Coordinator_IDLE_START_Closed: session_id=%s",
+                    closed_session.id if closed_session else "None",
                 )
 
                 # Open a new idle session starting at the REAL idle start time
@@ -314,12 +364,18 @@ class SessionCoordinator:
                     "window_title": session.window_title,
                     "process_id": session.process_id,
                     "device_id": payload.device_id,
-                    "schema_version": payload.schema_version,
                     "extra_data": payload.extra_data
                 }
                 idle_payload = OSEventPayload(**idle_payload_dict)
                 session = self._open_os_session(idle_payload, db)
                 session.state = "idle"
+
+                # Log idle session opened
+                logger.info(
+                    "Coordinator_IDLE_START_Opened: session_id=%s state=%s",
+                    session.id,
+                    session.state,
+                )
             # If _idle_start_timestamp is already set, we're already in an idle period
             # and should not create duplicate sessions
 
@@ -327,8 +383,14 @@ class SessionCoordinator:
             # When idle ends, close the idle session and open a new active session
             if self._idle_start_timestamp is not None:
                 # Close the current idle session at current time
-                self._close_current_os_session(
-                    payload.user_id, event_timestamp, "idle_end", db
+                closed_session = self._close_current_os_session(
+                    payload.user_id, event_timestamp_dt, "idle_end", db
+                )
+
+                # Log session closed
+                logger.info(
+                    "Coordinator_IDLE_END_Closed: session_id=%s",
+                    closed_session.id if closed_session else "None",
                 )
 
                 # Open a new active session starting at current time
@@ -336,24 +398,30 @@ class SessionCoordinator:
                 active_payload_dict = {
                     "user_id": payload.user_id,
                     "event": OSEventType.FOCUSED.value,
-                    "timestamp": event_timestamp,
+                    "timestamp": event_timestamp_dt,
                     "app_name": session.app_name,
                     "app_category": session.app_category,
                     "window_title": session.window_title,
                     "process_id": session.process_id,
                     "device_id": payload.device_id,
-                    "schema_version": payload.schema_version,
                     "extra_data": payload.extra_data
                 }
                 active_payload = OSEventPayload(**active_payload_dict)
                 session = self._open_os_session(active_payload, db)
                 session.state = "active"
 
+                # Log active session opened
+                logger.info(
+                    "Coordinator_IDLE_END_Opened: session_id=%s state=%s",
+                    session.id,
+                    session.state,
+                )
+
                 # Clear the idle start timestamp
                 self._idle_start_timestamp = None
             # If _idle_start_timestamp is None, we weren't tracking an idle period
 
-        session.updated_at = event_timestamp
+        session.updated_at = event_timestamp_str
         db.flush()
         return session
 
@@ -564,7 +632,7 @@ class SessionCoordinator:
     ) -> BrowserSessionRecord | None:
         query = db.query(BrowserSessionRecord).filter(
             BrowserSessionRecord.user_id == payload.user_id,
-            BrowserSessionRecord.browser_name = payload.browser_name,
+            BrowserSessionRecord.browser_name == payload.browser_name,
             BrowserSessionRecord.session_end.is_(None),
         )
         if payload.browser_window_id is not None:
@@ -674,61 +742,57 @@ class SessionCoordinator:
         # re-promoted, then closed by blur — persisting is_foreground=0 with
         # collection_reason='foreground'. This method now only *confirms*
         # foreground sessions the OS can positively identify.
-        try:
-            if payload.process_id is not None:
-                # Match the IDE session whose extension-host PID *or* parent
-                # PID equals the OS foreground window PID.
-                db.query(IDESessionRecord).filter(
-                    IDESessionRecord.session_end.is_(None),
-                    (IDESessionRecord.process_id == payload.process_id)
-                    | (IDESessionRecord.parent_process_id == payload.process_id),
-                ).update(
-                    {
-                        "is_foreground": 1,
-                        "confirmed_by_os": 1,
-                        "collection_reason": "foreground",
-                    },
-                    synchronize_session=False,
-                )
-                db.query(BrowserSessionRecord).filter(
-                    BrowserSessionRecord.session_end.is_(None),
-                    BrowserSessionRecord.process_id == payload.process_id,
-                ).update(
-                    {"is_foreground": 1, "confirmed_by_os": 1},
-                    synchronize_session=False,
-                )
+        if payload.process_id is not None:
+            # Match the IDE session whose extension-host PID *or* parent
+            # PID equals the OS foreground window PID.
+            db.query(IDESessionRecord).filter(
+                IDESessionRecord.session_end.is_(None),
+                (IDESessionRecord.process_id == payload.process_id)
+                | (IDESessionRecord.parent_process_id == payload.process_id),
+            ).update(
+                {
+                    "is_foreground": 1,
+                    "confirmed_by_os": 1,
+                    "collection_reason": "foreground",
+                },
+                synchronize_session=False,
+            )
+            db.query(BrowserSessionRecord).filter(
+                BrowserSessionRecord.session_end.is_(None),
+                BrowserSessionRecord.process_id == payload.process_id,
+            ).update(
+                {"is_foreground": 1, "confirmed_by_os": 1},
+                synchronize_session=False,
+            )
 
-            if self._is_ide_os_payload(payload):
-                # Promote open IDE sessions — except background_ai rows, which
-                # belong to a blurred window doing AI work; the extension closes
-                # them itself and opens a fresh foreground row on refocus.
-                db.query(IDESessionRecord).filter(
-                    IDESessionRecord.user_id == payload.user_id,
-                    IDESessionRecord.session_end.is_(None),
-                    (IDESessionRecord.collection_reason.is_(None))
-                    | (IDESessionRecord.collection_reason != "background_ai"),
-                ).update(
-                    {
-                        "is_foreground": 1,
-                        "confirmed_by_os": 1,
-                        "collection_reason": "foreground",
-                    },
-                    synchronize_session=False,
-                )
+        if self._is_ide_os_payload(payload):
+            # Promote open IDE sessions — except background_ai rows, which
+            # belong to a blurred window doing AI work; the extension closes
+            # them itself and opens a fresh foreground row on refocus.
+            db.query(IDESessionRecord).filter(
+                IDESessionRecord.user_id == payload.user_id,
+                IDESessionRecord.session_end.is_(None),
+                (IDESessionRecord.collection_reason.is_(None))
+                | (IDESessionRecord.collection_reason != "background_ai"),
+            ).update(
+                {
+                    "is_foreground": 1,
+                    "confirmed_by_os": 1,
+                    "collection_reason": "foreground",
+                },
+                synchronize_session=False,
+            )
 
-            if self._is_browser_os_payload(payload):
-                db.query(BrowserSessionRecord).filter(
-                    BrowserSessionRecord.user_id == payload.user_id,
-                    BrowserSessionRecord.session_end.is_(None),
-                ).update(
-                    {"is_foreground": 1, "confirmed_by_os": 1},
-                    synchronize_session=False,
-                )
+        if self._is_browser_os_payload(payload):
+            db.query(BrowserSessionRecord).filter(
+                BrowserSessionRecord.user_id == payload.user_id,
+                BrowserSessionRecord.session_end.is_(None),
+            ).update(
+                {"is_foreground": 1, "confirmed_by_os": 1},
+                synchronize_session=False,
+            )
 
-            db.flush()
-        except Exception:
-            db.rollback()
-            raise
+        db.flush()
 
     def _is_ide_os_payload(self, payload: OSEventPayload) -> bool:
         if payload.app_category:
