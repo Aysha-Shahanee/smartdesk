@@ -21,10 +21,6 @@ from app.models.schemas import IngestEventResponse
 from app.models.schemas import OSEventPayload
 from app.models.schemas import OSEventType
 
-import logging
-
-logger = logging.getLogger("smartdesk.session_coordinator")
-
 # Process names / window-title fragments that identify an IDE. Used as a
 # fallback when PID matching fails (extension host PID != window owner PID).
 IDE_NAME_KEYWORDS = (
@@ -91,39 +87,8 @@ class SessionCoordinator:
             OSEventType.IDLE_START,
             OSEventType.IDLE_END,
         }:
-            # Log event received
-            logger.info(
-                "Coordinator_IDLE_Event_Received: event=%s user_id=%s timestamp=%s extra_data=%s",
-                payload.event.value,
-                payload.user_id,
-                payload.timestamp,
-                payload.extra_data,
-            )
-
-            # Log current open OS session ID
-            current_session = (
-                db.query(OSSessionRecord)
-                .filter(OSSessionRecord.user_id == payload.user_id, OSSessionRecord.session_end.is_(None))
-                .order_by(OSSessionRecord.session_start.desc())
-                .first()
-            )
-            logger.info(
-                "Coordinator_IDLE_CurrentSession: user_id=%s session_id=%s state=%s",
-                payload.user_id,
-                current_session.id if current_session else "None",
-                current_session.state if current_session else "None",
-            )
-
             session = self._mark_current_os_state(payload, db)
             db.commit()
-
-            # Log commit completed
-            logger.info(
-                "Coordinator_IDLE_Event_Committed: event=%s session_id=%s",
-                payload.event.value,
-                session.id if session else None,
-            )
-
             return IngestEventResponse(
                 status="state_updated",
                 session_id=session.id if session else None,
@@ -328,33 +293,19 @@ class SessionCoordinator:
             # 1. Close the current active session at the REAL idle start time
             # 2. Open a new idle session starting at the REAL idle start time
             if self._idle_start_timestamp is None:
-                # Calculate the real idle start time using the idle_sec from extra_data
+                # The idle period began 'idle_sec' seconds ago; backdate to the
+                # real start so the session splits at the true idle boundary.
                 idle_sec = extra_data.get("idle_sec", 0)
-                # The idle period began 'idle_sec' seconds ago
                 real_idle_start = event_timestamp_dt - timedelta(seconds=idle_sec)
                 self._idle_start_timestamp = real_idle_start
 
-                # Log calculated real idle start
-                logger.info(
-                    "Coordinator_IDLE_START_Calc: idle_sec=%d real_idle_start=%s event_timestamp=%s",
-                    idle_sec,
-                    real_idle_start.isoformat(),
-                    event_timestamp_dt.isoformat(),
-                )
-
                 # Close the current active session at the REAL idle start time
-                closed_session = self._close_current_os_session(
+                self._close_current_os_session(
                     payload.user_id, self._idle_start_timestamp, "idle_start", db
                 )
 
-                # Log session closed
-                logger.info(
-                    "Coordinator_IDLE_START_Closed: session_id=%s",
-                    closed_session.id if closed_session else "None",
-                )
-
-                # Open a new idle session starting at the REAL idle start time
-                # Create minimal payload - OSEventPayload will apply defaults
+                # Open a new idle session starting at the REAL idle start time.
+                # Minimal payload — OSEventPayload applies defaults.
                 idle_payload_dict = {
                     "user_id": payload.user_id,
                     "event": OSEventType.IDLE_START.value,
@@ -369,32 +320,19 @@ class SessionCoordinator:
                 idle_payload = OSEventPayload(**idle_payload_dict)
                 session = self._open_os_session(idle_payload, db)
                 session.state = "idle"
-
-                # Log idle session opened
-                logger.info(
-                    "Coordinator_IDLE_START_Opened: session_id=%s state=%s",
-                    session.id,
-                    session.state,
-                )
-            # If _idle_start_timestamp is already set, we're already in an idle period
-            # and should not create duplicate sessions
+            # If _idle_start_timestamp is already set we're already idle — don't
+            # create duplicate sessions.
 
         elif payload.event == OSEventType.IDLE_END:
             # When idle ends, close the idle session and open a new active session
             if self._idle_start_timestamp is not None:
                 # Close the current idle session at current time
-                closed_session = self._close_current_os_session(
+                self._close_current_os_session(
                     payload.user_id, event_timestamp_dt, "idle_end", db
                 )
 
-                # Log session closed
-                logger.info(
-                    "Coordinator_IDLE_END_Closed: session_id=%s",
-                    closed_session.id if closed_session else "None",
-                )
-
-                # Open a new active session starting at current time
-                # Create minimal payload - OSEventPayload will apply defaults
+                # Open a new active session starting at current time.
+                # Minimal payload — OSEventPayload applies defaults.
                 active_payload_dict = {
                     "user_id": payload.user_id,
                     "event": OSEventType.FOCUSED.value,
@@ -410,16 +348,8 @@ class SessionCoordinator:
                 session = self._open_os_session(active_payload, db)
                 session.state = "active"
 
-                # Log active session opened
-                logger.info(
-                    "Coordinator_IDLE_END_Opened: session_id=%s state=%s",
-                    session.id,
-                    session.state,
-                )
-
-                # Clear the idle start timestamp
                 self._idle_start_timestamp = None
-            # If _idle_start_timestamp is None, we weren't tracking an idle period
+            # If _idle_start_timestamp is None we weren't tracking an idle period.
 
         session.updated_at = event_timestamp_str
         db.flush()
@@ -438,7 +368,6 @@ class SessionCoordinator:
             session_start=timestamp,
             idle_sec=0,
             is_foreground=1 if is_foreground else 0,
-            foreground_sec=0,
             confirmed_by_os=1 if is_foreground else 0,
             collection_reason="foreground" if is_foreground else "background_ai",
             trigger=payload.trigger,
@@ -566,8 +495,6 @@ class SessionCoordinator:
             session.lines_added = payload.counters.lines_added
             session.lines_deleted = payload.counters.lines_deleted
             session.file_switch_count = payload.counters.file_switch_count
-            session.terminal_command_count = payload.counters.terminal_command_count
-            session.debug_run_count = payload.counters.debug_run_count
             session.idle_sec = payload.counters.idle_sec
 
     def _open_browser_session(
@@ -828,20 +755,31 @@ class SessionCoordinator:
         session.closed_by = closed_by
         session.updated_at = end_time
 
-        # Idle can never exceed the session's wall-clock span. The extension's
-        # idle counter is wall-clock based and can drift past the backend's
-        # event-timestamp duration, so clamp it as a safety net (otherwise the
-        # dashboard reports idle_sec > duration_sec).
-        idle = getattr(session, "idle_time", None)
-        if idle is not None and idle > duration_sec:
-            session.idle_time = duration_sec
+        # Idle can never exceed the session's wall-clock span. The collectors'
+        # idle counters are wall-clock based and can drift past the backend's
+        # event-timestamp duration, so clamp as a safety net (otherwise the
+        # dashboard reports idle > duration_sec). The column differs per table:
+        # OS rows use `idle_time`, IDE rows use `idle_sec`, browser rows none.
+        if isinstance(session, OSSessionRecord):
+            idle_attr = "idle_time"
+        elif isinstance(session, IDESessionRecord):
+            idle_attr = "idle_sec"
+        else:
+            idle_attr = None
+        if idle_attr is not None:
+            idle = getattr(session, idle_attr)
+            if idle is not None and idle > duration_sec:
+                setattr(session, idle_attr, duration_sec)
 
-        # Accumulate ongoing idle time if session ends while in that state,
-        # and move the start timestamp forward so the next session can continue
-        # counting from this point (avoiding double counting on IDLE_END).
-        if self._idle_start_timestamp is not None:
+        # Accumulate any OS idle period still open when this OS session closes,
+        # and advance the marker so the next OS session continues from here
+        # (avoiding double counting on IDLE_END). Only OS rows carry the
+        # OS-level idle marker — IDE/browser closes must never touch it, both
+        # because they have no `idle_time` column (would AttributeError) and
+        # because their lifecycle is independent of OS idle.
+        if isinstance(session, OSSessionRecord) and self._idle_start_timestamp is not None:
             ongoing_idle = (timestamp - self._idle_start_timestamp).total_seconds()
-            session.idle_time += int(ongoing_idle)
+            session.idle_time = (session.idle_time or 0) + int(ongoing_idle)
             self._idle_start_timestamp = timestamp
 
     def _json(self, value: dict | None) -> str | None:

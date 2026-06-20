@@ -67,3 +67,5 @@ In IDE settings (`Ctrl+,`), search for `SmartDesk`:
 ```text
 POST http://127.0.0.1:8000/api/v1/ingest/ide/event
 ```
+now 1st edit then break then again edit now lets see what will happen
+now again i started coding

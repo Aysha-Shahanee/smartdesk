@@ -33,7 +33,7 @@ Add columns to `vscode_sessions` for session totals and summaries:
 
 Note:
 - Keep existing `active_file_path`, `active_file_name`, `active_language` only if renaming is risky; otherwise rename to `foreground_*` with a migration.
-- Keep `terminal_command_count` and `debug_run_count` for now but mark deprecated (not used for totals).
+- `terminal_command_count`, `debug_run_count`, and `foreground_sec` were removed from `ide_sessions` (migration 0004) — no longer collected or reported.
 
 ## Extension Payload Changes (Session-Based)
 Add to VS Code session payload:

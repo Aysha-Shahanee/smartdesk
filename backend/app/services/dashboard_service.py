@@ -100,8 +100,6 @@ class DashboardService:
             saves=sum(r.save_count or 0 for r in rows),
             lines_added=sum(r.lines_added or 0 for r in rows),
             lines_deleted=sum(r.lines_deleted or 0 for r in rows),
-            terminal_commands=sum(r.terminal_command_count or 0 for r in rows),
-            debug_runs=sum(r.debug_run_count or 0 for r in rows),
             top_languages=self._top_by_field(rows, "active_language"),
             top_projects=self._top_by_field(rows, "workspace_name"),
         )

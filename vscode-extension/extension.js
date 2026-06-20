@@ -86,8 +86,6 @@ function newCounters() {
     lines_added: 0,
     lines_deleted: 0,
     file_switch_count: 0,
-    terminal_command_count: 0,
-    debug_run_count: 0,
     idle_sec: 0,
   };
 }
@@ -553,7 +551,6 @@ function activate(context) {
     vscode.window.onDidOpenTerminal(() => {
       recordActivity();
       if (!sessionStart && windowFocused) startSession("terminal");
-      counters.terminal_command_count += 1;
     })
   );
 
@@ -561,7 +558,34 @@ function activate(context) {
     vscode.debug.onDidStartDebugSession(() => {
       recordActivity();
       if (!sessionStart && windowFocused) startSession("debug");
-      counters.debug_run_count += 1;
+    })
+  );
+
+  // Keyboard/mouse activity that isn't an edit: cursor moves, clicks, text
+  // selection. Without this, reading or navigating a file (no edits) let idle
+  // accrue even though the user was clearly active. Gate on the change kind so
+  // AI/command-driven selection changes don't count as user activity (and edits
+  // already reset idle via onDidChangeTextDocument). Reset idle only — don't
+  // start a session, so passive reading never manufactures a new row.
+  context.subscriptions.push(
+    vscode.window.onDidChangeTextEditorSelection((e) => {
+      if (!sessionStart || !windowFocused) return;
+      const kind = e.kind;
+      if (
+        kind === vscode.TextEditorSelectionChangeKind.Keyboard ||
+        kind === vscode.TextEditorSelectionChangeKind.Mouse
+      ) {
+        recordActivity();
+      }
+    })
+  );
+
+  // Scrolling (mouse wheel / keyboard) — pure navigation, also counts as the
+  // user being active.
+  context.subscriptions.push(
+    vscode.window.onDidChangeTextEditorVisibleRanges(() => {
+      if (!sessionStart || !windowFocused) return;
+      recordActivity();
     })
   );
 

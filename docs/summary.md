@@ -19,8 +19,8 @@ The system follows a session-based approach where:
    - OS Collector: Monitors foreground window changes (running as background thread)
 
 2. **Data Collection Layer**:
-   - OS Events: Foreground app/window changes, idle/lock states
-   - VS Code Events: File edits, saves, navigation, terminal/debug activity
+   - OS Events: Foreground app/window changes, idle state
+   - VS Code Events: File edits, saves, navigation
    - Browser Events: Tab switches, URL changes, site categorization
    - Calendar Events: Google Calendar synchronization
 

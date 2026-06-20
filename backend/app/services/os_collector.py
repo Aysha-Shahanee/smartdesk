@@ -171,25 +171,18 @@ def _get_idle_seconds() -> float:
             logger.error("GetLastInputInfo failed")
             return 0.0
 
-        millis = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
+        # GetTickCount returns a DWORD (unsigned 32-bit) but ctypes' default
+        # restype is signed int, so once uptime passes ~24.8 days the value
+        # reads negative and the subtraction underflows to ~-2**32. Mask both
+        # the tick and the difference back into unsigned 32-bit space; the mask
+        # on the difference also yields the correct elapsed across the ~49.7-day
+        # GetTickCount wraparound (dwTime shares that 32-bit timeline).
+        tick = ctypes.windll.kernel32.GetTickCount() & 0xFFFFFFFF
+        millis = (tick - lii.dwTime) & 0xFFFFFFFF
         return millis / 1000.0
     except Exception:
         logger.exception("Error in _get_idle_seconds")
         return 0.0
-
-
-def _is_screen_locked() -> bool:
-    """Return True if the Windows workstation is locked."""
-    try:
-        import ctypes
-        # OpenInputDesktop returns NULL when no interactive desktop is available (locked)
-        h = ctypes.windll.user32.OpenInputDesktop(0, False, 0x0001)
-        if h:
-            ctypes.windll.user32.CloseDesktop(h)
-            return False
-        return True
-    except Exception:
-        return False
 
 
 # ------------------------------------------------------------------ #
@@ -281,42 +274,10 @@ class OSCollector:
         # ── Idle / active ─────────────────────────────────────────────
         if is_idle and not self._is_idle:
             self._is_idle = True
-            payload = self._build("idle_start")
-            # Include actual idle duration for accurate session splitting
-            payload["extra_data"] = (payload.get("extra_data") or {}) | {"idle_sec": idle_sec}
-
-            # Clear log immediately before posting
-            logger.info(
-                "OS_IdleEvent_Posting: event=%s timestamp=%s idle_sec=%.1f",
-                payload["event"],
-                payload["timestamp"],
-                idle_sec,
-            )
-            success = _post_event(payload)
-            logger.info(
-                "OS_IdleEvent_Response: event=%s status_code=%s",
-                payload.get("event"),
-                "success" if success else "failed",
-            )
+            self._emit_idle_event("idle_start", idle_sec)
         elif not is_idle and self._is_idle:
             self._is_idle = False
-            payload = self._build("idle_end")
-            # Include actual idle duration for accurate session splitting
-            payload["extra_data"] = (payload.get("extra_data") or {}) | {"idle_sec": idle_sec}
-
-            # Clear log immediately before posting
-            logger.info(
-                "OS_IdleEvent_Posting: event=%s timestamp=%s idle_sec=%.1f",
-                payload["event"],
-                payload["timestamp"],
-                idle_sec,
-            )
-            success = _post_event(payload)
-            logger.info(
-                "OS_IdleEvent_Response: event=%s status_code=%s",
-                payload.get("event"),
-                "success" if success else "failed",
-            )
+            self._emit_idle_event("idle_end", idle_sec)
 
         # ── Foreground window ─────────────────────────────────────────
         info = _get_foreground_info()
@@ -337,6 +298,13 @@ class OSCollector:
                 "process_id": pid,
             })
             _post_event(payload)
+
+    def _emit_idle_event(self, event: str, idle_sec: float) -> None:
+        # idle_sec lets the backend split the session at the real idle
+        # boundary rather than at the (delayed) detection time.
+        payload = self._build(event)
+        payload["extra_data"] = (payload.get("extra_data") or {}) | {"idle_sec": idle_sec}
+        _post_event(payload)
 
     def _build(self, event: str) -> dict[str, Any]:
         return {
