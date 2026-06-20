@@ -35,7 +35,6 @@ python -m venv venv                     # first time only
 .\venv\Scripts\python.exe -m pip install -r requirements.txt
 .\venv\Scripts\python.exe -m alembic upgrade head   # first time only — creates smartdesk.db
 .\venv\Scripts\python.exe -m uvicorn app.main:app
-```
 
 That single command starts everything: the HTTP server on `http://127.0.0.1:8000`, the OS foreground monitor (1s polling), the session timeout job, the work period scheduler, and the calendar auto-sync job.
 
