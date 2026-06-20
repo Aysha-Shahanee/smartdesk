@@ -26,3 +26,14 @@ ImageNet MobileNetV3
 Test Accuracy: ~91%
 
 The webcam predictions became more stable and more realistic.
+
+
+How to run the new model
+
+1) https://huggingface.co/AD-Nawarathna/Emotion_Detection_FER_2013/resolve/main/emotion_model.pth 
+
+
+https://huggingface.co/AD-Nawarathna/Emotion_Detection_FER_2013/resolve/main/emotion_model_raf.pth
+
+download both this files 
+then run webcam_emotion.py 
