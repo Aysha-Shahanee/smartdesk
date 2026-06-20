@@ -18,6 +18,7 @@ __pycache__/
 *.sqlite
 *.sqlite3
 *.log
+emotion_15min_blocks*.jsonl
 
 # Node artifacts
 node_modules/

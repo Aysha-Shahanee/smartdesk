@@ -36,4 +36,4 @@ How to run the new model
 https://huggingface.co/AD-Nawarathna/Emotion_Detection_FER_2013/resolve/main/emotion_model_raf.pth
 
 download both this files 
-then run webcam_emotion.py 
+then run webcam_emotion.py which is in the phase 1
