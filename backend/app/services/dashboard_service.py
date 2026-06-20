@@ -74,12 +74,10 @@ class DashboardService:
 
         active = [r for r in rows if r.state == "active"]
         idle = [r for r in rows if r.state == "idle"]
-        locked = [r for r in rows if r.state == "locked"]
 
         return OSDashboardResponse(
             active_time_sec=self._sum_duration(active),
             idle_time_sec=self._sum_duration(idle),
-            locked_time_sec=self._sum_duration(locked),
             top_apps=self._top_apps(active),
             category_breakdown=self._category_breakdown(active),
         )

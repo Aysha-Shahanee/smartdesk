@@ -26,7 +26,6 @@ class CategoryDuration(DashboardSchema):
 class OSDashboardResponse(DashboardSchema):
     active_time_sec: int = Field(default=0, ge=0)
     idle_time_sec: int = Field(default=0, ge=0)
-    locked_time_sec: int = Field(default=0, ge=0)
     top_apps: list[AppDuration] = Field(default_factory=list)
     category_breakdown: list[CategoryDuration] = Field(default_factory=list)
 

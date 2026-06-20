@@ -22,8 +22,7 @@ class OSSessionRecord(Base):
     process_id = Column(Integer, nullable=True)
 
     state = Column(String, nullable=False, default="active")
-    is_idle = Column(Integer, nullable=False, default=0)
-    is_locked = Column(Integer, nullable=False, default=0)
+    idle_time = Column(Integer, nullable=False, default=0)  # Total seconds system was idle during session
 
     session_start = Column(String, nullable=False)
     session_end = Column(String, nullable=True)

@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # Public URL of this backend, used to build the OAuth redirect URI.
     BACKEND_BASE_URL: str = "http://127.0.0.1:8000"
 
+    # OS idle threshold in seconds (used by session coordinator to determine
+    # when to split sessions due to idle time).
+    OS_IDLE_THRESHOLD_SEC: int = int(os.environ.get("SMARTDESK_IDLE_THRESHOLD", "120"))
+
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://localhost:1420",

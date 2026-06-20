@@ -9,8 +9,6 @@ Events emitted:
   - ``blurred``    — (not sent — coordinator ignores blur-only events)
   - ``idle_start`` — system has been idle for IDLE_THRESHOLD_SEC
   - ``idle_end``   — system activity resumed after idle
-  - ``locked``     — screen locked (Windows lock screen detected)
-  - ``unlocked``   — screen unlocked
   - ``suspend``    — system is about to suspend
   - ``shutdown``   — system is about to shut down
 
@@ -200,7 +198,6 @@ class OSCollector:
         self._last_app: str | None = None
         self._last_pid: int | None = None
         self._is_idle: bool = False
-        self._is_locked: bool = False
         self._running: bool = False
         self._thread: threading.Thread | None = None
 
@@ -250,29 +247,22 @@ class OSCollector:
             time.sleep(POLL_INTERVAL_SEC)
 
     def _tick(self) -> None:
-        locked = _is_screen_locked()
         idle_sec = _get_idle_seconds()
         is_idle = idle_sec >= IDLE_THRESHOLD_SEC
-
-        # ── Lock / unlock ─────────────────────────────────────────────
-        if locked and not self._is_locked:
-            self._is_locked = True
-            _post_event(self._build("locked"))
-            return
-        if not locked and self._is_locked:
-            self._is_locked = False
-            _post_event(self._build("unlocked"))
-            return
-        if locked:
-            return  # Stay locked — no further events
 
         # ── Idle / active ─────────────────────────────────────────────
         if is_idle and not self._is_idle:
             self._is_idle = True
-            _post_event(self._build("idle_start"))
+            payload = self._build("idle_start")
+            # Include actual idle duration for accurate session splitting
+            payload["extra_data"] = (payload.get("extra_data") or {}) | {"idle_sec": idle_sec}
+            _post_event(payload)
         elif not is_idle and self._is_idle:
             self._is_idle = False
-            _post_event(self._build("idle_end"))
+            payload = self._build("idle_end")
+            # Include actual idle duration for accurate session splitting
+            payload["extra_data"] = (payload.get("extra_data") or {}) | {"idle_sec": idle_sec}
+            _post_event(payload)
 
         # ── Foreground window ─────────────────────────────────────────
         info = _get_foreground_info()
