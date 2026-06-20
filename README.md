@@ -107,7 +107,7 @@ GET  /api/v1/calendar/events          events ordered by start time
 All endpoints accept optional `user_id`, `from`, `to` (ISO 8601, default = today in Asia/Colombo):
 
 ```text
-GET /dashboard/os          active/idle/locked time, top apps, categories
+GET /dashboard/os          active/idle time, top apps, categories
 GET /dashboard/ide         coding time, edits, lines, top languages/projects
 GET /dashboard/browser     time by category, top domains
 GET /dashboard/timeline    work periods with source flags

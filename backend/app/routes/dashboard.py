@@ -112,7 +112,7 @@ def get_os_dashboard(
     to: str = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    """OS-level summary: active/idle/locked time, top apps, category breakdown."""
+    """OS-level summary: active/idle time, top apps, category breakdown."""
     from_iso = _parse_dt(from_, "from") if from_ else _today_start()
     to_iso = _parse_dt(to, "to") if to else _today_end()
     return _service.get_os_summary(db, user_id, from_iso, to_iso)

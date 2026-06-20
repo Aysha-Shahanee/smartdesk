@@ -1,6 +1,6 @@
 import json
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.config import SCHEMA_VERSION
 from app.core.config import settings
 from app.core.time import ensure_aware
+from app.core.time import local_now_iso
 from app.core.time import parse_iso
 from app.core.time import to_local_iso
 from app.models.db import BrowserSessionRecord
@@ -68,6 +69,8 @@ class SessionCoordinator:
         # same wall-clock span counted N times). One lock per coordinator
         # (the router holds a single instance) makes IDE handling atomic.
         self._ide_lock = threading.Lock()
+        # Track ongoing idle periods for time accumulation
+        self._idle_start_timestamp: datetime | None = None
 
     def handle_os_event(self, payload: OSEventPayload, db: Session) -> IngestEventResponse:
         if payload.event == OSEventType.FOCUSED:
@@ -84,8 +87,6 @@ class SessionCoordinator:
         if payload.event in {
             OSEventType.IDLE_START,
             OSEventType.IDLE_END,
-            OSEventType.LOCKED,
-            OSEventType.UNLOCKED,
         }:
             session = self._mark_current_os_state(payload, db)
             db.commit()
@@ -244,8 +245,7 @@ class SessionCoordinator:
             window_title=payload.window_title,
             process_id=payload.process_id,
             state="active",
-            is_idle=0,
-            is_locked=0,
+            idle_time=0,
             session_start=timestamp,
             trigger=payload.event.value,
             extra_data=self._json(payload.extra_data),
@@ -274,6 +274,7 @@ class SessionCoordinator:
     def _mark_current_os_state(
         self, payload: OSEventPayload, db: Session
     ) -> OSSessionRecord | None:
+        # Get the current open session for this user
         session = (
             db.query(OSSessionRecord)
             .filter(OSSessionRecord.user_id == payload.user_id, OSSessionRecord.session_end.is_(None))
@@ -283,20 +284,76 @@ class SessionCoordinator:
         if session is None:
             return None
 
-        if payload.event == OSEventType.IDLE_START:
-            session.state = "idle"
-            session.is_idle = 1
-        elif payload.event == OSEventType.IDLE_END:
-            session.state = "active"
-            session.is_idle = 0
-        elif payload.event == OSEventType.LOCKED:
-            session.state = "locked"
-            session.is_locked = 1
-        elif payload.event == OSEventType.UNLOCKED:
-            session.state = "active"
-            session.is_locked = 0
+        event_timestamp = self._iso(payload.timestamp)
+        extra_data = payload.extra_data or {}
 
-        session.updated_at = self._iso(payload.timestamp)
+        if payload.event == OSEventType.IDLE_START:
+            # When idle starts, we need to split the session:
+            # 1. Close the current active session at the REAL idle start time
+            # 2. Open a new idle session starting at the REAL idle start time
+            if self._idle_start_timestamp is None:
+                # Calculate the real idle start time using the idle_sec from extra_data
+                idle_sec = extra_data.get("idle_sec", 0)
+                # The idle period began 'idle_sec' seconds ago
+                real_idle_start = event_timestamp - timedelta(seconds=idle_sec)
+                self._idle_start_timestamp = real_idle_start
+
+                # Close the current active session at the REAL idle start time
+                self._close_current_os_session(
+                    payload.user_id, self._idle_start_timestamp, "idle_start", db
+                )
+
+                # Open a new idle session starting at the REAL idle start time
+                # Create minimal payload - OSEventPayload will apply defaults
+                idle_payload_dict = {
+                    "user_id": payload.user_id,
+                    "event": OSEventType.IDLE_START.value,
+                    "timestamp": self._idle_start_timestamp,
+                    "app_name": session.app_name,
+                    "app_category": session.app_category,
+                    "window_title": session.window_title,
+                    "process_id": session.process_id,
+                    "device_id": payload.device_id,
+                    "schema_version": payload.schema_version,
+                    "extra_data": payload.extra_data
+                }
+                idle_payload = OSEventPayload(**idle_payload_dict)
+                session = self._open_os_session(idle_payload, db)
+                session.state = "idle"
+            # If _idle_start_timestamp is already set, we're already in an idle period
+            # and should not create duplicate sessions
+
+        elif payload.event == OSEventType.IDLE_END:
+            # When idle ends, close the idle session and open a new active session
+            if self._idle_start_timestamp is not None:
+                # Close the current idle session at current time
+                self._close_current_os_session(
+                    payload.user_id, event_timestamp, "idle_end", db
+                )
+
+                # Open a new active session starting at current time
+                # Create minimal payload - OSEventPayload will apply defaults
+                active_payload_dict = {
+                    "user_id": payload.user_id,
+                    "event": OSEventType.FOCUSED.value,
+                    "timestamp": event_timestamp,
+                    "app_name": session.app_name,
+                    "app_category": session.app_category,
+                    "window_title": session.window_title,
+                    "process_id": session.process_id,
+                    "device_id": payload.device_id,
+                    "schema_version": payload.schema_version,
+                    "extra_data": payload.extra_data
+                }
+                active_payload = OSEventPayload(**active_payload_dict)
+                session = self._open_os_session(active_payload, db)
+                session.state = "active"
+
+                # Clear the idle start timestamp
+                self._idle_start_timestamp = None
+            # If _idle_start_timestamp is None, we weren't tracking an idle period
+
+        session.updated_at = event_timestamp
         db.flush()
         return session
 
@@ -507,7 +564,7 @@ class SessionCoordinator:
     ) -> BrowserSessionRecord | None:
         query = db.query(BrowserSessionRecord).filter(
             BrowserSessionRecord.user_id == payload.user_id,
-            BrowserSessionRecord.browser_name == payload.browser_name,
+            BrowserSessionRecord.browser_name = payload.browser_name,
             BrowserSessionRecord.session_end.is_(None),
         )
         if payload.browser_window_id is not None:
@@ -617,57 +674,61 @@ class SessionCoordinator:
         # re-promoted, then closed by blur — persisting is_foreground=0 with
         # collection_reason='foreground'. This method now only *confirms*
         # foreground sessions the OS can positively identify.
-        if payload.process_id is not None:
-            # Match the IDE session whose extension-host PID *or* parent
-            # PID equals the OS foreground window PID.
-            db.query(IDESessionRecord).filter(
-                IDESessionRecord.session_end.is_(None),
-                (IDESessionRecord.process_id == payload.process_id)
-                | (IDESessionRecord.parent_process_id == payload.process_id),
-            ).update(
-                {
-                    "is_foreground": 1,
-                    "confirmed_by_os": 1,
-                    "collection_reason": "foreground",
-                },
-                synchronize_session=False,
-            )
-            db.query(BrowserSessionRecord).filter(
-                BrowserSessionRecord.session_end.is_(None),
-                BrowserSessionRecord.process_id == payload.process_id,
-            ).update(
-                {"is_foreground": 1, "confirmed_by_os": 1},
-                synchronize_session=False,
-            )
+        try:
+            if payload.process_id is not None:
+                # Match the IDE session whose extension-host PID *or* parent
+                # PID equals the OS foreground window PID.
+                db.query(IDESessionRecord).filter(
+                    IDESessionRecord.session_end.is_(None),
+                    (IDESessionRecord.process_id == payload.process_id)
+                    | (IDESessionRecord.parent_process_id == payload.process_id),
+                ).update(
+                    {
+                        "is_foreground": 1,
+                        "confirmed_by_os": 1,
+                        "collection_reason": "foreground",
+                    },
+                    synchronize_session=False,
+                )
+                db.query(BrowserSessionRecord).filter(
+                    BrowserSessionRecord.session_end.is_(None),
+                    BrowserSessionRecord.process_id == payload.process_id,
+                ).update(
+                    {"is_foreground": 1, "confirmed_by_os": 1},
+                    synchronize_session=False,
+                )
 
-        if self._is_ide_os_payload(payload):
-            # Promote open IDE sessions — except background_ai rows, which
-            # belong to a blurred window doing AI work; the extension closes
-            # them itself and opens a fresh foreground row on refocus.
-            db.query(IDESessionRecord).filter(
-                IDESessionRecord.user_id == payload.user_id,
-                IDESessionRecord.session_end.is_(None),
-                (IDESessionRecord.collection_reason.is_(None))
-                | (IDESessionRecord.collection_reason != "background_ai"),
-            ).update(
-                {
-                    "is_foreground": 1,
-                    "confirmed_by_os": 1,
-                    "collection_reason": "foreground",
-                },
-                synchronize_session=False,
-            )
+            if self._is_ide_os_payload(payload):
+                # Promote open IDE sessions — except background_ai rows, which
+                # belong to a blurred window doing AI work; the extension closes
+                # them itself and opens a fresh foreground row on refocus.
+                db.query(IDESessionRecord).filter(
+                    IDESessionRecord.user_id == payload.user_id,
+                    IDESessionRecord.session_end.is_(None),
+                    (IDESessionRecord.collection_reason.is_(None))
+                    | (IDESessionRecord.collection_reason != "background_ai"),
+                ).update(
+                    {
+                        "is_foreground": 1,
+                        "confirmed_by_os": 1,
+                        "collection_reason": "foreground",
+                    },
+                    synchronize_session=False,
+                )
 
-        if self._is_browser_os_payload(payload):
-            db.query(BrowserSessionRecord).filter(
-                BrowserSessionRecord.user_id == payload.user_id,
-                BrowserSessionRecord.session_end.is_(None),
-            ).update(
-                {"is_foreground": 1, "confirmed_by_os": 1},
-                synchronize_session=False,
-            )
+            if self._is_browser_os_payload(payload):
+                db.query(BrowserSessionRecord).filter(
+                    BrowserSessionRecord.user_id == payload.user_id,
+                    BrowserSessionRecord.session_end.is_(None),
+                ).update(
+                    {"is_foreground": 1, "confirmed_by_os": 1},
+                    synchronize_session=False,
+                )
 
-        db.flush()
+            db.flush()
+        except Exception:
+            db.rollback()
+            raise
 
     def _is_ide_os_payload(self, payload: OSEventPayload) -> bool:
         if payload.app_category:
@@ -707,9 +768,17 @@ class SessionCoordinator:
         # idle counter is wall-clock based and can drift past the backend's
         # event-timestamp duration, so clamp it as a safety net (otherwise the
         # dashboard reports idle_sec > duration_sec).
-        idle = getattr(session, "idle_sec", None)
+        idle = getattr(session, "idle_time", None)
         if idle is not None and idle > duration_sec:
-            session.idle_sec = duration_sec
+            session.idle_time = duration_sec
+
+        # Accumulate ongoing idle time if session ends while in that state,
+        # and move the start timestamp forward so the next session can continue
+        # counting from this point (avoiding double counting on IDLE_END).
+        if self._idle_start_timestamp is not None:
+            ongoing_idle = (timestamp - self._idle_start_timestamp).total_seconds()
+            session.idle_time += int(ongoing_idle)
+            self._idle_start_timestamp = timestamp
 
     def _json(self, value: dict | None) -> str | None:
         if value is None:

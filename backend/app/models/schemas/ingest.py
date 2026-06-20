@@ -17,8 +17,6 @@ class OSEventType(str, Enum):
     BLURRED = "blurred"
     IDLE_START = "idle_start"
     IDLE_END = "idle_end"
-    LOCKED = "locked"
-    UNLOCKED = "unlocked"
     SUSPEND = "suspend"
     SHUTDOWN = "shutdown"
 
