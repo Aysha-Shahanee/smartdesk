@@ -1,2 +1,0 @@
-{"block_start_time": "2026-06-20T15:00:00+00:00", "block_end_time": "2026-06-20T15:15:00+00:00", "dominant_emotion": "Happy", "emotion_scores": {"Happy": 0.7, "Neutral": 0.2, "Angry": 0.05, "Surprise": 0.05}, "processed_frame_count": 1}
-{"block_start_time": "2026-06-20T16:00:00+00:00", "block_end_time": "2026-06-20T16:15:00+00:00", "dominant_emotion": "Happy", "emotion_scores": {"Happy": 0.6, "Neutral": 0.3, "Angry": 0.05, "Surprise": 0.05}, "processed_frame_count": 1}

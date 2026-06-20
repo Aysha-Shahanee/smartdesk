@@ -7,6 +7,25 @@ from torchvision import models, transforms
 from PIL import Image
 
 from emotion_block_aggregator import EmotionBlockAggregator
+from storage.local_storage import LocalEmotionStorage
+from storage.session_manager import SessionManager
+from storage.supabase_sync import SupabaseEmotionSync
+
+
+SYNC_RETRY_SECONDS = 300
+OUTPUT_PATH = Path(__file__).with_name("emotion_15min_blocks.jsonl")
+
+
+session_manager = SessionManager(user_id="local_user")
+local_storage = LocalEmotionStorage(OUTPUT_PATH)
+sync_client = SupabaseEmotionSync(local_storage)
+local_storage.cleanup_old_records()
+
+if sync_client.is_configured:
+    synced_count = sync_client.retry_unsynced()
+    print(f"Synced {synced_count} pending emotion blocks.")
+else:
+    print(f"Supabase sync disabled: {sync_client.disabled_reason}")
 
 # ------------------ DEVICE ------------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -42,8 +61,21 @@ cap = cv2.VideoCapture(0)
 frame_count = 0
 face_box = None
 last_processed_at = 0.0
+last_sync_retry_at = time.monotonic()
 latest_emotion = "Unknown"
-aggregator = EmotionBlockAggregator(Path(__file__).with_name("emotion_15min_blocks.jsonl"))
+aggregator = EmotionBlockAggregator(
+    output_path=OUTPUT_PATH,
+    session_manager=session_manager,
+    storage=local_storage,
+)
+
+
+def sync_blocks(blocks: list[dict]) -> None:
+    if not sync_client.is_configured:
+        return
+
+    for block in blocks:
+        sync_client.upload_record(block)
 
 while True:
     ret, frame = cap.read()
@@ -51,8 +83,18 @@ while True:
         break
 
     frame_count += 1
-    for block in aggregator.complete_expired_blocks():
+    completed_blocks = aggregator.complete_expired_blocks()
+    sync_blocks(completed_blocks)
+    for block in completed_blocks:
         print("Saved 15-minute emotion block:", block)
+
+    now_monotonic = time.monotonic()
+    if now_monotonic - last_sync_retry_at >= SYNC_RETRY_SECONDS:
+        last_sync_retry_at = now_monotonic
+        local_storage.cleanup_old_records()
+        synced_count = sync_client.retry_unsynced()
+        if synced_count:
+            print(f"Synced {synced_count} pending emotion blocks.")
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
@@ -90,6 +132,7 @@ while True:
             }
             latest_emotion = max(emotion_probabilities, key=emotion_probabilities.get)
             completed_blocks = aggregator.add_frame(emotion_probabilities)
+            sync_blocks(completed_blocks)
 
             for block in completed_blocks:
                 print("Saved 15-minute emotion block:", block)
@@ -108,5 +151,10 @@ while True:
 cap.release()
 final_block = aggregator.flush()
 if final_block is not None:
+    sync_blocks([final_block])
     print("Saved final partial emotion block:", final_block)
+local_storage.cleanup_old_records()
+synced_count = sync_client.retry_unsynced()
+if synced_count:
+    print(f"Synced {synced_count} pending emotion blocks.")
 cv2.destroyAllWindows()
