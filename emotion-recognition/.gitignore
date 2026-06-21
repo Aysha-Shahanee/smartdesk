@@ -11,3 +11,4 @@ data/
 
 *.pyc
 .env
+RAF-DB-improvement/test_emotion_service.py

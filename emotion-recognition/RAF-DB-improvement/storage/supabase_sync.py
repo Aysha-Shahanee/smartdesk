@@ -20,6 +20,7 @@ class SupabaseEmotionSync:
         self.supabase_key = supabase_key or os.getenv("SUPABASE_KEY") or os.getenv("SUPABASE_ANON_KEY")
         self.client = None
         self.disabled_reason = ""
+        self.last_error = ""
 
         if not self.supabase_url or not self.supabase_key:
             self.disabled_reason = "SUPABASE_URL or SUPABASE_KEY is not set"
@@ -39,14 +40,17 @@ class SupabaseEmotionSync:
 
     def upload_record(self, record: dict[str, Any]) -> bool:
         if not self.client:
+            self.last_error = self.disabled_reason or "Supabase client is not configured"
             return False
 
         try:
             self.client.table(self.table_name).upsert(self._to_supabase_row(record)).execute()
         except Exception as exc:
+            self.last_error = str(exc)
             self.storage.update_sync_status(record["id"], synced=False, error=str(exc))
             return False
 
+        self.last_error = ""
         self.storage.mark_synced(record["id"])
         return True
 
@@ -59,6 +63,29 @@ class SupabaseEmotionSync:
             if self.upload_record(record):
                 uploaded_count += 1
         return uploaded_count
+
+    def query_records(self, start_time: str, end_time: str, user_id: str | None = None) -> list[dict[str, Any]]:
+        if not self.client:
+            self.last_error = self.disabled_reason or "Supabase client is not configured"
+            return []
+
+        try:
+            query = (
+                self.client.table(self.table_name)
+                .select("*")
+                .gte("block_start_time", start_time)
+                .lt("block_start_time", end_time)
+                .order("block_start_time")
+            )
+            if user_id:
+                query = query.eq("user_id", user_id)
+            response = query.execute()
+        except Exception as exc:
+            self.last_error = str(exc)
+            return []
+
+        self.last_error = ""
+        return list(response.data or [])
 
     def _to_supabase_row(self, record: dict[str, Any]) -> dict[str, Any]:
         scores = record.get("emotion_scores", {})
