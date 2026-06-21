@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from torchvision import models, transforms
 from PIL import Image
+from dotenv import load_dotenv
 
 from emotion_block_aggregator import EmotionBlockAggregator
 from storage.local_storage import LocalEmotionStorage
@@ -14,6 +15,9 @@ from storage.supabase_sync import SupabaseEmotionSync
 
 SYNC_RETRY_SECONDS = 300
 OUTPUT_PATH = Path(__file__).with_name("emotion_15min_blocks.jsonl")
+ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+
+load_dotenv(ENV_PATH)
 
 
 session_manager = SessionManager(user_id="local_user")

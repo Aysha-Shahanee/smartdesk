@@ -17,12 +17,12 @@ class SupabaseEmotionSync:
         self.storage = storage
         self.table_name = table_name
         self.supabase_url = supabase_url or os.getenv("SUPABASE_URL")
-        self.supabase_key = supabase_key or os.getenv("SUPABASE_ANON_KEY")
+        self.supabase_key = supabase_key or os.getenv("SUPABASE_KEY") or os.getenv("SUPABASE_ANON_KEY")
         self.client = None
         self.disabled_reason = ""
 
         if not self.supabase_url or not self.supabase_key:
-            self.disabled_reason = "SUPABASE_URL or SUPABASE_ANON_KEY is not set"
+            self.disabled_reason = "SUPABASE_URL or SUPABASE_KEY is not set"
             return
 
         try:
@@ -80,4 +80,3 @@ class SupabaseEmotionSync:
             "processed_frame_count": record["processed_frame_count"],
             "created_at": record["created_at"],
         }
-
