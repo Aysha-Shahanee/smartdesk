@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import datetime, time as datetime_time, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from dotenv import load_dotenv
 
 from emotion_block_aggregator import EMOTIONS, EmotionBlockAggregator
 from model_files import ensure_raf_model_file
-from storage.local_storage import LocalEmotionStorage, parse_datetime
+from storage.pending_queue import PendingQueue
+from storage.session_sync import SupabaseSessionSync
 from storage.session_manager import SessionManager
 from storage.supabase_sync import SupabaseEmotionSync
 
@@ -29,9 +31,13 @@ class EmotionRecognitionService:
         load_dotenv(self.project_dir.parent / ".env")
 
         self.user_id = user_id
-        self.output_path = Path(output_path or self.project_dir / "emotion_15min_blocks.jsonl")
-        self.local_storage = LocalEmotionStorage(self.output_path)
-        self.sync_client = SupabaseEmotionSync(self.local_storage)
+        self.output_path = Path(output_path or self.project_dir / "pending_emotion_blocks.jsonl")
+        self.session_queue = PendingQueue(self.project_dir / "pending_emotion_sessions.jsonl")
+        self.block_queue = PendingQueue(self.output_path)
+        self.session_sync = SupabaseSessionSync(self.session_queue)
+        self.sync_client = SupabaseEmotionSync(self.block_queue)
+        self.completed_blocks_memory: list[dict[str, Any]] = []
+        self.current_session_record: dict[str, Any] | None = None
 
         self.session_manager: SessionManager | None = None
         self.aggregator: EmotionBlockAggregator | None = None
@@ -66,8 +72,10 @@ class EmotionRecognitionService:
             self.aggregator = EmotionBlockAggregator(
                 output_path=self.output_path,
                 session_manager=self.session_manager,
-                storage=self.local_storage,
             )
+            self.completed_blocks_memory = []
+            self.current_session_record = self._build_session_record(status="running")
+            self.session_sync.queue_session(self.current_session_record)
             self._stop_event.clear()
             self._status.update(
                 {
@@ -86,6 +94,7 @@ class EmotionRecognitionService:
                 }
             )
 
+        self._retry_pending_sync()
         self._thread = threading.Thread(target=self._run_loop, args=(show_window,), daemon=True)
         self._thread.start()
         return {"ok": True, "message": "Emotion recognition started.", "status": self.get_status()}
@@ -109,9 +118,13 @@ class EmotionRecognitionService:
     def get_session_history(self) -> dict[str, Any]:
         status = self.get_status()
         session_id = status.get("session_id")
-        completed_blocks = [
-            record for record in self.local_storage.read_records() if record.get("session_id") == session_id
-        ]
+        completed_blocks = []
+        if session_id and self.sync_client.is_configured:
+            completed_blocks = self.sync_client.query_session_records(session_id, user_id=self.user_id)
+            if self.sync_client.last_error:
+                self._set_error("supabase_query", self.sync_client.last_error)
+        if not completed_blocks:
+            completed_blocks = [block for block in self.completed_blocks_memory if block.get("session_id") == session_id]
 
         current_block = None
         if self.aggregator:
@@ -124,35 +137,13 @@ class EmotionRecognitionService:
         return {
             "ok": True,
             "status": status,
+            "session": self.current_session_record,
             "current_block": current_block,
             "completed_blocks": completed_blocks,
         }
 
     def get_history(self, period: str) -> dict[str, Any]:
-        period = period.lower().strip()
-        now = datetime.now().astimezone()
-
-        if period == "today":
-            start = datetime.combine(now.date(), datetime_time.min, tzinfo=now.tzinfo)
-            end = start + timedelta(days=1)
-            return {
-                "ok": True,
-                "source": "local_jsonl",
-                "period": period,
-                "records": self._local_records_between(start, end),
-            }
-
-        if period == "yesterday":
-            today_start = datetime.combine(now.date(), datetime_time.min, tzinfo=now.tzinfo)
-            start = today_start - timedelta(days=1)
-            end = today_start
-            records = self.sync_client.query_records(start.isoformat(), end.isoformat(), user_id=self.user_id)
-            if self.sync_client.last_error:
-                self._set_error("supabase_query", self.sync_client.last_error)
-                return {"ok": False, "stage": "supabase_query", "message": self.sync_client.last_error, "records": []}
-            return {"ok": True, "source": "supabase", "period": period, "records": records}
-
-        return {"ok": False, "stage": "history_period", "message": "Use 'today' or 'yesterday'.", "records": []}
+        return {"ok": False, "stage": "history_removed", "message": "Use get_session_history() for current session data.", "records": []}
 
     def _run_loop(self, show_window: bool) -> None:
         try:
@@ -181,8 +172,7 @@ class EmotionRecognitionService:
                 now_monotonic = time.monotonic()
                 if now_monotonic - last_sync_retry_at >= SYNC_RETRY_SECONDS:
                     last_sync_retry_at = now_monotonic
-                    self.local_storage.cleanup_old_records()
-                    self._retry_supabase_sync()
+                    self._retry_pending_sync()
 
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
@@ -298,8 +288,15 @@ class EmotionRecognitionService:
             except Exception:
                 pass
 
-        self.local_storage.cleanup_old_records()
-        self._retry_supabase_sync()
+        if self.current_session_record:
+            self.current_session_record = {
+                **self.current_session_record,
+                "ended_at": datetime.now().astimezone().isoformat(),
+                "status": "stopped" if not self._status.get("last_error") else "failed",
+                "updated_at": datetime.now().astimezone().isoformat(),
+            }
+            self.session_sync.queue_session(self.current_session_record)
+        self._retry_pending_sync()
         self._set_status(running=False, camera_ready=False)
 
     def _save_and_sync_blocks(self, blocks: list[dict]) -> None:
@@ -308,43 +305,50 @@ class EmotionRecognitionService:
 
         self._set_stage("local_storage")
         for block in blocks:
+            self.sync_client.queue_block(block)
+            self.completed_blocks_memory.append(block)
             self._set_status(last_saved_block_time=block.get("block_end_time"))
 
-        self._set_stage("supabase_upload")
+        self._retry_pending_sync()
+
+    def _retry_pending_sync(self) -> None:
+        if self.session_sync.is_configured:
+            self._set_stage("supabase_upload")
+            self.session_sync.retry_pending_sessions()
+            if self.session_sync.last_error:
+                self._set_status(last_upload_error=self.session_sync.last_error)
+                self._set_error("supabase_upload", self.session_sync.last_error)
+        elif self.session_sync.disabled_reason:
+            self._set_status(last_upload_error=self.session_sync.disabled_reason)
+
         if not self.sync_client.is_configured:
-            self._set_status(last_upload_error=self.sync_client.disabled_reason)
+            if self.sync_client.disabled_reason:
+                self._set_status(last_upload_error=self.sync_client.disabled_reason)
             return
 
-        for block in blocks:
-            if self.sync_client.upload_record(block):
-                self._set_status(last_synced_block_time=block.get("block_end_time"), last_upload_error=None)
-            else:
-                self._set_status(last_upload_error=self.sync_client.last_error)
-                self._set_error("supabase_upload", self.sync_client.last_error)
-
-    def _retry_supabase_sync(self) -> None:
-        if not self.sync_client.is_configured:
-            return
         self._set_stage("supabase_upload")
-        uploaded_count = self.sync_client.retry_unsynced()
+        uploaded_count = self.sync_client.retry_pending_blocks()
         if uploaded_count:
             self._set_status(last_upload_error=None)
         elif self.sync_client.last_error:
             self._set_status(last_upload_error=self.sync_client.last_error)
+            self._set_error("supabase_upload", self.sync_client.last_error)
 
-    def _local_records_between(self, start: datetime, end: datetime) -> list[dict]:
-        records = []
-        for record in self.local_storage.read_records():
-            value = record.get("block_start_time")
-            if not value:
-                continue
-            try:
-                timestamp = parse_datetime(value)
-            except ValueError:
-                continue
-            if start <= timestamp < end:
-                records.append(record)
-        return records
+    def _build_session_record(self, status: str) -> dict[str, Any]:
+        if not self.session_manager:
+            raise RuntimeError("No active session manager.")
+
+        now = datetime.now().astimezone().isoformat()
+        return {
+            "id": self.session_manager.session_id,
+            "user_id": self.session_manager.user_id,
+            "session_number": None,
+            "started_at": self.session_manager.session_start_time.isoformat(),
+            "ended_at": None,
+            "status": status,
+            "created_at": now,
+            "updated_at": now,
+        }
 
     def _set_stage(self, stage: str) -> None:
         self._set_status(last_error_stage=stage)

@@ -3,18 +3,18 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from storage.local_storage import LocalEmotionStorage
+from storage.pending_queue import PendingQueue
 
 
 class SupabaseEmotionSync:
     def __init__(
         self,
-        storage: LocalEmotionStorage,
+        pending_queue: PendingQueue,
         table_name: str = "emotion_blocks",
         supabase_url: str | None = None,
         supabase_key: str | None = None,
     ) -> None:
-        self.storage = storage
+        self.pending_queue = pending_queue
         self.table_name = table_name
         self.supabase_url = supabase_url or os.getenv("SUPABASE_URL")
         self.supabase_key = supabase_key or os.getenv("SUPABASE_KEY") or os.getenv("SUPABASE_ANON_KEY")
@@ -38,6 +38,10 @@ class SupabaseEmotionSync:
     def is_configured(self) -> bool:
         return self.client is not None
 
+    def queue_block(self, record: dict[str, Any]) -> dict[str, Any]:
+        self.pending_queue.upsert(record)
+        return record
+
     def upload_record(self, record: dict[str, Any]) -> bool:
         if not self.client:
             self.last_error = self.disabled_reason or "Supabase client is not configured"
@@ -47,19 +51,19 @@ class SupabaseEmotionSync:
             self.client.table(self.table_name).upsert(self._to_supabase_row(record)).execute()
         except Exception as exc:
             self.last_error = str(exc)
-            self.storage.update_sync_status(record["id"], synced=False, error=str(exc))
             return False
 
         self.last_error = ""
-        self.storage.mark_synced(record["id"])
+        self.pending_queue.remove(record["id"])
         return True
 
-    def retry_unsynced(self) -> int:
+    def retry_pending_blocks(self) -> int:
         if not self.client:
+            self.last_error = self.disabled_reason or "Supabase client is not configured"
             return 0
 
         uploaded_count = 0
-        for record in self.storage.get_unsynced_records():
+        for record in self.pending_queue.read_all():
             if self.upload_record(record):
                 uploaded_count += 1
         return uploaded_count
@@ -75,6 +79,28 @@ class SupabaseEmotionSync:
                 .select("*")
                 .gte("block_start_time", start_time)
                 .lt("block_start_time", end_time)
+                .order("block_start_time")
+            )
+            if user_id:
+                query = query.eq("user_id", user_id)
+            response = query.execute()
+        except Exception as exc:
+            self.last_error = str(exc)
+            return []
+
+        self.last_error = ""
+        return list(response.data or [])
+
+    def query_session_records(self, session_id: str, user_id: str | None = None) -> list[dict[str, Any]]:
+        if not self.client:
+            self.last_error = self.disabled_reason or "Supabase client is not configured"
+            return []
+
+        try:
+            query = (
+                self.client.table(self.table_name)
+                .select("*")
+                .eq("session_id", session_id)
                 .order("block_start_time")
             )
             if user_id:

@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
-from storage.local_storage import LocalEmotionStorage
 from storage.session_manager import SessionManager
 
 
@@ -15,7 +15,6 @@ EMOTIONS = ("Happy", "Neutral", "Angry", "Surprise")
 class EmotionBlockAggregator:
     output_path: Path
     session_manager: SessionManager
-    storage: LocalEmotionStorage | None = None
     block_minutes: int = 15
     min_partial_minutes: int = 5
     block_start: datetime | None = None
@@ -25,8 +24,6 @@ class EmotionBlockAggregator:
 
     def __post_init__(self) -> None:
         self.output_path = Path(self.output_path)
-        if self.storage is None:
-            self.storage = LocalEmotionStorage(self.output_path)
         self.block_start = self.session_manager.session_start_time
 
     @property
@@ -90,12 +87,12 @@ class EmotionBlockAggregator:
             "emotion_scores": dict(self.emotion_scores),
             "processed_frame_count": self.processed_frame_count,
             "synced": False,
+            "id": str(uuid4()),
+            "created_at": datetime.now().astimezone().isoformat(),
         }
 
-        saved_record = self.storage.append_record(result)
-        self.storage.cleanup_old_records()
         self._reset_scores()
-        return saved_record
+        return result
 
     def _start_block(self, block_start: datetime) -> None:
         self.block_start = block_start
