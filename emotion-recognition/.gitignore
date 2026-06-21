@@ -9,3 +9,4 @@ RAF-DB/
 data/
 
 *.pyc
+.env
