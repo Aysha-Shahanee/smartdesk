@@ -37,8 +37,6 @@ class IDEDashboardResponse(DashboardSchema):
     saves: int = Field(default=0, ge=0)
     lines_added: int = Field(default=0, ge=0)
     lines_deleted: int = Field(default=0, ge=0)
-    terminal_commands: int = Field(default=0, ge=0)
-    debug_runs: int = Field(default=0, ge=0)
     top_languages: list[NamedDuration] = Field(default_factory=list)
     top_projects: list[NamedDuration] = Field(default_factory=list)
 

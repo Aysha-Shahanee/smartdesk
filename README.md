@@ -188,3 +188,6 @@ backend/
 vscode-extension/       IDE extension (VS Code, Antigravity, Cursor, ...)
 browser-extension/      Chromium extension (Manifest V3)
 ```
+
+cefbhbhbcshjbbchbh
+sjbjbhfbehbhbbbh

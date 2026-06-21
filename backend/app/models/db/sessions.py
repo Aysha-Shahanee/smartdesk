@@ -69,7 +69,6 @@ class IDESessionRecord(Base):
     idle_sec = Column(Integer, nullable=True, default=0)
 
     is_foreground = Column(Integer, nullable=False, default=0)
-    foreground_sec = Column(Integer, nullable=True, default=0)
     confirmed_by_os = Column(Integer, nullable=False, default=0)
     # "foreground" — IDE was the OS foreground app
     # "background_ai" — IDE blurred but edits kept arriving (AI agent working)
@@ -83,8 +82,6 @@ class IDESessionRecord(Base):
     lines_added = Column(Integer, nullable=False, default=0)
     lines_deleted = Column(Integer, nullable=False, default=0)
     file_switch_count = Column(Integer, nullable=False, default=0)
-    terminal_command_count = Column(Integer, nullable=False, default=0)
-    debug_run_count = Column(Integer, nullable=False, default=0)
 
     edited_file_count = Column(Integer, nullable=True, default=0)
     changed_file_count = Column(Integer, nullable=True, default=0)

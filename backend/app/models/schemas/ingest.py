@@ -60,13 +60,17 @@ class OSEventPayload(StrictSchema):
 
 
 class IDECounters(StrictSchema):
+    # Tolerate unknown counters so a backend that drops a counter field doesn't
+    # 422-reject (and silently lose) every event from extensions still on the
+    # old build. Removed fields (terminal_command_count, debug_run_count) are
+    # simply ignored rather than rejected.
+    model_config = ConfigDict(extra="ignore")
+
     edit_count: int = Field(default=0, ge=0)
     save_count: int = Field(default=0, ge=0)
     lines_added: int = Field(default=0, ge=0)
     lines_deleted: int = Field(default=0, ge=0)
     file_switch_count: int = Field(default=0, ge=0)
-    terminal_command_count: int = Field(default=0, ge=0)
-    debug_run_count: int = Field(default=0, ge=0)
     idle_sec: int = Field(default=0, ge=0)
 
 

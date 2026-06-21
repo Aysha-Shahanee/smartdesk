@@ -178,20 +178,6 @@ def _get_idle_seconds() -> float:
         return 0.0
 
 
-def _is_screen_locked() -> bool:
-    """Return True if the Windows workstation is locked."""
-    try:
-        import ctypes
-        # OpenInputDesktop returns NULL when no interactive desktop is available (locked)
-        h = ctypes.windll.user32.OpenInputDesktop(0, False, 0x0001)
-        if h:
-            ctypes.windll.user32.CloseDesktop(h)
-            return False
-        return True
-    except Exception:
-        return False
-
-
 # ------------------------------------------------------------------ #
 # Main loop                                                            #
 # ------------------------------------------------------------------ #
@@ -337,6 +323,13 @@ class OSCollector:
                 "process_id": pid,
             })
             _post_event(payload)
+
+    def _emit_idle_event(self, event: str, idle_sec: float) -> None:
+        # idle_sec lets the backend split the session at the real idle
+        # boundary rather than at the (delayed) detection time.
+        payload = self._build(event)
+        payload["extra_data"] = (payload.get("extra_data") or {}) | {"idle_sec": idle_sec}
+        _post_event(payload)
 
     def _build(self, event: str) -> dict[str, Any]:
         return {

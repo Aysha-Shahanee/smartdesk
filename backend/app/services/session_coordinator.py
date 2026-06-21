@@ -438,7 +438,6 @@ class SessionCoordinator:
             session_start=timestamp,
             idle_sec=0,
             is_foreground=1 if is_foreground else 0,
-            foreground_sec=0,
             confirmed_by_os=1 if is_foreground else 0,
             collection_reason="foreground" if is_foreground else "background_ai",
             trigger=payload.trigger,
@@ -566,8 +565,6 @@ class SessionCoordinator:
             session.lines_added = payload.counters.lines_added
             session.lines_deleted = payload.counters.lines_deleted
             session.file_switch_count = payload.counters.file_switch_count
-            session.terminal_command_count = payload.counters.terminal_command_count
-            session.debug_run_count = payload.counters.debug_run_count
             session.idle_sec = payload.counters.idle_sec
 
     def _open_browser_session(
