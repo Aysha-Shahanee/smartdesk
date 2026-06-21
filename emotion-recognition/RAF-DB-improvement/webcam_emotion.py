@@ -8,6 +8,7 @@ from PIL import Image
 from dotenv import load_dotenv
 
 from emotion_block_aggregator import EmotionBlockAggregator
+from model_files import ensure_raf_model_file
 from storage.local_storage import LocalEmotionStorage
 from storage.session_manager import SessionManager
 from storage.supabase_sync import SupabaseEmotionSync
@@ -39,7 +40,7 @@ print("Using device:", device)
 model = models.mobilenet_v3_small(weights=None)
 model.classifier[3] = nn.Linear(model.classifier[3].in_features, 4)
 
-model_path = Path(__file__).with_name("emotion_model_raf.pth")
+model_path = ensure_raf_model_file(Path(__file__).parent)
 model.load_state_dict(torch.load(model_path, map_location=device))
 model.to(device)
 model.eval()

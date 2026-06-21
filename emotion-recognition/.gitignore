@@ -2,6 +2,7 @@ venv/
 **pycache**/
 *.pth
 *.pt
+*.download
 
 FER2013/
 emotion_model.pth
