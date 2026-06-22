@@ -8,7 +8,7 @@ from uuid import uuid4
 from storage.session_manager import SessionManager
 
 
-EMOTIONS = ("Happy", "Neutral", "Angry", "Surprise")
+EMOTIONS = ("Angry", "Happy", "Neutral", "Surprise")
 
 
 @dataclass
