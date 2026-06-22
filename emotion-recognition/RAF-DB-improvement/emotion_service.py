@@ -9,8 +9,8 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 
-from emotion_block_aggregator import EMOTIONS, EmotionBlockAggregator
-from model_files import ensure_raf_model_file
+from emotion_block_aggregator import EmotionBlockAggregator
+from emotion_detector import WebcamEmotionDetector
 from storage.pending_queue import PendingQueue
 from storage.session_sync import SupabaseSessionSync
 from storage.session_manager import SessionManager
@@ -44,7 +44,7 @@ class EmotionRecognitionService:
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
-        self._cap = None
+        self._detector: WebcamEmotionDetector | None = None
 
         self._status: dict[str, Any] = {
             "running": False,
@@ -147,10 +147,8 @@ class EmotionRecognitionService:
 
     def _run_loop(self, show_window: bool) -> None:
         try:
-            cv2, torch, model, transform, face_cascade = self._prepare_runtime()
-            cap = cv2.VideoCapture(0)
-            self._cap = cap
-            if not cap.isOpened():
+            detector = self._prepare_runtime()
+            if not detector.open_camera(0):
                 self._set_error("camera_open", "Could not open webcam.")
                 return
             self._set_status(camera_ready=True)
@@ -161,7 +159,7 @@ class EmotionRecognitionService:
             last_sync_retry_at = time.monotonic()
 
             while not self._stop_event.is_set():
-                ret, frame = cap.read()
+                ret, frame = detector.read_frame()
                 if not ret:
                     self._set_error("frame_capture", "Could not read frame from webcam.")
                     break
@@ -174,91 +172,49 @@ class EmotionRecognitionService:
                     last_sync_retry_at = now_monotonic
                     self._retry_pending_sync()
 
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-                if frame_count % 10 == 0 or face_box is None:
-                    try:
-                        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
-                    except Exception as exc:
-                        self._set_error("face_detection", str(exc))
-                        faces = []
-
-                    if len(faces) > 0:
-                        faces = sorted(faces, key=lambda face: face[2] * face[3], reverse=True)
-                        face_box = faces[0]
+                try:
+                    face_box = detector.update_face_box(frame, frame_count, face_box)
+                except Exception as exc:
+                    self._set_error("face_detection", str(exc))
 
                 if face_box is not None:
-                    x, y, w, h = face_box
-                    face = frame[y : y + h, x : x + w]
+                    face = detector.crop_face(frame, face_box)
                     should_process_frame = now_monotonic - last_processed_at >= 1.0
 
                     if face.size != 0 and should_process_frame:
                         last_processed_at = now_monotonic
-                        self._predict_frame(cv2, torch, model, transform, face)
+                        self._predict_frame(detector, face)
 
                     if show_window:
-                        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                        cv2.putText(
-                            frame,
-                            self.get_status()["latest_emotion"],
-                            (x, y - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            1,
-                            (0, 255, 0),
-                            2,
-                        )
+                        detector.draw_prediction(frame, face_box, self.get_status()["latest_emotion"])
 
                 if show_window:
-                    cv2.imshow("Emotion Detector (Stable)", frame)
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                    if detector.show_frame("Emotion Detector (Stable)", frame):
                         self._stop_event.set()
         finally:
             self._finish_run(show_window)
 
     def _prepare_runtime(self):
+        detector = WebcamEmotionDetector(self.project_dir)
+        self._detector = detector
+
         self._set_stage("model_download")
-        model_path = ensure_raf_model_file(self.project_dir)
+        model_path = detector.ensure_model_file()
 
         self._set_stage("model_load")
-        import cv2
-        import torch
-        import torch.nn as nn
-        from PIL import Image
-        from torchvision import models, transforms
+        detector.load_model(model_path)
 
-        self._image_class = Image
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = models.mobilenet_v3_small(weights=None)
-        model.classifier[3] = nn.Linear(model.classifier[3].in_features, 4)
-        model.load_state_dict(torch.load(model_path, map_location=device))
-        model.to(device)
-        model.eval()
-
-        transform = transforms.Compose(
-            [
-                transforms.Resize((224, 224)),
-                transforms.ToTensor(),
-                transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
-            ]
-        )
-        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-        self._device = device
         self._set_status(model_ready=True)
-        return cv2, torch, model, transform, face_cascade
+        return detector
 
-    def _predict_frame(self, cv2, torch, model, transform, face) -> None:
+    def _predict_frame(self, detector: WebcamEmotionDetector, face) -> None:
         self._set_stage("prediction")
         try:
-            face_pil = self._image_class.fromarray(cv2.cvtColor(face, cv2.COLOR_BGR2RGB))
-            face_tensor = transform(face_pil).unsqueeze(0).to(self._device)
-            with torch.no_grad():
-                outputs = model(face_tensor)
-                probabilities = torch.softmax(outputs, dim=1).squeeze(0).cpu().tolist()
+            emotion_probabilities = detector.predict_face(face)
         except Exception as exc:
             self._set_error("prediction", str(exc))
             return
 
-        emotion_probabilities = {emotion: probabilities[index] for index, emotion in enumerate(EMOTIONS)}
         latest_emotion = max(emotion_probabilities, key=emotion_probabilities.get)
         completed_blocks = self.aggregator.add_frame(emotion_probabilities)
         self._set_status(latest_emotion=latest_emotion)
@@ -276,15 +232,13 @@ class EmotionRecognitionService:
         if final_block is not None:
             self._save_and_sync_blocks([final_block])
 
-        if self._cap is not None:
-            self._cap.release()
-            self._cap = None
+        if self._detector is not None:
+            self._detector.release()
 
         if show_window:
             try:
-                import cv2
-
-                cv2.destroyAllWindows()
+                if self._detector is not None:
+                    self._detector.close_windows()
             except Exception:
                 pass
 
