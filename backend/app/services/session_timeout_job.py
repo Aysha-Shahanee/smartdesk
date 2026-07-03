@@ -157,32 +157,53 @@ class SessionTimeoutJob:
         Call this from a test or a debug endpoint — no background thread needed.
         """
         db: DbSession = SessionLocal()
-        now = local_now()
-        threshold_dt = now - timedelta(seconds=BROKEN_SESSION_TIMEOUT_SEC)
-        now_iso = now.isoformat()
 
-        total_closed = 0
         try:
-            for Model in (OSSessionRecord, IDESessionRecord, BrowserSessionRecord):
-                open_rows = db.query(Model).filter(Model.session_end.is_(None)).all()
+            now = local_now()
+            threshold_dt = now - timedelta(
+                seconds=BROKEN_SESSION_TIMEOUT_SEC
+            )
+            now_iso = now.isoformat()
+            total_closed = 0
+
+            for Model in (
+                OSSessionRecord,
+                IDESessionRecord,
+                BrowserSessionRecord,
+            ):
+                open_rows = (
+                    db.query(Model)
+                    .filter(Model.session_end.is_(None))
+                    .all()
+                )
+
                 stale_rows = [
-                    row for row in open_rows if parse_iso(row.updated_at) < threshold_dt
+                    row
+                    for row in open_rows
+                    if parse_iso(row.updated_at) < threshold_dt
                 ]
+
                 for row in stale_rows:
                     if _is_empty_background_ide(row):
                         db.delete(row)
                         total_closed += 1
                         continue
+
                     row.session_end = now_iso
-                    row.duration_sec = _seconds_between(row.session_start, now_iso)
+                    row.duration_sec = _seconds_between(
+                        row.session_start,
+                        now_iso,
+                    )
                     row.closed_by = "timeout"
                     row.updated_at = now_iso
                     total_closed += 1
+
             db.commit()
+            return total_closed
+
         except Exception:
             db.rollback()
             raise
+
         finally:
             db.close()
-
-        return total_closed

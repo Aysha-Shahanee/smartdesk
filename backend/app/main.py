@@ -10,6 +10,7 @@ from app.routes import calendar
 from app.routes import dashboard
 from app.routes import health
 from app.routes import ingest
+from app.services.activity_segment_builder import ActivitySegmentBuilder
 from app.services.calendar_sync_job import CalendarSyncJob
 from app.services.os_collector import OSCollector
 from app.services.session_timeout_job import SessionTimeoutJob
@@ -22,6 +23,10 @@ _timeout_job = SessionTimeoutJob()
 _work_scheduler = WorkPeriodScheduler()
 _os_collector = OSCollector()
 _calendar_sync_job = CalendarSyncJob()
+_activity_segment_builder = ActivitySegmentBuilder(
+    user_id=settings.DEFAULT_USER_ID,
+    device_id=settings.DEVICE_ID,
+)
 
 
 @asynccontextmanager
@@ -34,10 +39,12 @@ async def lifespan(app: FastAPI):
     _work_scheduler.start()
     _os_collector.start()
     _calendar_sync_job.start()
+    _activity_segment_builder.start()
 
     yield
 
     # Graceful shutdown
+    _activity_segment_builder.stop()
     _calendar_sync_job.stop()
     _os_collector.stop()
     _timeout_job.stop()
@@ -90,6 +97,7 @@ def root():
             "work_period_scheduler",
             "os_collector",
             "calendar_sync_job",
+            "activity_segment_builder",
         ],
         "dashboard_ui": "/dashboard/ui",
     }

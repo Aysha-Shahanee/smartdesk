@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     # Public URL of this backend, used to build the OAuth redirect URI.
     BACKEND_BASE_URL: str = "http://127.0.0.1:8000"
 
+    # ── Embedding / Categorization Settings ────────────────────────
+    EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
+    EMBEDDING_VERSION: str = "1.0"
+    EMBEDDING_DIM: int = 384
+    CATEGORIZATION_THRESHOLD: float = 0.30
+
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://localhost:1420",
