@@ -445,6 +445,14 @@ class ActivitySegmentBuilder:
                 # Ongoing session - use current time or skip
                 end_time = datetime.now(timezone.utc)
 
+            # Determine title: prefer window_title, fallback to app_name, then "Unknown"
+            window_title = getattr(session, 'window_title', '') or ''
+            if not window_title:
+                window_title = getattr(session, 'app_name', '') or 'Unknown'
+            # Ensure we have a valid time range (end after start)
+            if end_time <= start_time:
+                # If zero or negative duration, push end forward by 1 second
+                end_time = start_time + timedelta(seconds=1)
             # Create base segment
             segment = {
                 "start_time": start_time,
@@ -460,7 +468,7 @@ class ActivitySegmentBuilder:
                 },
                 "text_content": {
                     "app_name": getattr(session, 'app_name', ''),
-                    "title": getattr(session, 'window_title', ''),
+                    "title": window_title,
                     "detail": "",
                 }
             }
@@ -873,45 +881,78 @@ class ActivitySegmentBuilder:
         result = []
 
         for seg_dict in segments:
-            # Generate a unique ID for this segment
-            # In a production system, we might use a deterministic UUID based on content
-            import uuid
-            segment_id = str(uuid.uuid4())
+            # Check if a segment with the same user_id, device_id, start_time_utc, and end_time_utc already exists
+            existing = db.query(ActivitySegmentRecord).filter(
+                ActivitySegmentRecord.user_id == user_id,
+                ActivitySegmentRecord.device_id == device_id,
+                ActivitySegmentRecord.start_time_utc == seg_dict["start_time"],
+                ActivitySegmentRecord.end_time_utc == seg_dict["end_time"]
+            ).first()
 
-            # Create the database record
-            segment_record = ActivitySegmentRecord(
-                id=segment_id,
-                user_id=user_id,
-                device_id=device_id,
-                schema_version=3,  # Match current SCHEMA_VERSION from config
-                start_time_utc=seg_dict["start_time"],
-                end_time_utc=seg_dict["end_time"],
-                duration_sec=int(max(0, seg_dict["duration"])),
-                timezone_name="Asia/Colombo",  # Should come from config
-                local_date=seg_dict["start_time"].date().isoformat(),
-                primary_source=seg_dict.get("primary_source", "os"),
-                app_name=seg_dict["text_content"].get("app_name") or None,
-                title=seg_dict["text_content"].get("title") or None,
-                detail=seg_dict["text_content"].get("detail") or None,
-                state=self._determine_state(seg_dict),
-                os_session_id=seg_dict["os_session_ids"][0] if seg_dict["os_session_ids"] else None,
-                ide_session_id=seg_dict["ide_session_ids"][0] if seg_dict["ide_session_ids"] else None,
-                browser_session_id=seg_dict["browser_session_ids"][0] if seg_dict["browser_session_ids"] else None,
+            if existing:
+                # Update existing record
+                existing.schema_version = 3  # Match current SCHEMA_VERSION from config
+                existing.duration_sec = int(max(0, seg_dict["duration"]))
+                existing.timezone_name = "Asia/Colombo"  # Should come from config
+                existing.local_date = seg_dict["start_time"].date().isoformat()
+                existing.primary_source = seg_dict.get("primary_source", "os")
+                existing.app_name = seg_dict["text_content"].get("app_name") or None
+                existing.title = seg_dict["text_content"].get("title") or None
+                existing.detail = seg_dict["text_content"].get("detail") or None
+                existing.state = self._determine_state(seg_dict)
+                existing.os_session_id = seg_dict["os_session_ids"][0] if seg_dict["os_session_ids"] else None
+                existing.ide_session_id = seg_dict["ide_session_ids"][0] if seg_dict["ide_session_ids"] else None
+                existing.browser_session_id = seg_dict["browser_session_ids"][0] if seg_dict["browser_session_ids"] else None
                 # Note: These are simplified - in reality we might want to store
                 # multiple IDs or use a junction table for many-to-many
-                category=seg_dict.get("category"),
-                category_method=seg_dict.get("category_method"),
-                category_confidence=seg_dict.get("category_confidence"),
-                focus_score=None,  # To be set by focus scorer
-                concurrent_json=None,  # JSON of concurrent activity
-                signals_json=None,  # JSON of signals used for scoring
-                embedding_status="pending",
-                sync_status="pending",
-            )
+                existing.category = seg_dict.get("category")
+                existing.category_method = seg_dict.get("category_method")
+                existing.category_confidence = seg_dict.get("category_confidence")
+                # focus_score, concurrent_json, signals_json are left as-is (to be updated by other processes)
+                existing.embedding_status = seg_dict.get("embedding_status", existing.embedding_status)
+                existing.sync_status = seg_dict.get("sync_status", existing.sync_status)
 
-            # Add to session
-            db.add(segment_record)
-            result.append(segment_record)
+                result.append(existing)
+            else:
+                # Create new record
+                # Generate a unique ID for this segment
+                # In a production system, we might use a deterministic UUID based on content
+                import uuid
+                segment_id = str(uuid.uuid4())
+
+                segment_record = ActivitySegmentRecord(
+                    id=segment_id,
+                    user_id=user_id,
+                    device_id=device_id,
+                    schema_version=3,  # Match current SCHEMA_VERSION from config
+                    start_time_utc=seg_dict["start_time"],
+                    end_time_utc=seg_dict["end_time"],
+                    duration_sec=int(max(0, seg_dict["duration"])),
+                    timezone_name="Asia/Colombo",  # Should come from config
+                    local_date=seg_dict["start_time"].date().isoformat(),
+                    primary_source=seg_dict.get("primary_source", "os"),
+                    app_name=seg_dict["text_content"].get("app_name") or None,
+                    title=seg_dict["text_content"].get("title") or None,
+                    detail=seg_dict["text_content"].get("detail") or None,
+                    state=self._determine_state(seg_dict),
+                    os_session_id=seg_dict["os_session_ids"][0] if seg_dict["os_session_ids"] else None,
+                    ide_session_id=seg_dict["ide_session_ids"][0] if seg_dict["ide_session_ids"] else None,
+                    browser_session_id=seg_dict["browser_session_ids"][0] if seg_dict["browser_session_ids"] else None,
+                    # Note: These are simplified - in reality we might want to store
+                    # multiple IDs or use a junction table for many-to-many
+                    category=seg_dict.get("category"),
+                    category_method=seg_dict.get("category_method"),
+                    category_confidence=seg_dict.get("category_confidence"),
+                    focus_score=None,  # To be set by focus scorer
+                    concurrent_json=None,  # JSON of concurrent activity
+                    signals_json=None,  # JSON of signals used for scoring
+                    embedding_status="pending",
+                    sync_status="pending",
+                )
+
+                # Add to session
+                db.add(segment_record)
+                result.append(segment_record)
 
         # Commit all changes
         try:

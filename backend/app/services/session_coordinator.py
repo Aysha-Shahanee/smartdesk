@@ -76,76 +76,75 @@ class SessionCoordinator:
         self._idle_start_timestamp: datetime | None = None
 
     def handle_os_event(self, payload: OSEventPayload, db: Session) -> IngestEventResponse:
-        if payload.event == OSEventType.FOCUSED:
-            self._require(payload.app_name, "app_name is required for focused OS events")
-            self._close_current_os_session(payload.user_id, payload.timestamp, "next_event", db)
-            session = self._open_os_session(payload, db)
-            self._update_foreground_flags(payload, db)
-            db.commit()
-            return IngestEventResponse(status="opened", session_id=session.id)
+        with db.begin():
+            if payload.event == OSEventType.FOCUSED:
+                self._require(payload.app_name, "app_name is required for focused OS events")
+                self._close_current_os_session(payload.user_id, payload.timestamp, "next_event", db)
+                session = self._open_os_session(payload, db)
+                self._update_foreground_flags(payload, db)
+                return IngestEventResponse(status="opened", session_id=session.id)
 
-        if payload.event == OSEventType.BLURRED:
+            if payload.event == OSEventType.BLURRED:
+                return IngestEventResponse(status="ignored", accepted=True)
+
+            if payload.event in {
+                OSEventType.IDLE_START,
+                OSEventType.IDLE_END,
+            }:
+                # Log event received
+                logger.info(
+                    "Coordinator_IDLE_Event_Received: event=%s user_id=%s timestamp=%s extra_data=%s",
+                    payload.event.value,
+                    payload.user_id,
+                    payload.timestamp,
+                    payload.extra_data,
+                )
+
+                # Log current open OS session ID
+                current_session = (
+                    db.query(OSSessionRecord)
+                    .filter(OSSessionRecord.user_id == payload.user_id, OSSessionRecord.session_end.is_(None))
+                    .order_by(OSSessionRecord.session_start.desc())
+                    .first()
+                )
+                logger.info(
+                    "Coordinator_IDLE_CurrentSession: user_id=%s session_id=%s state=%s",
+                    payload.user_id,
+                    current_session.id if current_session else "None",
+                    current_session.state if current_session else "None",
+                )
+
+                session = self._mark_current_os_state(payload, db)
+
+                # Log commit completed
+                logger.info(
+                    "Coordinator_IDLE_Event_Committed: event=%s session_id=%s",
+                    payload.event.value,
+                    session.id if session else None,
+                )
+
+                return IngestEventResponse(
+                    status="state_updated",
+                    session_id=session.id if session else None,
+                )
+
+            if payload.event in {OSEventType.SUSPEND, OSEventType.SHUTDOWN}:
+                closed_by = payload.event.value
+                session = self._close_current_os_session(payload.user_id, payload.timestamp, closed_by, db)
+                self._close_all_open_extension_sessions(payload.user_id, payload.timestamp, closed_by, db)
+                return IngestEventResponse(
+                    status="closed_by_os_signal",
+                    session_id=session.id if session else None,
+                )
+
             return IngestEventResponse(status="ignored", accepted=True)
-
-        if payload.event in {
-            OSEventType.IDLE_START,
-            OSEventType.IDLE_END,
-        }:
-            # Log event received
-            logger.info(
-                "Coordinator_IDLE_Event_Received: event=%s user_id=%s timestamp=%s extra_data=%s",
-                payload.event.value,
-                payload.user_id,
-                payload.timestamp,
-                payload.extra_data,
-            )
-
-            # Log current open OS session ID
-            current_session = (
-                db.query(OSSessionRecord)
-                .filter(OSSessionRecord.user_id == payload.user_id, OSSessionRecord.session_end.is_(None))
-                .order_by(OSSessionRecord.session_start.desc())
-                .first()
-            )
-            logger.info(
-                "Coordinator_IDLE_CurrentSession: user_id=%s session_id=%s state=%s",
-                payload.user_id,
-                current_session.id if current_session else "None",
-                current_session.state if current_session else "None",
-            )
-
-            session = self._mark_current_os_state(payload, db)
-            db.commit()
-
-            # Log commit completed
-            logger.info(
-                "Coordinator_IDLE_Event_Committed: event=%s session_id=%s",
-                payload.event.value,
-                session.id if session else None,
-            )
-
-            return IngestEventResponse(
-                status="state_updated",
-                session_id=session.id if session else None,
-            )
-
-        if payload.event in {OSEventType.SUSPEND, OSEventType.SHUTDOWN}:
-            closed_by = payload.event.value
-            session = self._close_current_os_session(payload.user_id, payload.timestamp, closed_by, db)
-            self._close_all_open_extension_sessions(payload.user_id, payload.timestamp, closed_by, db)
-            db.commit()
-            return IngestEventResponse(
-                status="closed_by_os_signal",
-                session_id=session.id if session else None,
-            )
-
-        return IngestEventResponse(status="ignored", accepted=True)
 
     def handle_ide_event(
         self, payload: IDEEventPayload, db: Session
     ) -> IngestEventResponse:
         with self._ide_lock:
-            return self._handle_ide_event_locked(payload, db)
+            with db.begin():
+                return self._handle_ide_event_locked(payload, db)
 
     def _handle_ide_event_locked(
         self, payload: IDEEventPayload, db: Session

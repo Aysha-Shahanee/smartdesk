@@ -78,28 +78,25 @@ class Embedder:
         """
         # Collect text content from available fields
         text_parts: List[str] = []
-
         if segment.app_name:
-            text_parts.append(f"app:{segment.app_name}")
+            text_parts.append(segment.app_name)
         if segment.title:
-            text_parts.append(f"title:{segment.title}")
+            text_parts.append(segment.title)
         if segment.detail:
-            text_parts.append(f"detail:{segment.detail}")
+            text_parts.append(segment.detail)
 
-        # Add category if available (can be useful as hint)
-        if segment.category:
-            text_parts.append(f"category:{segment.category}")
-
-        # Add state
-        text_parts.append(f"state:{segment.state}")
-
-        # Add primary source
-        text_parts.append(f"source:{segment.primary_source}")
+        # Optionally include state and source if they provide useful context.
+        # For now, we exclude them to avoid adding generic terms that may
+        # dilute the semantic signal for activity classification.
+        # if segment.state:
+        #     text_parts.append(segment.state)
+        # if segment.primary_source:
+        #     text_parts.append(segment.primary_source)
 
         if not text_parts:
             return None
 
-        # Join all text parts
+        # Join all text parts with spaces to form a natural language-like string.
         combined_text: str = " ".join(text_parts)
 
         # Generate and return embedding
