@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     GOOGLE_CALENDAR_OAUTH_STATE_FILE: str = "../calendar/oauth_state.json"
     GOOGLE_CALENDAR_SCOPES: List[str] = ["https://www.googleapis.com/auth/calendar.readonly"]
     GOOGLE_CALENDAR_REDIRECT_URI: str = "http://127.0.0.1:8000/api/v1/calendar/auth/callback"
+    GITHUB_CONFIG_FILE: str = "../github_config.json"
+    GITHUB_SYNC_INTERVAL_SEC: int = 120
 
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",

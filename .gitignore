@@ -28,6 +28,8 @@ pytest-cache-files-*/
 
 # Node artifacts
 node_modules/
+out/
+dist/
 *.vsix
 
 # OS/editor noise

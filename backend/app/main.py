@@ -10,7 +10,9 @@ from app.routes import dashboard
 from app.routes import health
 from app.routes import ingest
 from app.routes import calendar
+from app.routes import github
 from app.services.calendar_auth_service import CalendarAuthService
+from app.services.github_collector import github_collector_job
 from app.services.calendar_sync_job import CalendarSyncJob
 from app.services.calendar_sync_service import CalendarSyncService
 from app.services.os_collector import OSCollector
@@ -47,6 +49,7 @@ async def lifespan(app: FastAPI):
     _work_scheduler.start()
     _os_collector.start()
     _calendar_job.start()
+    github_collector_job.start()
 
     yield
 
@@ -55,6 +58,7 @@ async def lifespan(app: FastAPI):
     _timeout_job.stop()
     _work_scheduler.stop()
     _calendar_job.stop()
+    github_collector_job.stop()
     logger.info("SmartDesk backend stopped.")
 
 
@@ -92,6 +96,7 @@ app.add_middleware(
 app.include_router(health.router, prefix="/health", tags=["Health"])
 app.include_router(ingest.router, prefix="/api/v1/ingest", tags=["Ingest"])
 app.include_router(calendar.router, prefix="/api/v1/calendar", tags=["Calendar"])
+app.include_router(github.router, prefix="/api/v1/github", tags=["GitHub"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
 
 
@@ -106,5 +111,6 @@ def root():
             "work_period_scheduler",
             "os_collector",
             "calendar_sync",
+            "github_collector",
         ],
     }
