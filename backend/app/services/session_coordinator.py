@@ -165,7 +165,6 @@ class SessionCoordinator:
             )
             is_foreground = self._is_foreground(payload, db)
             session = self._open_ide_session(payload, is_foreground, db)
-            db.commit()
             return IngestEventResponse(
                 status="opened",
                 session_id=session.id,
@@ -180,13 +179,11 @@ class SessionCoordinator:
                 # silently dropping the data until the next started event.
                 is_foreground = self._is_foreground(payload, db)
                 session = self._open_ide_session(payload, is_foreground, db)
-                db.commit()
                 return IngestEventResponse(
                     status="reopened",
                     session_id=session.id,
                     is_foreground=is_foreground,
                 )
-            db.commit()
             return IngestEventResponse(
                 status="state_updated",
                 session_id=session.id,
@@ -199,7 +196,6 @@ class SessionCoordinator:
                 payload.trigger or "ended",
                 db,
             )
-            db.commit()
             return IngestEventResponse(
                 status="closed",
                 session_id=session.id if session else None,
@@ -210,61 +206,58 @@ class SessionCoordinator:
     def handle_browser_event(
         self, payload: BrowserEventPayload, db: Session
     ) -> IngestEventResponse:
-        if payload.event == BrowserEventType.STATE:
-            session = self._mark_browser_state(payload, db)
-            if session is None:
-                # Same desync healing as the IDE layer: heartbeat for a
-                # session the backend already closed — re-open it.
+        with db.begin():
+            if payload.event == BrowserEventType.STATE:
+                session = self._mark_browser_state(payload, db)
+                if session is None:
+                    # Same desync healing as the IDE layer: heartbeat for a
+                    # session the backend already closed — re-open it.
+                    is_foreground = self._is_foreground(payload, db)
+                    session = self._open_browser_session(payload, is_foreground, db)
+                    return IngestEventResponse(
+                        status="reopened",
+                        session_id=session.id,
+                        is_foreground=is_foreground,
+                    )
+                return IngestEventResponse(
+                    status="state_accepted",
+                    session_id=session.id,
+                )
+
+            if payload.event == BrowserEventType.STARTED:
+                self._close_browser_session(
+                    payload.user_id,
+                    payload.browser_name,
+                    payload.browser_window_id,
+                    None,
+                    payload.timestamp,
+                    "next_session",
+                    db,
+                )
                 is_foreground = self._is_foreground(payload, db)
                 session = self._open_browser_session(payload, is_foreground, db)
-                db.commit()
                 return IngestEventResponse(
-                    status="reopened",
+                    status="opened",
                     session_id=session.id,
                     is_foreground=is_foreground,
                 )
-            db.commit()
-            return IngestEventResponse(
-                status="state_accepted",
-                session_id=session.id,
-            )
 
-        if payload.event == BrowserEventType.STARTED:
-            self._close_browser_session(
-                payload.user_id,
-                payload.browser_name,
-                payload.browser_window_id,
-                None,
-                payload.timestamp,
-                "next_session",
-                db,
-            )
-            is_foreground = self._is_foreground(payload, db)
-            session = self._open_browser_session(payload, is_foreground, db)
-            db.commit()
-            return IngestEventResponse(
-                status="opened",
-                session_id=session.id,
-                is_foreground=is_foreground,
-            )
+            if payload.event == BrowserEventType.ENDED:
+                session = self._close_browser_session(
+                    payload.user_id,
+                    payload.browser_name,
+                    payload.browser_window_id,
+                    payload.tab_id,
+                    payload.timestamp,
+                    payload.trigger or "ended",
+                    db,
+                )
+                return IngestEventResponse(
+                    status="closed",
+                    session_id=session.id if session else None,
+                )
 
-        if payload.event == BrowserEventType.ENDED:
-            session = self._close_browser_session(
-                payload.user_id,
-                payload.browser_name,
-                payload.browser_window_id,
-                payload.tab_id,
-                payload.timestamp,
-                payload.trigger or "ended",
-                db,
-            )
-            db.commit()
-            return IngestEventResponse(
-                status="closed",
-                session_id=session.id if session else None,
-            )
-
-        return IngestEventResponse(status="ignored", accepted=True)
+            return IngestEventResponse(status="ignored", accepted=True)
 
     def _open_os_session(self, payload: OSEventPayload, db: Session) -> OSSessionRecord:
         timestamp = self._iso(payload.timestamp)
@@ -828,16 +821,19 @@ class SessionCoordinator:
         # idle counter is wall-clock based and can drift past the backend's
         # event-timestamp duration, so clamp it as a safety net (otherwise the
         # dashboard reports idle_sec > duration_sec).
-        idle = getattr(session, "idle_time", None)
+        # Handle both OSSessionRecord (idle_time) and IDESessionRecord (idle_sec)
+        idle_attr = "idle_time" if hasattr(session, "idle_time") else "idle_sec"
+        idle = getattr(session, idle_attr, None)
         if idle is not None and idle > duration_sec:
-            session.idle_time = duration_sec
+            setattr(session, idle_attr, duration_sec)
 
         # Accumulate ongoing idle time if session ends while in that state,
         # and move the start timestamp forward so the next session can continue
         # counting from this point (avoiding double counting on IDLE_END).
         if self._idle_start_timestamp is not None:
             ongoing_idle = (timestamp - self._idle_start_timestamp).total_seconds()
-            session.idle_time += int(ongoing_idle)
+            current_idle = getattr(session, idle_attr, 0)
+            setattr(session, idle_attr, current_idle + int(ongoing_idle))
             self._idle_start_timestamp = timestamp
 
     def _json(self, value: dict | None) -> str | None:
