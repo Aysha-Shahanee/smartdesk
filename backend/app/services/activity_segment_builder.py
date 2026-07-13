@@ -23,7 +23,7 @@ from app.repositories.browser_session_repository import BrowserSessionRepository
 from app.repositories.ide_session_repository import IDESessionRepository
 from app.repositories.os_session_repository import OSSessionRepository
 from app.services.categorizer import Categorizer
-from app.services.categorizer import Categorizer
+from app.services.focus_scorer import FocusScorer
 from app.services.embedder import embedder
 
 logger = logging.getLogger(__name__)
@@ -248,14 +248,12 @@ class ActivitySegmentBuilder:
         # Step 8: Validate no temporal overlaps
         validated_segments = self._validate_no_overlaps(complete_segments)
 
-        # Step 9: Categorize segments (embedding-based with rule-based fallback)
+        # Step 9: Categorize segments and calculate focus scoring metadata
         categorized_segments = []
         categorizer = Categorizer()  # Initialize categorizer for this batch
+        focus_scorer = FocusScorer()
         for seg_dict in validated_segments:
-            # Determine state (simple version matching _determine_state logic)
             state = "gap" if seg_dict.get("is_gap", False) else "active"
-
-            # Create a temporary segment record for categorization
             temp_segment = ActivitySegmentRecord(
                 title=seg_dict["text_content"].get("title"),
                 detail=seg_dict["text_content"].get("detail"),
@@ -267,6 +265,17 @@ class ActivitySegmentBuilder:
             seg_dict["category"] = category
             seg_dict["category_method"] = method
             seg_dict["category_confidence"] = confidence
+
+            if seg_dict.get("duration", 0) >= 5:
+                focus_score, concurrent_json, signals_json = focus_scorer.score_segment(seg_dict)
+                seg_dict["focus_score"] = float(focus_score)
+                seg_dict["concurrent_json"] = concurrent_json
+                seg_dict["signals_json"] = signals_json
+            else:
+                seg_dict["focus_score"] = None
+                seg_dict["concurrent_json"] = None
+                seg_dict["signals_json"] = None
+
             categorized_segments.append(seg_dict)
 
         # Step 10: Upsert to database
@@ -908,7 +917,9 @@ class ActivitySegmentBuilder:
                 existing.category = seg_dict.get("category")
                 existing.category_method = seg_dict.get("category_method")
                 existing.category_confidence = seg_dict.get("category_confidence")
-                # focus_score, concurrent_json, signals_json are left as-is (to be updated by other processes)
+                existing.focus_score = seg_dict.get("focus_score", existing.focus_score)
+                existing.concurrent_json = seg_dict.get("concurrent_json", existing.concurrent_json)
+                existing.signals_json = seg_dict.get("signals_json", existing.signals_json)
                 existing.embedding_status = seg_dict.get("embedding_status", existing.embedding_status)
                 existing.sync_status = seg_dict.get("sync_status", existing.sync_status)
 
@@ -943,9 +954,9 @@ class ActivitySegmentBuilder:
                     category=seg_dict.get("category"),
                     category_method=seg_dict.get("category_method"),
                     category_confidence=seg_dict.get("category_confidence"),
-                    focus_score=None,  # To be set by focus scorer
-                    concurrent_json=None,  # JSON of concurrent activity
-                    signals_json=None,  # JSON of signals used for scoring
+                    focus_score=seg_dict.get("focus_score"),
+                    concurrent_json=seg_dict.get("concurrent_json"),
+                    signals_json=seg_dict.get("signals_json"),
                     embedding_status="pending",
                     sync_status="pending",
                 )
