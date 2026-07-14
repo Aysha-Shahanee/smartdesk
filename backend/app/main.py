@@ -1,8 +1,13 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.logging import setup_logging
@@ -57,6 +62,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 app = FastAPI(title="SmartDesk Session Backend", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
 @app.exception_handler(RequestValidationError)
