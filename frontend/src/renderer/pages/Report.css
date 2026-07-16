@@ -1,0 +1,89 @@
+/* ============================================
+   Report Page Styles
+   ============================================ */
+
+.report-page {
+  display: flex;
+  flex-direction: column;
+}
+
+.report-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-2xl);
+}
+
+.report-header h1 {
+  font-size: var(--font-size-2xl);
+  font-weight: 700;
+}
+
+.report-content {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Metric Cards */
+.metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-xl) !important;
+}
+
+.metric-card-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.metric-card-value {
+  font-size: var(--font-size-2xl);
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.metric-card-sub {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+/* Report Table */
+.report-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+
+.report-table th {
+  text-align: left;
+  padding: var(--space-md) var(--space-lg);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.report-table td {
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.report-table tr:hover {
+  background: var(--color-bg);
+}
+
+.report-content .sd-card h3 {
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  margin-bottom: var(--space-xl);
+}
+
+/* Long-term analysis */
+.longterm-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}

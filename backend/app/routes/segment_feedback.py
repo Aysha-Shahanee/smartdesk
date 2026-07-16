@@ -33,7 +33,7 @@ async def label_segment(
         )
 
     # Validate the label
-    valid_labels = set(categorizer.LABEL_TEXTS.keys())
+    valid_labels = set(categorizer.CATEGORY_KEYWORDS.keys()) | {"meetings", "other", "idle"}
     if request.correct_label not in valid_labels:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

@@ -400,7 +400,7 @@ class Categorizer:
         Does NOT trigger retraining; that is handled by the caller if desired.
         """
         # Validate the label
-        valid_labels = set(self.LABEL_TEXTS.keys())
+        valid_labels = set(self.CATEGORY_KEYWORDS.keys()) | {"meetings", "other", "idle"}
         if correct_label not in valid_labels:
             raise ValueError(
                 f"Invalid label '{correct_label}'. Must be one of: {sorted(valid_labels)}"
