@@ -302,10 +302,10 @@ async function refresh() {
       loadCategoryData(dateStr);
     }
 
-    // Fetch recent activity segments for today (limit to 5)
+    // Fetch recent activity segments for today (limit to 10)
     const todayStr = new Date().toISOString().split('T')[0];
     console.log('Fetching segments for date:', todayStr);
-    const segRes = await fetch(`/dashboard/segments?date=${todayStr}&limit=5`);
+    const segRes = await fetch(`/dashboard/segments?date=${todayStr}&limit=10`);
     console.log('Segments response status:', segRes.status);
     const segData = await segRes.json();
     console.log('Segments data:', segData);

@@ -12,6 +12,8 @@ import math
 import re
 import threading
 import uuid
+import os
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
 import numpy as np
@@ -447,6 +449,32 @@ class Categorizer:
         """
         # Delegate to the new method but ignore the return value for backward compatibility.
         _ = self.record_user_correction(segment, correct_label)
+        seg_emb = embedder.embed_segment(segment) or []
+
+        # DEV-ONLY: Google Sheets synchronization (REMOVE AFTER DEVELOPMENT)
+        if os.getenv("ENABLE_GSHEET_SYNC", "false").lower() == "true":
+            try:
+                import gspread
+                from datetime import datetime
+                # Uses cached credentials from one-time `gspread.oauth()` call
+                gc = gspread.oauth()
+                sh = gc.open_by_key("1G_oudT83kv-JSugqzbVE-nbLyjmQ0c7YY5EGpbLUaG8")
+                worksheet = sh.worksheet("Labels")
+                worksheet.append_row([
+                    datetime.now().isoformat(),                    # timestamp
+                    segment.id,                                    # segment_id
+                    segment.user_id,                               # user_id
+                    correct_label,                                 # label
+                    json.dumps(seg_emb),                           # embedding (JSON string)
+                    segment.device_id or "",                       # device_id
+                    segment.app_name or "",                        # app_name
+                    segment.title or "",                           # title
+                    segment.detail or ""                           # detail
+                ])
+            except Exception as e:
+                # Never let a sheet failure break the main correction flow
+                print(f"[DEV] Google Sheet sync failed (non‑critical): {e}")
+
         # Increment counter and check if we should retrain (same logic as before)
         with self._model_lock:
             self._new_labels_since_training += 1
