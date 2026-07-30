@@ -156,7 +156,9 @@
 .flame-tracks {
   display: flex;
   flex-direction: column;
-  gap: var(--space-xl);
+  /* Lanes are stacked overlap rows, not separate tracks — keep them tight so
+     they read as one timeline rather than several unrelated charts. */
+  gap: 3px;
   position: relative;
   padding-bottom: 20px; /* space for axis */
 }
@@ -210,9 +212,25 @@
   position: relative;
   height: 20px;
   margin-top: 10px;
-  margin-left: calc(120px + var(--space-md)); /* align with track area */
   color: var(--color-text-muted);
   font-size: var(--font-size-xs);
+}
+
+/* Idle-inclusion toggle in the Timeline header */
+.idle-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.idle-toggle input {
+  cursor: pointer;
+  accent-color: var(--color-primary);
 }
 
 

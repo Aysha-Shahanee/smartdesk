@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import SampleDataBanner from '../components/SampleDataBanner';
 import './Prediction.css';
 
 const MOCK_TASKS = [
@@ -74,6 +75,8 @@ const Prediction: React.FC = () => {
         <h1>Prediction</h1>
         <p className="subtitle">Task-level time forecasting and progress tracking</p>
       </div>
+
+      <SampleDataBanner what="Task detection and completion forecasting" />
 
       <div className="pred-layout">
         {/* Left Sidebar */}

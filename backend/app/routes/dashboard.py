@@ -282,6 +282,12 @@ def get_segments_summary(
             ActivitySegmentRecord.user_id == user_id,
             ActivitySegmentRecord.local_date == target_date_str,
             ActivitySegmentRecord.category.isnot(None),
+            # Work time only. Idle segments carry a category too, so without
+            # this the breakdown counts time at an unattended machine as work —
+            # 47.8 h of the 81.5 h recorded for 2026-07-21..28. This filter was
+            # harmless before idle segments existed; every non-gap row was
+            # 'active' and gaps had a NULL category.
+            ActivitySegmentRecord.state == "active",
         )
         .group_by(ActivitySegmentRecord.category)
     )
@@ -315,6 +321,15 @@ class SegmentItem(BaseModel):
     correction_label: Optional[str]
     start_time_utc: Optional[str]
     end_time_utc: Optional[str]
+    duration_sec: Optional[int]
+    # Source/state provenance. Without these the UI has to guess a segment's
+    # origin by substring-matching app_name against a keyword list, which
+    # misses renamed binaries and mislabels anything not on the list.
+    state: Optional[str]
+    primary_source: Optional[str]
+    has_ide_session: bool = False
+    has_browser_session: bool = False
+    has_os_session: bool = False
 
 
 class SegmentsResponse(BaseModel):
@@ -395,6 +410,12 @@ def get_segments_list(
                 correction_label=corrections.get(seg.id),
                 start_time_utc=seg.start_time_utc.isoformat() if seg.start_time_utc else None,
                 end_time_utc=seg.end_time_utc.isoformat() if seg.end_time_utc else None,
+                duration_sec=seg.duration_sec,
+                state=seg.state,
+                primary_source=seg.primary_source,
+                has_ide_session=seg.ide_session_id is not None,
+                has_browser_session=seg.browser_session_id is not None,
+                has_os_session=seg.os_session_id is not None,
             )
         )
     return SegmentsResponse(

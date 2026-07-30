@@ -3,6 +3,58 @@ import { fetchJson } from './fetchUtils';
 const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
 
 /* ---------------------------------------------------------- */
+/* Date-window helpers                                         */
+/* ---------------------------------------------------------- */
+
+/**
+ * UTC-offset suffix ("+05:30") for a given local date.
+ *
+ * Required, not cosmetic: the backend's `ensure_aware()` stamps any *naive*
+ * timestamp it receives as UTC before converting to the app timezone. Sending
+ * a bare "2026-06-14T00:00:00" therefore asks for 05:30 local, silently
+ * shifting every day window by the zone offset and dropping early events.
+ */
+const offsetSuffix = (date: string): string => {
+  const mins = -new Date(`${date}T00:00:00`).getTimezoneOffset();
+  const sign = mins >= 0 ? '+' : '-';
+  const abs = Math.abs(mins);
+  const hh = String(Math.floor(abs / 60)).padStart(2, '0');
+  const mm = String(abs % 60).padStart(2, '0');
+  return `${sign}${hh}:${mm}`;
+};
+
+const addDays = (date: string, days: number): string => {
+  const d = new Date(`${date}T00:00:00`);
+  d.setDate(d.getDate() + days);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+};
+
+/**
+ * Inclusive local-day bounds for a YYYY-MM-DD date.
+ *
+ * The panel and calendar endpoints filter on `start >= from AND start <= to`.
+ * Passing the bare date for both ends made `to` equal midnight, collapsing the
+ * window to a single instant so it matched nothing — the Calendar tab was
+ * always empty as a result.
+ */
+export const dayBounds = (date: string) => ({
+  from: `${date}T00:00:00${offsetSuffix(date)}`,
+  to: `${date}T23:59:59${offsetSuffix(date)}`,
+});
+
+/** Bounds spanning `days` calendar days starting at `date` (inclusive). */
+export const rangeBounds = (date: string, days: number) => {
+  const end = addDays(date, days - 1);
+  return {
+    from: `${date}T00:00:00${offsetSuffix(date)}`,
+    to: `${end}T23:59:59${offsetSuffix(end)}`,
+  };
+};
+
+/* ---------------------------------------------------------- */
 /* Activity Segments — the BASE TRUTH for all views           */
 /* ---------------------------------------------------------- */
 
@@ -14,7 +66,7 @@ export const getSegmentsSummary = async (date?: string) => {
   return fetchJson(`${API_BASE}/dashboard/segments/summary?${queryParams.toString()}`);
 };
 
-/** Get list of activity segments for a date (with pagination) */
+/** Get one page of activity segments for a date */
 export const getSegmentsList = async (date?: string, limit = 500, offset = 0) => {
   const queryParams = new URLSearchParams();
   queryParams.append('user_id', 'local_user');
@@ -22,6 +74,29 @@ export const getSegmentsList = async (date?: string, limit = 500, offset = 0) =>
   queryParams.append('offset', offset.toString());
   if (date) queryParams.append('date', date);
   return fetchJson(`${API_BASE}/dashboard/segments?${queryParams.toString()}`);
+};
+
+/**
+ * Every activity segment for a date, following pagination to the end.
+ *
+ * The endpoint caps `limit` at 500 and busy days exceed that (2026-07-25 has
+ * 700), so a single request silently drops the oldest rows and every total
+ * derived from it reads low.
+ */
+export const getAllSegments = async (date: string): Promise<any[]> => {
+  const PAGE = 500;
+  const first = await getSegmentsList(date, PAGE, 0);
+  const total: number = first?.total ?? 0;
+  const segments: any[] = [...(first?.segments || [])];
+
+  const pages: Promise<any>[] = [];
+  for (let offset = PAGE; offset < total; offset += PAGE) {
+    pages.push(getSegmentsList(date, PAGE, offset));
+  }
+  for (const page of await Promise.all(pages)) {
+    segments.push(...(page?.segments || []));
+  }
+  return segments;
 };
 
 /** Record a label correction for a segment */

@@ -2,6 +2,7 @@ from app.models.db.activity_segment import ActivitySegmentRecord
 from app.models.db.activity_segment_embedding import ActivitySegmentEmbeddingRecord
 from app.models.db.activity_segment_label import ActivitySegmentLabelRecord
 from app.models.db.calendar_event import CalendarEventRecord
+from app.models.db.service_heartbeat import ServiceHeartbeatRecord
 from app.models.db.sessions import BrowserSessionRecord
 from app.models.db.sessions import IDESessionRecord
 from app.models.db.sessions import OSSessionRecord
@@ -16,5 +17,6 @@ __all__ = [
     "IDESessionRecord",
     "OSSessionRecord",
     "OSBrowserSummaryRecord",
+    "ServiceHeartbeatRecord",
     "WorkPeriodRecord",
 ]

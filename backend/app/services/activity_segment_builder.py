@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session as DbSession
 from app.core.database import SessionLocal
 from app.core.time import local_now_iso, local_now
 from app.core.time import parse_iso
+from app.core.time import to_local_iso
+from app.models.db import ActivitySegmentLabelRecord
 from app.models.db import ActivitySegmentRecord
 from app.models.db import BrowserSessionRecord
 from app.models.db import IDESessionRecord
@@ -33,6 +35,31 @@ BUILD_INTERVAL_SEC: int = 300  # 5 minutes
 
 # How long to wait for delayed events before processing.
 EVENT_ARRIVAL_DELAY_SECONDS: int = 30
+
+# Most wall-clock time one tick will process. A tick used to cover exactly
+# BUILD_INTERVAL_SEC ending at now, so anything the builder was not awake for —
+# a restart, a suspend, a slow tick — was never processed and never revisited.
+# The watermark makes ticks resume from where the last one stopped instead, and
+# this bounds how much a single catch-up tick may chew through.
+MAX_CATCHUP_SPAN_SEC: int = 6 * 3600
+
+# Segments are cut at this length so one long focus block becomes a run of
+# bounded rows rather than a single unwieldy one.
+MAX_SEGMENT_SEC: int = 900
+
+# Whether to synthesise "gap" rows over stretches no OS session covers.
+#
+# Off: activity_segments must never claim more wall-clock than os_sessions, the
+# table it derives from. With gap-filling on, every window got a row and the
+# timeline read a continuous 24 h/day — 108.3 h of synthetic gap against 81.8 h
+# of real OS coverage for 2026-07-21..28. That reproduced the look of the very
+# artefact this work removed, and asserted "no data" over stretches where
+# browser_sessions held 52 h of records.
+#
+# With it off, absence of a row means no data. Idle time is still represented:
+# it comes through as state='idle' from the OS session itself, not as a synthetic
+# row. See _determine_state.
+EMIT_GAP_SEGMENTS: bool = False
 
 
 class ActivitySegmentBuilder:
@@ -110,20 +137,46 @@ class ActivitySegmentBuilder:
         finally:
             self._schedule()
 
+    def _resolve_watermark(self, db: DbSession, now: datetime) -> datetime:
+        """Where the next build window should start.
+
+        The furthest point already covered by a segment, falling back to one
+        interval ago on a cold start. Without this the builder processed only
+        ``[now - 5 min, now]`` every tick and never revisited a window it missed,
+        so any gap in its own uptime became a permanent hole in the timeline.
+        """
+        latest = (
+            db.query(ActivitySegmentRecord.end_time_utc)
+            .filter(ActivitySegmentRecord.user_id == self._user_id)
+            .order_by(ActivitySegmentRecord.end_time_utc.desc())
+            .limit(1)
+            .scalar()
+        )
+        if latest is None:
+            return now - timedelta(seconds=BUILD_INTERVAL_SEC)
+        if isinstance(latest, str):
+            latest = parse_iso(latest)
+        latest = latest if latest.tzinfo else latest.replace(tzinfo=now.tzinfo)
+        # Never chew through more than one catch-up span in a single tick.
+        return max(latest, now - timedelta(seconds=MAX_CATCHUP_SPAN_SEC))
+
     def _build_recent_segments(self) -> None:
-        """Build activity segments for a recent time window."""
+        """Build activity segments from the watermark up to now."""
         db: DbSession = SessionLocal()
         try:
-            # Calculate time window: end now, start from one interval ago
             end_time = local_now()
-            start_time = end_time - timedelta(seconds=BUILD_INTERVAL_SEC)
+            start_time = self._resolve_watermark(db, end_time)
 
-            # Apply event arrival delay to end time
+            # The arrival delay is applied once, inside
+            # _build_segments_for_timerange. Subtracting it here as well took it
+            # off twice; that went unnoticed while the inverted ternary in
+            # _calculate_safe_processing_end was discarding the result anyway.
             safe_end_time = end_time - timedelta(seconds=EVENT_ARRIVAL_DELAY_SECONDS)
-
             if start_time >= safe_end_time:
-                self.logger.warning(
-                    f"Invalid time range after applying delay: {start_time.isoformat()} to {safe_end_time.isoformat()}"
+                # Normal when a tick fires with nothing new to cover.
+                self.logger.debug(
+                    f"Nothing to build: watermark {start_time.isoformat()} "
+                    f">= safe end {safe_end_time.isoformat()}"
                 )
                 return
 
@@ -139,7 +192,7 @@ class ActivitySegmentBuilder:
                 user_id=self._user_id,
                 device_id=self._device_id,
                 start_time_iso=start_time.isoformat(),
-                end_time_iso=safe_end_time.isoformat(),
+                end_time_iso=end_time.isoformat(),
                 os_repo=os_repo,
                 ide_repo=ide_repo,
                 browser_repo=browser_repo,
@@ -162,6 +215,168 @@ class ActivitySegmentBuilder:
         finally:
             db.close()
 
+    def backfill(
+        self,
+        from_iso: str,
+        to_iso: str,
+        chunk_sec: int = 3600,
+        purge: bool = True,
+    ) -> dict:
+        """Rebuild segments across an explicit range, in chunks.
+
+        The only way to reprocess history. ``run_once()`` cannot do it — it
+        recomputes ``now - interval`` like a normal tick, so a window the
+        builder was never awake for stayed empty forever.
+
+        Old segments in the range are deleted before rebuilding. ``_upsert_segments``
+        matches on an exact ``(start_time_utc, end_time_utc)`` pair, and rebuilt
+        boundaries move once clipping and length-splitting apply — so without a
+        purge the old rows would survive alongside the new ones and the range
+        would be double-counted.
+
+        Deleting them would strand ``activity_segment_labels``, whose ``segment_id``
+        points at rows about to disappear and whose IDs are random UUIDs rather
+        than derived from content. Labels are therefore anchored to a timestamp
+        first and re-pointed at whichever rebuilt segment covers it.
+
+        Args:
+            from_iso: Range start (ISO 8601)
+            to_iso: Range end (ISO 8601)
+            chunk_sec: Wall-clock seconds per chunk; each is its own transaction
+            purge: Delete existing segments in range before rebuilding
+
+        Returns:
+            Summary dict with the range covered, chunks, segments and labels.
+        """
+        start = parse_iso(from_iso)
+        end = parse_iso(to_iso)
+        if start >= end:
+            raise ValueError(f"backfill range is empty: {from_iso} -> {to_iso}")
+
+        anchors = self._snapshot_label_anchors(start, end) if purge else []
+
+        os_repo = OSSessionRepository()
+        ide_repo = IDESessionRepository()
+        browser_repo = BrowserSessionRepository()
+        segment_repo = ActivitySegmentRepository()
+
+        chunks = 0
+        built = 0
+        purged = 0
+        failed = 0
+        cursor = start
+        while cursor < end:
+            chunk_end = min(cursor + timedelta(seconds=chunk_sec), end)
+            db: DbSession = SessionLocal()
+            try:
+                if purge:
+                    purged += (
+                        db.query(ActivitySegmentRecord)
+                        .filter(
+                            ActivitySegmentRecord.user_id == self._user_id,
+                            ActivitySegmentRecord.start_time_utc >= cursor.replace(tzinfo=None),
+                            ActivitySegmentRecord.start_time_utc < chunk_end.replace(tzinfo=None),
+                        )
+                        .delete(synchronize_session=False)
+                    )
+                    db.commit()
+
+                segments = self._build_segments_for_timerange(
+                    db=db,
+                    user_id=self._user_id,
+                    device_id=self._device_id,
+                    start_time_iso=cursor.isoformat(),
+                    end_time_iso=chunk_end.isoformat(),
+                    os_repo=os_repo,
+                    ide_repo=ide_repo,
+                    browser_repo=browser_repo,
+                    segment_repo=segment_repo,
+                    apply_arrival_delay=False,
+                )
+                built += len(segments)
+                chunks += 1
+            except Exception:
+                failed += 1
+                self.logger.exception(
+                    "Backfill chunk %s -> %s failed; continuing.",
+                    cursor.isoformat(), chunk_end.isoformat(),
+                )
+                db.rollback()
+            finally:
+                db.close()
+            cursor = chunk_end
+
+        relinked, lost = self._relink_label_anchors(anchors)
+
+        summary = {
+            "from": start.isoformat(),
+            "to": end.isoformat(),
+            "chunks": chunks,
+            "chunks_failed": failed,
+            "segments_purged": purged,
+            "segments_built": built,
+            "labels_relinked": relinked,
+            "labels_lost": lost,
+        }
+        self.logger.info("Backfill complete: %s", summary)
+        return summary
+
+    def _snapshot_label_anchors(self, start: datetime, end: datetime) -> list[tuple[str, datetime]]:
+        """Pin each label in range to the start instant of the segment it marks."""
+        db: DbSession = SessionLocal()
+        try:
+            rows = (
+                db.query(ActivitySegmentLabelRecord.id, ActivitySegmentRecord.start_time_utc)
+                .join(ActivitySegmentRecord, ActivitySegmentRecord.id == ActivitySegmentLabelRecord.segment_id)
+                .filter(
+                    ActivitySegmentRecord.start_time_utc >= start.replace(tzinfo=None),
+                    ActivitySegmentRecord.start_time_utc < end.replace(tzinfo=None),
+                )
+                .all()
+            )
+            self.logger.info("Anchored %d label(s) before purge.", len(rows))
+            return [(row[0], row[1]) for row in rows]
+        finally:
+            db.close()
+
+    def _relink_label_anchors(self, anchors: list[tuple[str, datetime]]) -> tuple[int, int]:
+        """Re-point anchored labels at whichever rebuilt segment covers them."""
+        if not anchors:
+            return 0, 0
+        db: DbSession = SessionLocal()
+        try:
+            relinked = 0
+            lost = 0
+            for label_id, anchor in anchors:
+                segment = (
+                    db.query(ActivitySegmentRecord)
+                    .filter(
+                        ActivitySegmentRecord.user_id == self._user_id,
+                        ActivitySegmentRecord.start_time_utc <= anchor,
+                        ActivitySegmentRecord.end_time_utc > anchor,
+                    )
+                    .order_by(ActivitySegmentRecord.start_time_utc.desc())
+                    .first()
+                )
+                label = db.get(ActivitySegmentLabelRecord, label_id)
+                if segment is None or label is None:
+                    lost += 1
+                    self.logger.warning(
+                        "Label %s (anchored at %s) has no rebuilt segment to attach to.",
+                        label_id, anchor,
+                    )
+                    continue
+                label.segment_id = segment.id
+                relinked += 1
+            db.commit()
+            self.logger.info("Relinked %d label(s); %d could not be placed.", relinked, lost)
+            return relinked, lost
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
     def _build_segments_for_timerange(
         self,
         db: DbSession,
@@ -173,6 +388,7 @@ class ActivitySegmentBuilder:
         ide_repo: IDESessionRepository,
         browser_repo: BrowserSessionRepository,
         segment_repo: ActivitySegmentRepository,
+        apply_arrival_delay: bool = True,
     ) -> list[ActivitySegmentRecord]:
         """Build activity segments for a user/device in a time range.
 
@@ -205,8 +421,13 @@ class ActivitySegmentBuilder:
             f"from {start_time_iso} to {end_time_iso}"
         )
 
-        # Step 1: Apply event arrival delay to get safe processing window
-        safe_end_time = self._calculate_safe_processing_end(end_time_iso)
+        # Step 1: Hold back the tail of the window so events still in flight are
+        # not treated as absent. Backfill skips this — historical events arrived
+        # long ago, and trimming every chunk would leave a hole at each seam.
+        safe_end_time = (
+            self._calculate_safe_processing_end(end_time_iso)
+            if apply_arrival_delay else end_time_iso
+        )
         if not self._is_valid_timerange(start_time_iso, safe_end_time):
             self.logger.warning(
                 f"Invalid time range after applying delay: {start_time_iso} to {safe_end_time}"
@@ -224,12 +445,19 @@ class ActivitySegmentBuilder:
             db, user_id, device_id, start_time_iso, safe_end_time, browser_repo
         )
 
+        # No early return when os_sessions is empty: _generate_special_segments
+        # still has to mark the window as a gap. Returning here meant a window
+        # with nothing in it produced no rows at all, so an outage left a hole
+        # in the timeline instead of a recorded gap.
         if not os_sessions:
-            self.logger.info("No OS sessions found in time range")
-            return []
+            self.logger.info("No OS sessions found in time range — emitting gap coverage only")
 
-        # Step 3: Build timeline using OS sessions as spine
-        timeline_segments = self._build_timeline_from_os_sessions(os_sessions)
+        # Step 3: Build timeline using OS sessions as spine, clipped to the window
+        timeline_segments = self._build_timeline_from_os_sessions(
+            os_sessions,
+            window_start=parse_iso(start_time_iso),
+            window_end=parse_iso(safe_end_time),
+        )
 
         # Step 4: Enrich with IDE and browser overlaps
         enriched_segments = self._enrich_with_overlaps(timeline_segments, ide_sessions, browser_sessions)
@@ -297,17 +525,15 @@ class ActivitySegmentBuilder:
             # Assume UTC if no timezone info
             utc_time = end_dt.replace(tzinfo=timezone.utc)
 
-        # Subscribe the delay
+        # Subtract the delay
         safe_utc = utc_time - timedelta(seconds=EVENT_ARRIVAL_DELAY_SECONDS)
 
-        # Convert back to local time
-        if hasattr(safe_utc, 'tzinfo'):
-            safe_local = safe_utc.astimezone()
-        else:
-            # Assume local timezone
-            safe_local = safe_utc.replace(tzinfo=timezone.utc).astimezone()
-
-        return local_now_iso() if hasattr(safe_local, 'isoformat') else safe_local.isoformat()
+        # The ternary here was inverted: safe_local is always a datetime, so the
+        # hasattr check always passed and this always returned local_now_iso(),
+        # throwing away both the caller's end time and the arrival-delay guard
+        # it had just computed. That also silently widened every backfill window
+        # to "now".
+        return to_local_iso(safe_utc)
 
     def _is_valid_timerange(self, start_iso: str, end_iso: str) -> bool:
         """Check if the time range is valid (start before end).
@@ -348,7 +574,7 @@ class ActivitySegmentBuilder:
         Returns:
             List of normalized OS sessions
         """
-        sessions = os_repo.get_completed_sessions_db(db, user_id, start_iso, end_iso)
+        sessions = os_repo.get_sessions_overlapping_db(db, user_id, start_iso, end_iso)
         return self._normalize_sessions(sessions, "os")
 
     def _load_and_normalize_ide_sessions(
@@ -422,11 +648,15 @@ class ActivitySegmentBuilder:
     def _build_timeline_from_os_sessions(
         self,
         os_sessions: list[OSSessionRecord],
+        window_start: datetime | None = None,
+        window_end: datetime | None = None,
     ) -> list[dict]:
         """Build initial timeline segments from OS sessions.
 
         Args:
             os_sessions: List of OS sessions
+            window_start: Clip segments to this lower bound (optional)
+            window_end: Clip segments to this upper bound (optional)
 
         Returns:
             List of timeline segment dictionaries
@@ -442,8 +672,21 @@ class ActivitySegmentBuilder:
                 continue
 
             if not end_time:
-                # Ongoing session - use current time or skip
-                end_time = datetime.now(timezone.utc)
+                # Ongoing session — cover it up to the end of the window being
+                # processed. local_now() (not utcnow) so it is comparable with
+                # the parsed, timezone-pinned session times.
+                end_time = window_end or local_now()
+
+            # Sessions are now loaded by overlap, so a multi-hour session can
+            # arrive whole in a 5-minute window. Clip it, or one tick would
+            # write a segment covering hours it has no business claiming and
+            # the next tick would overlap it.
+            if window_start is not None:
+                start_time = max(start_time, window_start)
+            if window_end is not None:
+                end_time = min(end_time, window_end)
+            if end_time <= start_time:
+                continue
 
             # Determine title: prefer window_title, fallback to app_name, then "Unknown"
             window_title = getattr(session, 'window_title', '') or ''
@@ -596,6 +839,15 @@ class ActivitySegmentBuilder:
             except Exception:
                 continue
 
+        # Cut long stretches at regular intervals too. Now that sessions load by
+        # overlap, a single uninterrupted focus block can span hours; without
+        # these the timeline would carry one enormous row for it.
+        for segment in segments:
+            cursor = segment["start_time"] + timedelta(seconds=MAX_SEGMENT_SEC)
+            while cursor < segment["end_time"]:
+                all_boundaries.append(cursor)
+                cursor += timedelta(seconds=MAX_SEGMENT_SEC)
+
         # Sort and deduplicate boundaries
         unique_boundaries = sorted(list(set(all_boundaries)))
 
@@ -730,7 +982,10 @@ class ActivitySegmentBuilder:
         Returns:
             Original segments plus any generated gap/idle/locked segments
         """
-        if not segments:
+        # Gap synthesis is off by default so segments never claim more time than
+        # the os_sessions they derive from — see EMIT_GAP_SEGMENTS. Idle time is
+        # not a gap: it arrives as state='idle' on a real OS-backed segment.
+        if not EMIT_GAP_SEGMENTS:
             return segments
 
         # Sort segments by start time
@@ -969,6 +1224,13 @@ class ActivitySegmentBuilder:
     def _determine_state(self, segment: dict) -> str:
         """Determine the state (active, idle, locked, gap) for a segment.
 
+        Taken from the OS session the segment actually overlaps most. This used
+        to return "active" unconditionally with a "for now" note, so idle time
+        was indistinguishable from work: 47.8 h of the 81.5 h recorded for
+        2026-07-21..28 was marked active while its OS session said idle, and
+        'idle' had never once been written to the table despite the schema
+        allowing it since 0006.
+
         Args:
             segment: Segment dictionary
 
@@ -979,9 +1241,36 @@ class ActivitySegmentBuilder:
         if segment.get("is_gap", False):
             return "gap"
 
-        # Check source sessions for idle/locked state
-        # This would examine the actual OS session state
-        # For now, default to active
+        os_sessions = segment.get("sources", {}).get("os") or []
+        if not os_sessions:
+            return "active"
+
+        # A segment can straddle more than one OS session after splitting, so
+        # attribute it to whichever one covers the most of it rather than to
+        # whichever happens to be first.
+        best_state = None
+        best_overlap = -1.0
+        for session in os_sessions:
+            state = getattr(session, "state", None)
+            if not state:
+                continue
+            try:
+                s_start = parse_iso(session.session_start)
+                s_end = (
+                    parse_iso(session.session_end)
+                    if session.session_end else segment["end_time"]
+                )
+            except Exception:
+                continue
+            overlap = (
+                min(segment["end_time"], s_end) - max(segment["start_time"], s_start)
+            ).total_seconds()
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_state = state
+
+        if best_state in ("active", "idle", "locked"):
+            return best_state
         return "active"
 
     def start(self, user_id: str = "local_user", device_id: str = "", interval_seconds: int = 300) -> None:

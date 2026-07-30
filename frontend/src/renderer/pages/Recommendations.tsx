@@ -1,4 +1,5 @@
 import React from 'react';
+import SampleDataBanner from '../components/SampleDataBanner';
 import './Recommendations.css';
 
 const planningSuggestions = [
@@ -63,6 +64,8 @@ const Recommendations: React.FC = () => {
         <h1>Recommendations</h1>
         <p className="subtitle">AI-driven insights to improve your workflow</p>
       </div>
+
+      <SampleDataBanner what="Recommendation generation from behavioural patterns" />
 
       {/* Immediate Suggestions */}
       <div className="rec-section" style={{ marginBottom: 'var(--space-md)' }}>

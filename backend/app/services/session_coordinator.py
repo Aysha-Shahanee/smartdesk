@@ -20,6 +20,9 @@ from app.models.schemas import IDEEventType
 from app.models.schemas import IngestEventResponse
 from app.models.schemas import OSEventPayload
 from app.models.schemas import OSEventType
+from app.services.liveness import CLOSED_BY_RECOVERED
+from app.services.liveness import clamp_to_liveness
+from app.services.liveness import get_last_heartbeat
 
 import logging
 
@@ -294,7 +297,7 @@ class SessionCoordinator:
         )
         if session is None:
             return None
-        self._close_timed_session(session, timestamp, closed_by)
+        self._close_timed_session(session, timestamp, closed_by, get_last_heartbeat(db))
         db.flush()
         return session
 
@@ -471,8 +474,9 @@ class SessionCoordinator:
         if apply_payload:
             self._apply_ide_payload_update(sessions[0], payload)
         survivor: IDESessionRecord | None = None
+        last_alive = get_last_heartbeat(db)
         for open_session in sessions:
-            self._close_timed_session(open_session, payload.timestamp, closed_by)
+            self._close_timed_session(open_session, payload.timestamp, closed_by, last_alive)
             # Drop rows that captured nothing worth keeping:
             #  - empty background_ai: a blurred IDE produced no edits, so per
             #    policy "blurred + idle -> collect nothing".
@@ -613,7 +617,7 @@ class SessionCoordinator:
         if session is None:
             return None
 
-        self._close_timed_session(session, timestamp, closed_by)
+        self._close_timed_session(session, timestamp, closed_by, get_last_heartbeat(db))
         db.flush()
         return session
 
@@ -651,6 +655,7 @@ class SessionCoordinator:
     def _close_all_open_extension_sessions(
         self, user_id: str, timestamp: datetime, closed_by: str, db: Session
     ) -> None:
+        last_alive = get_last_heartbeat(db)
         for session in (
             db.query(IDESessionRecord)
             .filter(
@@ -659,7 +664,7 @@ class SessionCoordinator:
             )
             .all()
         ):
-            self._close_timed_session(session, timestamp, closed_by)
+            self._close_timed_session(session, timestamp, closed_by, last_alive)
 
         for session in (
             db.query(BrowserSessionRecord)
@@ -669,7 +674,7 @@ class SessionCoordinator:
             )
             .all()
         ):
-            self._close_timed_session(session, timestamp, closed_by)
+            self._close_timed_session(session, timestamp, closed_by, last_alive)
 
         db.flush()
 
@@ -800,9 +805,34 @@ class SessionCoordinator:
             or _looks_like_browser(payload.app_name)
         )
 
-    def _close_timed_session(self, session, timestamp: datetime, closed_by: str) -> None:
+    def _close_timed_session(
+        self, session, timestamp: datetime, closed_by: str, last_alive: datetime | None = None
+    ) -> None:
         start_dt = ensure_aware(parse_iso(session.session_start))
         end_dt = ensure_aware(timestamp)
+
+        # A session may only claim time the observer was running to see. Without
+        # this, a backend that stops with a session open has the entire outage
+        # billed to whatever window was in front when it died — the next
+        # 'focused' event on restart closes the row at *now*. That fabricated
+        # 123 h of the 177 h recorded for 2026-07-21..28, including a 17.89 h
+        # "active" VS Code block spanning a night with zero rows written.
+        # Startup reconciliation handles restarts; this catches suspend/resume,
+        # where the process is frozen and never restarts.
+        end_dt, was_clamped = clamp_to_liveness(end_dt, last_alive)
+        if was_clamped:
+            logger.info(
+                "Clamped session %s end from %s to %s (observer last alive %s); "
+                "closed_by %s -> %s",
+                getattr(session, "id", "?"),
+                to_local_iso(ensure_aware(timestamp)),
+                to_local_iso(end_dt),
+                to_local_iso(ensure_aware(last_alive)),
+                closed_by,
+                CLOSED_BY_RECOVERED,
+            )
+            closed_by = CLOSED_BY_RECOVERED
+
         # Never stamp an end before the start. The extension fires ended +
         # started as two async POSTs, so a close can arrive carrying an
         # out-of-order (earlier) timestamp; the old max(0, ...) clamped the
@@ -830,11 +860,13 @@ class SessionCoordinator:
         # Accumulate ongoing idle time if session ends while in that state,
         # and move the start timestamp forward so the next session can continue
         # counting from this point (avoiding double counting on IDLE_END).
+        # Measured to end_dt, not the raw timestamp: when the end was clamped
+        # the untracked span belongs to the outage, not to this session's idle.
         if self._idle_start_timestamp is not None:
-            ongoing_idle = (timestamp - self._idle_start_timestamp).total_seconds()
+            ongoing_idle = (end_dt - ensure_aware(self._idle_start_timestamp)).total_seconds()
             current = getattr(session, idle_attr, 0) or 0
-            setattr(session, idle_attr, current + int(ongoing_idle))
-            self._idle_start_timestamp = timestamp
+            setattr(session, idle_attr, min(duration_sec, current + max(0, int(ongoing_idle))))
+            self._idle_start_timestamp = end_dt
 
     def _json(self, value: dict | None) -> str | None:
         if value is None:

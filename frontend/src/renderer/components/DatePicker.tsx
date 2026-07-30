@@ -1,5 +1,6 @@
 import React from 'react';
 import { useDateContext } from '../contexts/DateContext';
+import { shiftDate, todayString } from '../utils/time';
 
 const DatePicker: React.FC = () => {
   const { selectedDate, setSelectedDate } = useDateContext();
@@ -8,30 +9,38 @@ const DatePicker: React.FC = () => {
     setSelectedDate(e.target.value);
   };
 
-  const handlePrevDay = () => {
-    const d = new Date(selectedDate);
-    d.setDate(d.getDate() - 1);
-    setSelectedDate(d.toISOString().split('T')[0]);
-  };
-
-  const handleNextDay = () => {
-    const d = new Date(selectedDate);
-    d.setDate(d.getDate() + 1);
-    setSelectedDate(d.toISOString().split('T')[0]);
-  };
-
-  const isToday = selectedDate === new Date().toISOString().split('T')[0];
+  // Day stepping and the "is today" test both go through local-date helpers.
+  // Round-tripping via toISOString() compared against the UTC date, which
+  // disagrees with the selected local date before the UTC offset each night.
+  const today = todayString();
+  const isToday = selectedDate >= today;
 
   return (
     <div className="period-toggle" style={{ display: 'flex', alignItems: 'center', gap: '8px', border: 'none' }}>
-      <button className="sd-btn" onClick={handlePrevDay} style={{ padding: '6px 10px' }}>&larr;</button>
-      <input 
-        type="date" 
-        className="date-picker" 
-        value={selectedDate} 
-        onChange={handleDateChange} 
+      <button
+        className="sd-btn"
+        onClick={() => setSelectedDate(shiftDate(selectedDate, -1))}
+        style={{ padding: '6px 10px' }}
+        title="Previous day"
+      >
+        &larr;
+      </button>
+      <input
+        type="date"
+        className="date-picker"
+        value={selectedDate}
+        max={today}
+        onChange={handleDateChange}
       />
-      <button className="sd-btn" onClick={handleNextDay} disabled={isToday} style={{ padding: '6px 10px' }}>&rarr;</button>
+      <button
+        className="sd-btn"
+        onClick={() => setSelectedDate(shiftDate(selectedDate, 1))}
+        disabled={isToday}
+        style={{ padding: '6px 10px' }}
+        title="Next day"
+      >
+        &rarr;
+      </button>
     </div>
   );
 };

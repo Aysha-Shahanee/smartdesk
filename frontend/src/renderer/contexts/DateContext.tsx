@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState } from 'react';
+import { todayString } from '../utils/time';
 
 interface DateContextType {
   selectedDate: string; // ISO date string 'YYYY-MM-DD'
@@ -7,7 +8,7 @@ interface DateContextType {
   triggerRefresh: () => void;
 }
 
-const getTodayString = () => new Date().toISOString().split('T')[0];
+const getTodayString = todayString;
 
 const DateContext = createContext<DateContextType | undefined>(undefined);
 

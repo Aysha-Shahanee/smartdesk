@@ -18,9 +18,14 @@ from sqlalchemy.orm import Session as DbSession
 from app.core.database import SessionLocal
 from app.core.time import local_now
 from app.core.time import parse_iso
+from app.core.time import to_local_iso
 from app.models.db import BrowserSessionRecord
 from app.models.db import IDESessionRecord
 from app.models.db import OSSessionRecord
+from app.services.liveness import CLOSED_BY_RECOVERED
+from app.services.liveness import clamp_to_liveness
+from app.services.liveness import get_last_heartbeat
+from app.services.liveness import record_heartbeat
 
 logger = logging.getLogger("smartdesk.timeout_job")
 
@@ -117,7 +122,12 @@ class SessionTimeoutJob:
         try:
             now = local_now()
             threshold_dt = now - timedelta(seconds=BROKEN_SESSION_TIMEOUT_SEC)
-            now_iso = now.isoformat()
+
+            # Read the previous beat before overwriting it: it marks how long the
+            # observer was actually running, which bounds what a session may
+            # claim. While the backend is alive the beat is ~60 s old and the
+            # clamp never bites; after an outage it is the moment we stopped.
+            last_alive = get_last_heartbeat(db)
 
             total_closed = 0
             for Model in (OSSessionRecord, IDESessionRecord, BrowserSessionRecord):
@@ -132,14 +142,17 @@ class SessionTimeoutJob:
                         db.delete(row)
                         total_closed += 1
                         continue
-                    row.session_end = now_iso
-                    row.duration_sec = _seconds_between(row.session_start, now_iso)
-                    row.closed_by = "timeout"
-                    row.updated_at = now_iso
+                    end, was_clamped = clamp_to_liveness(now, last_alive)
+                    end_iso = to_local_iso(end)
+                    row.session_end = end_iso
+                    row.duration_sec = _seconds_between(row.session_start, end_iso)
+                    row.closed_by = CLOSED_BY_RECOVERED if was_clamped else "timeout"
+                    row.updated_at = end_iso
                     total_closed += 1
 
+            record_heartbeat(db, now)
+            db.commit()
             if total_closed:
-                db.commit()
                 logger.info("SessionTimeoutJob closed %d stale session(s).", total_closed)
         except Exception:
             db.rollback()
@@ -156,54 +169,16 @@ class SessionTimeoutJob:
 
         Call this from a test or a debug endpoint — no background thread needed.
         """
+        before = self._count_open()
+        self._close_stale_sessions()
+        return before - self._count_open()
+
+    def _count_open(self) -> int:
         db: DbSession = SessionLocal()
-
         try:
-            now = local_now()
-            threshold_dt = now - timedelta(
-                seconds=BROKEN_SESSION_TIMEOUT_SEC
+            return sum(
+                db.query(Model).filter(Model.session_end.is_(None)).count()
+                for Model in (OSSessionRecord, IDESessionRecord, BrowserSessionRecord)
             )
-            now_iso = now.isoformat()
-            total_closed = 0
-
-            for Model in (
-                OSSessionRecord,
-                IDESessionRecord,
-                BrowserSessionRecord,
-            ):
-                open_rows = (
-                    db.query(Model)
-                    .filter(Model.session_end.is_(None))
-                    .all()
-                )
-
-                stale_rows = [
-                    row
-                    for row in open_rows
-                    if parse_iso(row.updated_at) < threshold_dt
-                ]
-
-                for row in stale_rows:
-                    if _is_empty_background_ide(row):
-                        db.delete(row)
-                        total_closed += 1
-                        continue
-
-                    row.session_end = now_iso
-                    row.duration_sec = _seconds_between(
-                        row.session_start,
-                        now_iso,
-                    )
-                    row.closed_by = "timeout"
-                    row.updated_at = now_iso
-                    total_closed += 1
-
-            db.commit()
-            return total_closed
-
-        except Exception:
-            db.rollback()
-            raise
-
         finally:
             db.close()

@@ -1,69 +1,132 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
-import { getSegmentsSummary, getSegmentsList } from '../services/api';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell,
+  ResponsiveContainer, LabelList,
+} from 'recharts';
+import { getSegmentsSummary, getAllSegments } from '../services/api';
 import { useDateContext } from '../contexts/DateContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { getCategoryColor, getChartChrome } from '../theme/chartTheme';
+import { capitalize, formatDuration, parseSegmentTime } from '../utils/time';
 import './Dashboard.css';
 
-const CATEGORY_COLORS: Record<string, string> = {
-  work: '#3366FF',
-  learn: '#22C55E',
-  communication: '#F59E0B',
-  entertainment: '#EC4899',
-  social_media: '#8B5CF6',
-  system: '#94A3B8',
-  meetings: '#EF4444',
-  other: '#6366F1',
-  documentation: '#14B8A6',
+const EMPTY_SUMMARY = {
+  total_segments: 0,
+  total_duration_sec: 0,
+  count_by_category: {} as Record<string, number>,
+  duration_by_category: {} as Record<string, number>,
 };
-
-function capitalize(s: string) {
-  if (!s) return '';
-  return s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ');
-}
-
-function formatDuration(sec: number) {
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  return `${h}h ${m}m`;
-}
 
 const Dashboard: React.FC = () => {
   const { selectedDate, refreshCount } = useDateContext();
+  const { theme } = useTheme();
   const navigate = useNavigate();
+  const chrome = getChartChrome(theme);
+
   const [summary, setSummary] = useState<any>(null);
+  const [segments, setSegments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let cancelled = false;
     const load = async () => {
-      try {
-        setLoading(true);
-        const sumData = await getSegmentsSummary(selectedDate).catch(() => null);
-        setSummary(sumData || { total_segments: 0, total_duration_sec: 0, count_by_category: {}, duration_by_category: {} });
-      } catch {
-        setSummary({ total_segments: 0, total_duration_sec: 0, count_by_category: {}, duration_by_category: {} });
-      } finally {
-        setLoading(false);
-      }
+      setLoading(true);
+      const [sum, segs] = await Promise.all([
+        getSegmentsSummary(selectedDate).catch(() => null),
+        getAllSegments(selectedDate).catch(() => []),
+      ]);
+      if (cancelled) return;
+      setSummary(sum || EMPTY_SUMMARY);
+      setSegments(segs);
+      setLoading(false);
     };
     load();
+    return () => { cancelled = true; };
   }, [selectedDate, refreshCount]);
+
+  const { total_duration_sec = 0, duration_by_category = {} } = summary || {};
+
+  /* Ranked category breakdown. A horizontal bar chart is used instead of the
+     previous donut: with up to nine categories, angular slices are very hard
+     to rank by eye, whereas bar length reads directly. */
+  const categoryRanking = useMemo(
+    () =>
+      Object.entries(duration_by_category as Record<string, number>)
+        // Categories that total zero seconds draw a zero-length bar with a
+        // "0s" label — noise that pushes real categories out of the ranking.
+        .filter(([, seconds]) => seconds > 0)
+        .map(([key, seconds]) => ({
+          key,
+          name: capitalize(key),
+          seconds,
+          pct: total_duration_sec > 0 ? Math.round((seconds / total_duration_sec) * 100) : 0,
+          color: getCategoryColor(key, theme),
+        }))
+        .sort((a, b) => b.seconds - a.seconds),
+    [duration_by_category, total_duration_sec, theme]
+  );
+
+  /* Real observed activity window and busiest hour, replacing the previously
+     hardcoded "focus peak 9:30-11:30" copy. Idle/gap segments are excluded so
+     the numbers agree with the summary endpoint, which counts active only. */
+  const derived = useMemo(() => {
+    const active = segments.filter(s => (s.state ?? 'active') === 'active');
+    if (active.length === 0) {
+      return { firstSeen: null as Date | null, lastSeen: null as Date | null, peakHour: null as number | null, peakSec: 0, idleSec: 0, topApp: null as string | null };
+    }
+
+    const perHour = new Array(24).fill(0);
+    let firstSeen: Date | null = null;
+    let lastSeen: Date | null = null;
+    const appTotals: Record<string, number> = {};
+
+    for (const seg of active) {
+      const start = parseSegmentTime(seg.start_time_utc);
+      const end = parseSegmentTime(seg.end_time_utc);
+      if (!start || !end) continue;
+      if (!firstSeen || start < firstSeen) firstSeen = start;
+      if (!lastSeen || end > lastSeen) lastSeen = end;
+
+      const app = seg.app_name || 'Unknown';
+      appTotals[app] = (appTotals[app] || 0) + (end.getTime() - start.getTime()) / 1000;
+
+      // Split across every hour the segment touches rather than charging the
+      // whole span to its starting hour.
+      let cursor = start.getTime();
+      const endMs = end.getTime();
+      while (cursor < endMs) {
+        const c = new Date(cursor);
+        const hourEnd = new Date(c.getFullYear(), c.getMonth(), c.getDate(), c.getHours() + 1, 0, 0, 0).getTime();
+        const sliceEnd = Math.min(hourEnd, endMs);
+        perHour[c.getHours()] += (sliceEnd - cursor) / 1000;
+        cursor = sliceEnd;
+      }
+    }
+
+    let peakHour: number | null = null;
+    let peakSec = 0;
+    perHour.forEach((sec, h) => {
+      if (sec > peakSec) { peakSec = sec; peakHour = h; }
+    });
+
+    const idleSec = segments
+      .filter(s => s.state === 'idle')
+      .reduce((acc, s) => acc + (s.duration_sec || 0), 0);
+
+    const topApp = Object.entries(appTotals).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+
+    return { firstSeen, lastSeen, peakHour, peakSec, idleSec, topApp };
+  }, [segments]);
 
   if (loading) return <div className="sd-loader">Loading dashboard for {selectedDate}…</div>;
 
-  const { total_duration_sec, duration_by_category } = summary;
-
-  // Donut chart data
-  const donutData = Object.keys(duration_by_category).length > 0
-    ? Object.keys(duration_by_category).map(cat => ({
-        name: capitalize(cat),
-        value: duration_by_category[cat],
-        color: CATEGORY_COLORS[cat] || '#94A3B8',
-      }))
-    : [{ name: 'No Activity', value: 1, color: '#E2E8F0' }];
-
-  const activePercent = total_duration_sec > 0 ? Math.min(100, Math.round((total_duration_sec / (8 * 3600)) * 100)) : 0;
-  const deepWorkSec = duration_by_category['work'] || 0;
+  const hasData = total_duration_sec > 0;
+  const topCategory = categoryRanking[0];
+  const hourLabel = (h: number) => `${String(h).padStart(2, '0')}:00–${String((h + 1) % 24).padStart(2, '0')}:00`;
+  const spanLabel = derived.firstSeen && derived.lastSeen
+    ? `${derived.firstSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} – ${derived.lastSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    : '—';
 
   return (
     <div className="dashboard sd-fade-in">
@@ -73,144 +136,138 @@ const Dashboard: React.FC = () => {
       </div>
 
       <div className="hub-layout">
-        {/* Hub Row 1: Recommendations (Full width) */}
-        <div className="sd-card hub-card interactive" onClick={() => navigate('/recommendations')}>
+        {/* Headline metrics — all derived from the segments actually recorded
+            for the selected date, with no assumed target workday. */}
+        <div className="sd-grid-4">
+          <div className="sd-card metric-card">
+            <span className="metric-card-label">Tracked Active Time</span>
+            <span className="metric-card-value">{formatDuration(total_duration_sec)}</span>
+            <span className="metric-card-sub">{summary?.total_segments ?? 0} segments</span>
+          </div>
+          <div className="sd-card metric-card">
+            <span className="metric-card-label">Activity Window</span>
+            <span className="metric-card-value" style={{ fontSize: 'var(--font-size-lg)' }}>{spanLabel}</span>
+            <span className="metric-card-sub">First to last recorded activity</span>
+          </div>
+          <div className="sd-card metric-card">
+            <span className="metric-card-label">Busiest Hour</span>
+            <span className="metric-card-value" style={{ fontSize: 'var(--font-size-lg)' }}>
+              {derived.peakHour !== null ? hourLabel(derived.peakHour) : '—'}
+            </span>
+            <span className="metric-card-sub">
+              {derived.peakHour !== null ? `${formatDuration(derived.peakSec)} of activity` : 'No activity recorded'}
+            </span>
+          </div>
+          <div className="sd-card metric-card">
+            <span className="metric-card-label">Idle Time</span>
+            <span className="metric-card-value">{formatDuration(derived.idleSec)}</span>
+            <span className="metric-card-sub">Measured idle segments</span>
+          </div>
+        </div>
+
+        {/* Category breakdown — ranked bars replace the donut. */}
+        <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
           <div className="card-header">
-            <h3><span className="card-icon">💡</span> Recommendations & Planning</h3>
-            <span className="sd-view-details">View All Insights →</span>
-          </div>
-          <div className="hub-rec-preview">
-            <div className="rec-insight-row">
-              <span className="rec-icon-small green">↗</span>
-              <div>
-                <strong>Focus peak observed between 9:30–11:30</strong>
-                <p>Your best work happened during late morning</p>
-              </div>
-            </div>
-            <div className="rec-insight-row">
-              <span className="rec-icon-small red">!</span>
-              <div>
-                <strong>High context switching detected after 1 PM</strong>
-                <p>Consider blocking afternoon time for focused work</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Hub Row 2: Grid 2 (Timeline, Insights) */}
-        <div className="sd-grid-2">
-          {/* Timeline Summary */}
-          <div className="sd-card hub-card interactive" onClick={() => navigate('/timeline')}>
-            <div className="card-header">
-              <h3><span className="card-icon">🕐</span> Daily Activity (Timeline)</h3>
-              <span className="sd-view-details">View Timeline →</span>
-            </div>
-            <div className="activity-metrics">
-              <div className="activity-row">
-                <span className="metric-label">Total Active Time</span>
-                <span className="metric-value">{formatDuration(total_duration_sec)}</span>
-              </div>
-              <div className="activity-row">
-                <span className="metric-label">Deep Work Time</span>
-                <span className="metric-value">{formatDuration(deepWorkSec)}</span>
-              </div>
-              <div className="activity-row">
-                <span className="metric-label">Idle Time</span>
-                <span className="metric-value">{formatDuration(Math.max(0, 8 * 3600 - total_duration_sec))}</span>
-              </div>
-            </div>
-            <div className="sd-progress" style={{ marginTop: 16 }}>
-              <div
-                className="sd-progress-fill"
-                style={{ width: `${activePercent}%`, background: 'var(--color-primary)' }}
-              />
-            </div>
+            <h3><span className="card-icon">📊</span> Time by Category</h3>
+            <span className="sd-view-details" onClick={() => navigate('/insights')}>View Insights →</span>
           </div>
 
-          {/* Insights Summary */}
-          <div className="sd-card hub-card interactive" onClick={() => navigate('/insights')}>
-            <div className="card-header">
-              <h3><span className="card-icon">📊</span> Usage Breakdown (Insights)</h3>
-              <span className="sd-view-details">View Insights →</span>
-            </div>
-            <div className="donut-container" style={{ gap: 'var(--space-md)' }}>
-              <ResponsiveContainer width="50%" height={140}>
-                <PieChart>
-                  <Pie
-                    data={donutData}
-                    dataKey="value"
-                    nameKey="name"
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={30}
-                    outerRadius={60}
-                    paddingAngle={2}
-                    strokeWidth={0}
-                  >
-                    {donutData.map((entry, i) => (
-                      <Cell key={i} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    formatter={(value: number) => formatDuration(value)}
-                    contentStyle={{ borderRadius: 8, border: '1px solid #E2E8F0', fontSize: 13 }}
+          {hasData ? (
+            <ResponsiveContainer width="100%" height={Math.max(180, categoryRanking.length * 44)}>
+              <BarChart
+                data={categoryRanking}
+                layout="vertical"
+                margin={{ top: 8, right: 72, bottom: 8, left: 8 }}
+                barCategoryGap={8}
+              >
+                <CartesianGrid horizontal={false} stroke={chrome.grid} />
+                <XAxis
+                  type="number"
+                  tick={{ fontSize: 12, fill: chrome.axisText }}
+                  tickFormatter={(v: number) => formatDuration(v)}
+                />
+                <YAxis
+                  type="category"
+                  dataKey="name"
+                  width={110}
+                  tick={{ fontSize: 13, fill: chrome.axisText }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <Tooltip
+                  cursor={{ fill: chrome.grid, fillOpacity: 0.4 }}
+                  formatter={(value: number, _n, entry: any) => [
+                    `${formatDuration(value)} (${entry?.payload?.pct ?? 0}%)`,
+                    'Time',
+                  ]}
+                  contentStyle={{
+                    borderRadius: 8,
+                    border: `1px solid ${chrome.tooltipBorder}`,
+                    background: chrome.tooltipBg,
+                    color: chrome.tooltipText,
+                    fontSize: 13,
+                  }}
+                />
+                <Bar dataKey="seconds" radius={[0, 4, 4, 0]} maxBarSize={26}>
+                  {categoryRanking.map(entry => (
+                    <Cell key={entry.key} fill={entry.color} />
+                  ))}
+                  <LabelList
+                    dataKey="seconds"
+                    position="right"
+                    formatter={(v: number) => formatDuration(v)}
+                    style={{ fill: chrome.axisText, fontSize: 12 }}
                   />
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="donut-legend" style={{ gap: 'var(--space-xs)' }}>
-                {donutData.slice(0, 4).map((item, i) => (
-                  <div className="legend-item" key={i}>
-                    <span className="legend-dot" style={{ background: item.color }} />
-                    <span className="legend-name">{item.name}</span>
-                    <span className="legend-value">{formatDuration(item.value)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="dash-empty">No activity recorded for {selectedDate}.</p>
+          )}
         </div>
 
-        {/* Hub Row 3: Grid 2 (Prediction, Reports) */}
-        <div className="sd-grid-2">
-          {/* Prediction Summary */}
-          <div className="sd-card hub-card interactive" onClick={() => navigate('/prediction')}>
-            <div className="card-header">
-              <h3><span className="card-icon">🔮</span> Task Prediction</h3>
-              <span className="sd-view-details">View Predictions →</span>
-            </div>
-            <div className="hub-prediction-preview">
-              <div className="pred-task-card-header">
-                <h4>User Authentication Module</h4>
-                <span className="pred-status-badge ongoing">ongoing</span>
-              </div>
-              <div className="pred-task-context">VS Code • auth-service.ts</div>
-              <div className="pred-task-progress-row">
-                <div className="pred-progress-track">
-                  <div className="pred-progress-fill" style={{ width: '53%' }} />
+        {/* Observations derived from the loaded data. */}
+        <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
+          <div className="card-header">
+            <h3><span className="card-icon">💡</span> Today at a Glance</h3>
+            <span className="sd-view-details" onClick={() => navigate('/recommendations')}>Recommendations →</span>
+          </div>
+          {hasData ? (
+            <div className="hub-rec-preview">
+              <div className="rec-insight-row">
+                <span className="rec-icon-small green">↗</span>
+                <div>
+                  <strong>
+                    {topCategory.name} led your day at {formatDuration(topCategory.seconds)} ({topCategory.pct}%)
+                  </strong>
+                  <p>
+                    Across {summary?.count_by_category?.[topCategory.key] ?? 0} segments
+                    {derived.topApp ? ` • most-used app: ${derived.topApp}` : ''}
+                  </p>
                 </div>
-                <span className="pred-progress-pct">53%</span>
               </div>
-              <p className="pred-subtext" style={{ marginTop: 'var(--space-sm)' }}>
-                Predicted Total: 4h 0m • Remaining: 1h 53m
-              </p>
+              {derived.peakHour !== null && (
+                <div className="rec-insight-row">
+                  <span className="rec-icon-small green">↗</span>
+                  <div>
+                    <strong>Peak activity between {hourLabel(derived.peakHour)}</strong>
+                    <p>{formatDuration(derived.peakSec)} of tracked activity in that hour</p>
+                  </div>
+                </div>
+              )}
+              {derived.idleSec > 0 && (
+                <div className="rec-insight-row">
+                  <span className="rec-icon-small red">!</span>
+                  <div>
+                    <strong>{formatDuration(derived.idleSec)} recorded as idle</strong>
+                    <p>Time the machine was on but unattended — excluded from the totals above</p>
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-
-          {/* Reports Summary */}
-          <div className="sd-card hub-card interactive" onClick={() => navigate('/report')}>
-            <div className="card-header">
-              <h3><span className="card-icon">📑</span> Weekly Reports</h3>
-              <span className="sd-view-details">View Reports →</span>
-            </div>
-            <div className="hub-report-preview">
-              <div className="report-doc-icon">📄</div>
-              <div>
-                <h4>Latest Auto-generated Report</h4>
-                <p>Summary of Week 6 (Feb 2 - Feb 8)</p>
-                <span style={{ fontSize: 12, color: 'var(--color-primary)', fontWeight: 500 }}>Ready to view</span>
-              </div>
-            </div>
-          </div>
+          ) : (
+            <p className="dash-empty">Observations appear once activity is recorded for this date.</p>
+          )}
         </div>
       </div>
     </div>

@@ -17,6 +17,12 @@
 .report-header h1 {
   font-size: var(--font-size-2xl);
   font-weight: 700;
+  margin-bottom: var(--space-xs);
+}
+
+.report-header .subtitle {
+  font-size: var(--font-size-base);
+  color: var(--color-text-secondary);
 }
 
 .report-content {
@@ -24,29 +30,7 @@
   flex-direction: column;
 }
 
-/* Metric Cards */
-.metric-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-  padding: var(--space-xl) !important;
-}
-
-.metric-card-label {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-}
-
-.metric-card-value {
-  font-size: var(--font-size-2xl);
-  font-weight: 700;
-  color: var(--color-text-primary);
-}
-
-.metric-card-sub {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
-}
+/* Metric card styles now live in index.css (shared with the Dashboard). */
 
 /* Report Table */
 .report-table {

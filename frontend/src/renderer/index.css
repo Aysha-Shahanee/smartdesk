@@ -95,7 +95,7 @@
   --color-bg: #0F172A;
   --color-surface: #1E293B;
   --color-border: #334155;
-  --color-border-light: #1E293B;
+  --color-border-light: #334155;
   --color-text-primary: #F8FAFC;
   --color-text-secondary: #94A3B8;
   --color-text-muted: #64748B;
@@ -429,6 +429,46 @@ html {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: var(--space-xl);
+}
+
+/* Metric Cards (shared by Dashboard and Reports) */
+.metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-xl) !important;
+}
+
+.metric-card-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.metric-card-value {
+  font-size: var(--font-size-2xl);
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.metric-card-sub {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+/* Provenance note under a chart title */
+.chart-note {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  margin-top: 2px;
+  margin-bottom: var(--space-md);
+}
+
+/* Empty-state copy inside a card */
+.dash-empty {
+  padding: var(--space-2xl);
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
 }
 
 /* Loader */

@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  BarChart, Bar, PieChart, Pie, Cell,
+  BarChart, Bar, PieChart, Pie, Cell, Legend,
 } from 'recharts';
-import { useDateContext } from '../contexts/DateContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { getCategoryColor, getEmotionColor, getChartChrome } from '../theme/chartTheme';
+import SampleDataBanner from '../components/SampleDataBanner';
 import './Insights.css';
 
 type InsightTab = 'Focus Insights' | 'Stress Insights' | 'Pattern Detection';
@@ -27,11 +29,11 @@ const stressThroughDay = [
   { time: '15:00', level: 35 }, { time: '16:00', level: 42 }, { time: '17:00', level: 50 },
 ];
 
-const emotionDistribution = [
-  { name: 'Calm', value: 45, color: '#22C55E' },
-  { name: 'Focused', value: 18, color: '#3366FF' },
-  { name: 'Neutral', value: 32, color: '#94A3B8' },
-  { name: 'Stressed', value: 5, color: '#EF4444' },
+const EMOTION_DATA = [
+  { name: 'Calm', key: 'calm', value: 45 },
+  { name: 'Focused', key: 'focused', value: 18 },
+  { name: 'Neutral', key: 'neutral', value: 32 },
+  { name: 'Stressed', key: 'stressed', value: 5 },
 ];
 
 // ---- Patterns ----
@@ -43,15 +45,19 @@ const patterns = [
 ];
 
 const Insights: React.FC = () => {
-  const { selectedDate } = useDateContext();
+  const { theme } = useTheme();
+  const chrome = getChartChrome(theme);
+  const emotionDistribution = EMOTION_DATA.map(e => ({ ...e, color: getEmotionColor(e.key, theme) }));
   const [activeTab, setActiveTab] = useState<InsightTab>('Focus Insights');
 
   return (
     <div className="insights-page sd-fade-in">
       <div className="sd-page-header">
-        <h1>Insights (Sample)</h1>
-        <p className="subtitle">Actionable analysis of your activity for {selectedDate}</p>
+        <h1>Insights</h1>
+        <p className="subtitle">Focus, stress and pattern analysis</p>
       </div>
+
+      <SampleDataBanner what="Focus scoring, stress level and emotion detection" />
 
       <div className="sd-tabs">
         {(['Focus Insights', 'Stress Insights', 'Pattern Detection'] as InsightTab[]).map(tab => (
@@ -72,11 +78,11 @@ const Insights: React.FC = () => {
             <h3>Focus Score Trend (Last 7 Days)</h3>
             <ResponsiveContainer width="100%" height={350}>
               <LineChart data={focusTrend}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
-                <XAxis dataKey="day" tick={{ fontSize: 13, fill: '#94A3B8' }} />
-                <YAxis domain={[0, 100]} tick={{ fontSize: 13, fill: '#94A3B8' }} />
-                <Tooltip contentStyle={{ borderRadius: 8, border: '1px solid #E2E8F0' }} />
-                <Line type="monotone" dataKey="score" stroke="#3366FF" strokeWidth={2.5} dot={{ r: 4, fill: '#3366FF' }} />
+                <CartesianGrid strokeDasharray="3 3" stroke={chrome.grid} />
+                <XAxis dataKey="day" tick={{ fontSize: 13, fill: chrome.axisText }} />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 13, fill: chrome.axisText }} />
+                <Tooltip contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }} />
+                <Line type="monotone" dataKey="score" name="Focus score" stroke={getCategoryColor('work', theme)} strokeWidth={2.5} dot={{ r: 4, fill: getCategoryColor('work', theme) }} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -85,12 +91,13 @@ const Insights: React.FC = () => {
             <h3>Deep Work vs Shallow Work (Minutes)</h3>
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={deepVsShallow} barGap={4}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
-                <XAxis dataKey="day" tick={{ fontSize: 13, fill: '#94A3B8' }} />
-                <YAxis tick={{ fontSize: 13, fill: '#94A3B8' }} />
-                <Tooltip contentStyle={{ borderRadius: 8, border: '1px solid #E2E8F0' }} />
-                <Bar dataKey="deep" fill="#22C55E" radius={[4, 4, 0, 0]} name="Deep Work" />
-                <Bar dataKey="shallow" fill="#F59E0B" radius={[4, 4, 0, 0]} name="Shallow Work" />
+                <CartesianGrid strokeDasharray="3 3" stroke={chrome.grid} />
+                <XAxis dataKey="day" tick={{ fontSize: 13, fill: chrome.axisText }} />
+                <YAxis tick={{ fontSize: 13, fill: chrome.axisText }} />
+                <Tooltip contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }} />
+                <Legend wrapperStyle={{ fontSize: 12, color: 'var(--color-text-secondary)' }} />
+                <Bar dataKey="deep" fill={getCategoryColor('learn', theme)} radius={[4, 4, 0, 0]} name="Deep Work" />
+                <Bar dataKey="shallow" fill={getCategoryColor('communication', theme)} radius={[4, 4, 0, 0]} name="Shallow Work" />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -112,11 +119,11 @@ const Insights: React.FC = () => {
             <h3>Stress Level Throughout Day</h3>
             <ResponsiveContainer width="100%" height={350}>
               <LineChart data={stressThroughDay}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
-                <XAxis dataKey="time" tick={{ fontSize: 13, fill: '#94A3B8' }} />
-                <YAxis domain={[0, 100]} tick={{ fontSize: 13, fill: '#94A3B8' }} />
-                <Tooltip contentStyle={{ borderRadius: 8, border: '1px solid #E2E8F0' }} />
-                <Line type="monotone" dataKey="level" stroke="#EF4444" strokeWidth={2.5} dot={{ r: 4, fill: '#EF4444' }} />
+                <CartesianGrid strokeDasharray="3 3" stroke={chrome.grid} />
+                <XAxis dataKey="time" tick={{ fontSize: 13, fill: chrome.axisText }} />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 13, fill: chrome.axisText }} />
+                <Tooltip contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }} />
+                <Line type="monotone" dataKey="level" name="Stress level" stroke={getEmotionColor('stressed', theme)} strokeWidth={2.5} dot={{ r: 4, fill: getEmotionColor('stressed', theme) }} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -124,15 +131,27 @@ const Insights: React.FC = () => {
           <div className="sd-grid-2" style={{ marginTop: 'var(--space-xl)' }}>
             <div className="sd-card">
               <h3>Emotion Distribution</h3>
-              <div className="donut-container" style={{ justifyContent: 'center' }}>
-                <ResponsiveContainer width="55%" height={220}>
+              <div className="donut-container">
+                <ResponsiveContainer width="50%" height={200}>
                   <PieChart>
-                    <Pie data={emotionDistribution} dataKey="value" cx="50%" cy="50%" outerRadius={85} strokeWidth={0} label={({ name, value }) => `${name}: ${value}%`}>
+                    <Pie data={emotionDistribution} dataKey="value" cx="50%" cy="50%" innerRadius={45} outerRadius={80} paddingAngle={2} strokeWidth={0}>
                       {emotionDistribution.map((e, i) => <Cell key={i} fill={e.color} />)}
                     </Pie>
-                    <Tooltip contentStyle={{ borderRadius: 8, border: '1px solid #E2E8F0' }} />
+                    <Tooltip
+                      formatter={(value: number) => `${value}%`}
+                      contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }}
+                    />
                   </PieChart>
                 </ResponsiveContainer>
+                <div className="donut-legend">
+                  {emotionDistribution.map((item, i) => (
+                    <div className="legend-item" key={i}>
+                      <span className="legend-dot" style={{ background: item.color }} />
+                      <span className="legend-name">{item.name}</span>
+                      <span className="legend-value">{item.value}%</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
 

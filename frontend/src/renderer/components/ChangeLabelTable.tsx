@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { getSegmentsList, recordCorrection } from '../services/api';
+import { getAllSegments, recordCorrection } from '../services/api';
 import { useDateContext } from '../contexts/DateContext';
+import { formatSegmentTime } from '../utils/time';
 import '../pages/Timeline.css'; // Reuse Timeline styles for the table
 
 const availableLabels = ['Work', 'Learn', 'Communication', 'Entertainment', 'Social Media', 'System', 'Meetings', 'Idle', 'Other'];
@@ -18,8 +19,7 @@ export const ChangeLabelTable: React.FC = () => {
     const fetchSegments = async () => {
       setLoading(true);
       try {
-        const data = await getSegmentsList(selectedDate, 500, 0);
-        setSegments(data?.segments || []);
+        setSegments(await getAllSegments(selectedDate));
       } catch (err) {
         console.error('Failed to load segments for change label UI', err);
       } finally {
@@ -87,8 +87,13 @@ export const ChangeLabelTable: React.FC = () => {
           </thead>
           <tbody>
             {segments.slice(0, visibleRows).map((seg) => {
-              const startStr = new Date(seg.start_time_utc + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-              const endStr = new Date(seg.end_time_utc + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              // `start_time_utc` is misnamed: the builder derives `local_date`
+              // from it with a bare `.date()`, so it already holds local wall
+              // time. Appending 'Z' re-applied the UTC offset and shifted every
+              // row here forward by the zone offset (+5:30), disagreeing with
+              // the Timeline view of the very same segment.
+              const startStr = formatSegmentTime(seg.start_time_utc);
+              const endStr = formatSegmentTime(seg.end_time_utc);
               const isEditing = editingId === seg.id;
               
               const confScore = seg.predicted_confidence !== undefined ? seg.predicted_confidence : 0.85;
