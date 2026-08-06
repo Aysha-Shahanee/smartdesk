@@ -1,0 +1,241 @@
+.prediction-page {
+  display: flex;
+  flex-direction: column;
+}
+
+.pred-layout {
+  display: flex;
+  gap: var(--space-2xl);
+  margin-top: var(--space-xl);
+}
+
+/* Left Sidebar */
+.pred-sidebar {
+  width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.pred-sidebar-title {
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.pred-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.pred-task-card {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.pred-task-card:hover {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.pred-task-card.active {
+  border-color: var(--color-primary);
+  background-color: var(--color-primary-light);
+}
+
+.pred-task-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: var(--space-xs);
+}
+
+.pred-task-card-header h4 {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  line-height: 1.4;
+  max-width: 180px;
+}
+
+.pred-status-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  text-transform: capitalize;
+}
+
+.pred-status-badge.ongoing {
+  background-color: var(--color-success-light);
+  color: var(--color-success);
+}
+.pred-status-badge.paused {
+  background-color: var(--color-warning-light);
+  color: var(--color-warning);
+}
+.pred-status-badge.completed {
+  background-color: var(--color-primary-light);
+  color: var(--color-primary);
+}
+
+.pred-task-context {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-md);
+}
+
+.pred-task-progress-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.pred-progress-track {
+  flex: 1;
+  height: 6px;
+  background-color: var(--color-border);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.pred-progress-track.large {
+  height: 12px;
+}
+
+.pred-progress-fill {
+  height: 100%;
+  background-color: var(--color-primary);
+  border-radius: var(--radius-full);
+}
+
+.pred-progress-pct {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+
+/* Right Main View */
+.pred-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.pred-detail-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.pred-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.pred-detail-header h2 {
+  font-size: var(--font-size-xl);
+  font-weight: 600;
+}
+
+.pred-detail-meta {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.pred-detail-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  margin-top: var(--space-md);
+}
+
+.pred-detail-progress-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+.pred-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-lg);
+}
+
+.pred-stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-xl);
+}
+
+.pred-stat-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.pred-stat-value {
+  font-size: var(--font-size-2xl);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.pred-stat-sub {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.pred-stat-sub.confidence {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pred-stat-sub.confidence.high { color: var(--color-success); }
+.pred-stat-sub.confidence.medium { color: var(--color-warning); }
+
+.confidence-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: currentColor;
+}
+
+.pred-trend-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.pred-trend-content {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-md);
+}
+
+.trend-dash {
+  font-weight: bold;
+  color: var(--color-text-secondary);
+}
+
+.pred-trend-content strong {
+  display: block;
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+  margin-bottom: 2px;
+}
+
+.pred-trend-content p {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}

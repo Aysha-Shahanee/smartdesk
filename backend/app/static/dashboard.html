@@ -178,7 +178,7 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="/static/chart.js"></script>
 <script>
 const REFRESH_MS = 30000;
 
@@ -476,6 +476,45 @@ document.addEventListener('DOMContentLoaded', () => {
   const today = new Date().toISOString().split('T')[0];
   console.log("Loading category data for date:", today);
   loadCategoryData(today);
+
+  // Connect Google Calendar button
+  const btnConnect = document.getElementById('btn-connect');
+  if (btnConnect) {
+    btnConnect.addEventListener('click', () => {
+      window.location.href = '/api/v1/calendar/connect';
+    });
+  }
+
+  // Sync now button
+  const btnSync = document.getElementById('btn-sync');
+  if (btnSync) {
+    btnSync.addEventListener('click', async () => {
+      btnSync.disabled = true;
+      btnSync.textContent = 'Syncing...';
+      try {
+        const res = await fetch('/api/v1/calendar/sync', { method: 'POST' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        // Optionally fetch updated calendar status to refresh UI
+        const overview = await fetch('/dashboard/overview').then(r => r.json());
+        // Trigger a refresh of the dashboard data via existing refresh mechanism
+        // We'll just call refresh() after a short delay to let backend process
+        setTimeout(() => {
+          refresh();
+        }, 1000);
+        btnSync.textContent = 'Sync now';
+        btnSync.disabled = false;
+        // Show temporary success feedback
+        const tmp = btnSync.textContent;
+        btnSync.textContent = 'Synced!';
+        setTimeout(() => { btnSync.textContent = tmp; }, 1500);
+      } catch (e) {
+        console.error('Sync failed:', e);
+        btnSync.textContent = 'Sync now';
+        btnSync.disabled = false;
+        alert('Calendar sync failed: ' + e.message);
+      }
+    });
+  }
 });
 
 // Periodic refresh for category data (every 30s)

@@ -38,7 +38,6 @@ from app.models.schemas.dashboard import (
 )
 from app.models.db import ActivitySegmentRecord, ActivitySegmentLabelRecord
 from app.services.dashboard_service import DashboardService
-from app.services.embedder import embedder
 from app.services.categorizer import categorizer
 
 router = APIRouter()
@@ -263,29 +262,15 @@ def get_segments_summary(
     # Determine the target date in local time
     if date:
         try:
-            # Parse as local date at midnight
             target_date = datetime.fromisoformat(date).date()
         except ValueError:
-            raise HTTPException(status_code=422, detail="Invalid date format. Use YYYY‑MM‑DD.")
+            raise HTTPException(status_code=422, detail="Invalid date format. Use YYYY-MM-DD.")
     else:
         target_date = datetime.now().date()
 
-    # Compute current UTC-local offset using naive datetimes for subtraction
-    now_local = datetime.now()  # naive local time
-    now_utc_naive = datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC time
-    utc_offset = now_utc_naive - now_local  # timedelta: UTC - local
+    target_date_str = target_date.isoformat()  # "YYYY-MM-DD"
 
-    # Calculate start and end of target day in local time
-    start_local = datetime.combine(target_date, datetime.min.time())  # 00:00:00
-    end_local = datetime.combine(target_date, datetime.max.time().replace(microsecond=999999))  # 23:59:59.999999
-
-    # Convert local times to UTC using the computed offset
-    start_utc = start_local + utc_offset
-    end_utc = end_local + utc_offset
-
-    from_iso = start_utc.isoformat()
-    to_iso = end_utc.isoformat()
-    # Query segments for the day and user
+    # Use the local_date column which is already stored as YYYY-MM-DD
     from sqlalchemy import func
     q = (
         db.query(
@@ -295,9 +280,14 @@ def get_segments_summary(
         )
         .filter(
             ActivitySegmentRecord.user_id == user_id,
-            ActivitySegmentRecord.start_time_utc >= from_iso,
-            ActivitySegmentRecord.end_time_utc <= to_iso,
+            ActivitySegmentRecord.local_date == target_date_str,
             ActivitySegmentRecord.category.isnot(None),
+            # Work time only. Idle segments carry a category too, so without
+            # this the breakdown counts time at an unattended machine as work —
+            # 47.8 h of the 81.5 h recorded for 2026-07-21..28. This filter was
+            # harmless before idle segments existed; every non-gap row was
+            # 'active' and gaps had a NULL category.
+            ActivitySegmentRecord.state == "active",
         )
         .group_by(ActivitySegmentRecord.category)
     )
@@ -307,7 +297,7 @@ def get_segments_summary(
     total_segments = sum(count_by_category.values())
     total_duration = sum(duration_by_category.values())
     return SummaryResponse(
-        date=target_date.isoformat(),
+        date=target_date_str,
         total_segments=total_segments,
         total_duration_sec=total_duration,
         count_by_category=count_by_category,
@@ -332,6 +322,15 @@ class SegmentItem(BaseModel):
     focus_score: Optional[float]
     start_time_utc: Optional[str]
     end_time_utc: Optional[str]
+    duration_sec: Optional[int]
+    # Source/state provenance. Without these the UI has to guess a segment's
+    # origin by substring-matching app_name against a keyword list, which
+    # misses renamed binaries and mislabels anything not on the list.
+    state: Optional[str]
+    primary_source: Optional[str]
+    has_ide_session: bool = False
+    has_browser_session: bool = False
+    has_os_session: bool = False
 
 
 class SegmentsResponse(BaseModel):
@@ -354,70 +353,75 @@ def get_segments_list(
     # Determine the target date in local time
     if date:
         try:
-            # Parse as local date at midnight
             target_date = datetime.fromisoformat(date).date()
         except ValueError:
-            raise HTTPException(status_code=422, detail="Invalid date format. Use YYYY‑MM‑DD.")
+            raise HTTPException(status_code=422, detail="Invalid date format. Use YYYY-MM-DD.")
     else:
         target_date = datetime.now().date()
 
-    # Compute current UTC-local offset using naive datetimes for subtraction
-    now_local = datetime.now()  # naive local time
-    now_utc_naive = datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC time
-    utc_offset = now_utc_naive - now_local  # timedelta: UTC - local
+    target_date_str = target_date.isoformat()  # "YYYY-MM-DD"
 
-    # Calculate start and end of target day in local time
-    start_local = datetime.combine(target_date, datetime.min.time())  # 00:00:00
-    end_local = datetime.combine(target_date, datetime.max.time().replace(microsecond=999999))  # 23:59:59.999999
-
-    # Convert local times to UTC using the computed offset
-    start_utc = start_local + utc_offset
-    end_utc = end_local + utc_offset
-
-    from_iso = start_utc.isoformat()
-    to_iso = end_utc.isoformat()
-    # Base query for segments of the day and user
+    # Use the local_date column which is already stored as YYYY-MM-DD
     q = db.query(ActivitySegmentRecord).filter(
         ActivitySegmentRecord.user_id == user_id,
-        ActivitySegmentRecord.start_time_utc >= from_iso,
-        ActivitySegmentRecord.end_time_utc <= to_iso,
+        ActivitySegmentRecord.local_date == target_date_str,
     )
     total = q.count()
-    # Get predictions and corrections via joins? We'll compute in Python for simplicity.
     # Fetch rows with pagination
     rows = q.order_by(ActivitySegmentRecord.start_time_utc.desc()).offset(offset).limit(limit).all()
-    # For each segment, compute prediction and check for latest correction
+
+    # Build a set of segment IDs for batch correction lookup
+    seg_ids = [seg.id for seg in rows]
+    # Batch-fetch the latest correction per segment (avoids N+1 queries)
+    corrections: Dict[str, str] = {}
+    if seg_ids:
+        from sqlalchemy import func as sa_func
+        latest_labels = (
+            db.query(
+                ActivitySegmentLabelRecord.segment_id,
+                sa_func.max(ActivitySegmentLabelRecord.created_at).label("latest"),
+            )
+            .filter(ActivitySegmentLabelRecord.segment_id.in_(seg_ids))
+            .group_by(ActivitySegmentLabelRecord.segment_id)
+            .subquery()
+        )
+        label_rows = (
+            db.query(ActivitySegmentLabelRecord)
+            .join(
+                latest_labels,
+                (ActivitySegmentLabelRecord.segment_id == latest_labels.c.segment_id)
+                & (ActivitySegmentLabelRecord.created_at == latest_labels.c.latest),
+            )
+            .all()
+        )
+        corrections = {lr.segment_id: lr.correct_label for lr in label_rows}
+
+    # Use stored category/method/confidence — no ML inference needed per request
     seg_list: List[SegmentItem] = []
     for seg in rows:
-        # Get prediction via categorizer (we could store predicted fields but we compute on the fly)
-        cat, method, conf = categorizer.predict(seg)
-        # Get most recent correction label for this segment (if any)
-        corr = None
-        corr_rec = (
-            db.query(ActivitySegmentLabelRecord)
-            .filter(ActivitySegmentLabelRecord.segment_id == seg.id)
-            .order_by(ActivitySegmentLabelRecord.created_at.desc())
-            .first()
-        )
-        if corr_rec:
-            corr = corr_rec.correct_label
         seg_list.append(
             SegmentItem(
                 id=seg.id,
                 app_name=seg.app_name,
                 title=seg.title,
                 detail=seg.detail,
-                predicted_category=cat,
-                predicted_method=method,
-                predicted_confidence=conf,
-                correction_label=corr,
+                predicted_category=seg.category,
+                predicted_method=seg.category_method,
+                predicted_confidence=seg.category_confidence,
+                correction_label=corrections.get(seg.id),
                 focus_score=seg.focus_score,
                 start_time_utc=seg.start_time_utc.isoformat() if seg.start_time_utc else None,
                 end_time_utc=seg.end_time_utc.isoformat() if seg.end_time_utc else None,
+                duration_sec=seg.duration_sec,
+                state=seg.state,
+                primary_source=seg.primary_source,
+                has_ide_session=seg.ide_session_id is not None,
+                has_browser_session=seg.browser_session_id is not None,
+                has_os_session=seg.os_session_id is not None,
             )
         )
     return SegmentsResponse(
-        date=target_date.isoformat(),
+        date=target_date_str,
         limit=limit,
         offset=offset,
         total=total,

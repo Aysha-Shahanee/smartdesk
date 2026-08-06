@@ -1,10 +1,16 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
+from app.core.database import SessionLocal
 from app.core.logging import setup_logging
 from app.routes import calendar
 from app.routes import dashboard
@@ -13,6 +19,8 @@ from app.routes import ingest
 from app.routes import segment_feedback
 from app.services.activity_segment_builder import ActivitySegmentBuilder
 from app.services.calendar_sync_job import CalendarSyncJob
+from app.services.liveness import get_last_heartbeat
+from app.services.liveness import reconcile_open_sessions
 from app.services.os_collector import OSCollector
 from app.services.session_timeout_job import SessionTimeoutJob
 from app.services.work_period_scheduler import WorkPeriodScheduler
@@ -34,6 +42,19 @@ _activity_segment_builder = ActivitySegmentBuilder(
 async def lifespan(app: FastAPI):
     setup_logging(level=settings.LOG_LEVEL)
     logger.info("SmartDesk backend started.")
+
+    # Close sessions orphaned by the previous process BEFORE the collector runs.
+    # Its first tick always emits 'focused' (_last_app is None), which would
+    # close them at *now* and bill the whole downtime as activity. The timeout
+    # job cannot do this either — it fires on a 60 s timer and loses the race.
+    db = SessionLocal()
+    try:
+        reconcile_open_sessions(db, get_last_heartbeat(db))
+    except Exception:
+        logger.exception("Startup reconciliation failed; continuing.")
+        db.rollback()
+    finally:
+        db.close()
 
     # Start background jobs
     _timeout_job.start()
@@ -57,6 +78,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 app = FastAPI(title="SmartDesk Session Backend", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
 @app.exception_handler(RequestValidationError)
@@ -74,8 +96,8 @@ async def validation_exception_handler(request, exc):
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

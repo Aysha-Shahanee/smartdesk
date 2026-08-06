@@ -1,0 +1,1 @@
+const electron = require('electron'); console.log('typeof electron:', typeof electron); if (electron && typeof electron === 'object') { console.log('electron has app:', !!electron.app); } else { console.log('electron is not an object:', electron); }

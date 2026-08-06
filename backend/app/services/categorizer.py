@@ -8,6 +8,7 @@ entertainment, social_media, system, meetings, other.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import threading
@@ -25,9 +26,29 @@ from app.models.db import ActivitySegmentRecord, ActivitySegmentLabelRecord
 from app.services.embedder import embedder
 from app.core.database import SessionLocal
 
+logger = logging.getLogger("smartdesk.categorizer")
+
 
 class Categorizer:
     """Service for categorizing activity segments."""
+
+    # Categories the database will actually accept, mirroring
+    # ck_activity_segments_category. CATEGORY_KEYWORDS and LABEL_TEXTS carry an
+    # extra "documentation" label that the schema has never allowed, so any
+    # segment scoring highest on it made the INSERT fail — and because segments
+    # are persisted in one batch, a single such row discarded every segment in
+    # that build window. Predictions are filtered to this set so a taxonomy that
+    # drifts ahead of the schema degrades one label instead of losing the batch.
+    PERSISTABLE_CATEGORIES = frozenset({
+        "work",
+        "learn",
+        "communication",
+        "entertainment",
+        "social_media",
+        "system",
+        "meetings",
+        "other",
+    })
 
     # Category keywords for rule-based classification
     CATEGORY_KEYWORDS = {
@@ -383,9 +404,14 @@ class Categorizer:
                 weights[keyword.lower()] = weight
             self._category_weights[category] = weights
 
-        # Pre‑compute embeddings for each label text using the shared embedder
+        # Pre‑compute embeddings for each label text using the shared embedder.
+        # Only persistable labels are scored: a category the schema rejects is
+        # worse than no category, and dropping it here lets similarity fall
+        # through to the nearest label that can actually be stored.
         self._label_embeddings: Dict[str, List[float]] = {}
         for label, text in self.LABEL_TEXTS.items():
+            if label not in self.PERSISTABLE_CATEGORIES:
+                continue
             self._label_embeddings[label] = embedder.generate_embedding(text)
 
         # Supervised learning components
@@ -402,7 +428,7 @@ class Categorizer:
         Does NOT trigger retraining; that is handled by the caller if desired.
         """
         # Validate the label
-        valid_labels = set(self.LABEL_TEXTS.keys())
+        valid_labels = set(self.CATEGORY_KEYWORDS.keys()) | {"meetings", "other", "idle"}
         if correct_label not in valid_labels:
             raise ValueError(
                 f"Invalid label '{correct_label}'. Must be one of: {sorted(valid_labels)}"
@@ -682,6 +708,28 @@ class Categorizer:
     # Public API
     # --------------------------------------------------------------------- #
     def predict(
+        self,
+        segment: ActivitySegmentRecord,
+    ) -> Tuple[Optional[str], Optional[str], Optional[float]]:
+        """Classify a segment, guaranteeing a storable category.
+
+        Thin wrapper over :meth:`_predict_uncapped` that drops any label the
+        schema would reject. The rule table, the zero-shot label texts and a
+        retrained supervised model can each name categories the CHECK
+        constraint does not list; persisting is a batch operation, so one such
+        row used to discard every segment built in that window.
+        """
+        category, method, confidence = self._predict_uncapped(segment)
+        if category is not None and category not in self.PERSISTABLE_CATEGORIES:
+            logger.warning(
+                "Dropping unstorable category %r (method=%s) for segment app=%r; "
+                "add it to ck_activity_segments_category to keep it.",
+                category, method, segment.app_name,
+            )
+            return None, None, None
+        return category, method, confidence
+
+    def _predict_uncapped(
         self,
         segment: ActivitySegmentRecord,
     ) -> Tuple[Optional[str], Optional[str], Optional[float]]:
