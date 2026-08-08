@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend, LabelList,
@@ -47,7 +48,14 @@ const Timeline: React.FC = () => {
   const [idePanel, setIdePanel] = useState<any>(null);
   const [osPanel, setOsPanel] = useState<any>(null);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<SubTab>('IDE');
+  /* Deep link support: the Dashboard's cards point at a specific source, so
+     they pass the tab through router state rather than dropping the user on
+     the IDE tab and making them find it. */
+  const location = useLocation();
+  const [activeTab, setActiveTab] = useState<SubTab>(() => {
+    const requested = (location.state as { tab?: SubTab } | null)?.tab;
+    return requested && SUB_TABS.includes(requested) ? requested : 'IDE';
+  });
   const [showIdle, setShowIdle] = useState(false);
 
   /* All source panels are scoped to the single selected date. The previous

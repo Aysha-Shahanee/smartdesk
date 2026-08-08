@@ -12,6 +12,7 @@ Each method receives a SQLAlchemy ``db`` session and ISO 8601 ``from_iso``/
 custom date-range queries.
 """
 
+import json
 from collections import defaultdict
 from datetime import timedelta
 
@@ -100,9 +101,39 @@ class DashboardService:
             saves=sum(r.save_count or 0 for r in rows),
             lines_added=sum(r.lines_added or 0 for r in rows),
             lines_deleted=sum(r.lines_deleted or 0 for r in rows),
+            files_modified=self._distinct_edited_files(
+                # Background sessions included on purpose: an AI agent editing
+                # while the IDE window is blurred still modifies files, and the
+                # foreground-only list would undercount them.
+                _ide_repo.get_all_sessions_db(db, user_id, from_iso, to_iso)
+            ),
             top_languages=self._top_by_field(rows, "active_language"),
             top_projects=self._top_by_field(rows, "workspace_name"),
         )
+
+    @staticmethod
+    def _distinct_edited_files(rows: list[IDESessionRecord]) -> int:
+        """Count unique file paths across every session's ``edited_files_json``.
+
+        Summing ``edited_file_count`` instead would multiply-count any file
+        touched in more than one session, which is the common case for a file
+        edited across a lunch break.
+        """
+        paths: set[str] = set()
+        for row in rows:
+            if not row.edited_files_json:
+                continue
+            try:
+                entries = json.loads(row.edited_files_json)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                path = entry.get("path") if isinstance(entry, dict) else None
+                if path:
+                    paths.add(path)
+        return len(paths)
 
     def get_browser_summary(
         self,
