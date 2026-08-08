@@ -1,0 +1,428 @@
+/* ============================================
+   Timeline Page Styles
+   ============================================ */
+
+.timeline-page {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header */
+.timeline-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: var(--space-2xl);
+}
+
+.timeline-header h1 {
+  font-size: var(--font-size-2xl);
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.timeline-header .subtitle {
+  font-size: var(--font-size-base);
+  color: var(--color-text-secondary);
+}
+
+.timeline-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+}
+
+.date-picker {
+  padding: 8px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-family);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+}
+
+.period-toggle {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.period-toggle .sd-btn {
+  border: none;
+  border-radius: 0;
+  padding: 6px 16px;
+  font-size: var(--font-size-sm);
+  border-right: 1px solid var(--color-border);
+}
+
+.period-toggle .sd-btn:last-child {
+  border-right: none;
+}
+
+/* Summary Card */
+.summary-card {
+  margin-top: var(--space-xl);
+}
+
+.summary-card h3 {
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  margin-bottom: var(--space-xl);
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-3xl);
+}
+
+.summary-stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.summary-stat-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+.summary-stat-value {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+/* Donut / Chart helpers */
+.donut-container {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xl);
+}
+
+.donut-legend {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.legend-name {
+  flex: 1;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.legend-value {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-lg);
+}
+
+.card-header h3 {
+  font-size: var(--font-size-md);
+  font-weight: 600;
+}
+
+/* Flame Chart */
+.flame-chart-container {
+  margin-top: var(--space-lg);
+  padding: 10px 0;
+}
+
+.flame-tracks {
+  display: flex;
+  flex-direction: column;
+  /* Lanes are stacked overlap rows, not separate tracks — keep them tight so
+     they read as one timeline rather than several unrelated charts. */
+  gap: 3px;
+  position: relative;
+  padding-bottom: 20px; /* space for axis */
+}
+
+.flame-track-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.flame-track-label {
+  width: 120px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.flame-track-area {
+  flex: 1;
+  position: relative;
+  height: 24px;
+  background: var(--color-bg);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-light);
+}
+
+.flame-segment {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: var(--radius-sm);
+  min-width: 2px;
+  cursor: pointer;
+  opacity: 0.9;
+  transition: opacity 0.2s ease, transform 0.1s ease;
+}
+
+.flame-segment:hover {
+  opacity: 1;
+  transform: scaleY(1.1);
+  z-index: 10;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.flame-axis {
+  position: relative;
+  height: 20px;
+  margin-top: 10px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
+/* Idle-inclusion toggle in the Timeline header */
+.idle-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.idle-toggle input {
+  cursor: pointer;
+  accent-color: var(--color-primary);
+}
+
+
+/* Calendar */
+.calendar-section .sd-card {
+  margin-top: var(--space-xl);
+}
+
+.meeting-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.meeting-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-xl);
+  padding: var(--space-lg);
+  background: var(--color-bg);
+  border-radius: var(--radius-md);
+}
+
+.meeting-time {
+  font-size: var(--font-size-sm);
+  color: var(--color-primary);
+  font-weight: 500;
+  width: 110px;
+  flex-shrink: 0;
+}
+
+.meeting-info strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: var(--font-size-base);
+}
+
+.meeting-info span {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* ============================================
+   Change Label UI
+   ============================================ */
+
+.change-label-section {
+  border: 1px solid var(--color-border);
+}
+
+.change-label-section .card-header {
+  margin-bottom: var(--space-sm);
+}
+
+.label-count {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.label-description {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-xl);
+}
+
+.label-table-wrapper {
+  overflow-x: auto;
+}
+
+.label-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+
+.label-table th {
+  text-align: left;
+  padding: var(--space-md) var(--space-lg);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.label-table td {
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--color-border-light);
+  vertical-align: middle;
+}
+
+.label-table tr:hover {
+  background: var(--color-bg);
+}
+
+.label-table .corrected-row {
+  background: rgba(34, 197, 94, 0.15); /* Dark theme friendly green */
+}
+
+.label-table .corrected-row:hover {
+  background: rgba(34, 197, 94, 0.25);
+}
+
+.time-cell {
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.title-cell {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+}
+
+/* Category Badge */
+.category-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.category-badge.corrected {
+  border: 1px solid currentColor;
+}
+
+.no-correction {
+  color: var(--color-text-light);
+}
+
+/* Confidence */
+.confidence {
+  font-weight: 600;
+}
+.confidence.high { color: var(--color-success); }
+.confidence.medium { color: var(--color-warning); }
+.confidence.low { color: var(--color-danger); }
+
+/* Label Select */
+.label-select {
+  padding: 5px 8px;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-family);
+  background: var(--color-bg);
+  min-width: 110px;
+  color: var(--color-text-primary);
+}
+
+.label-select:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(51, 102, 255, 0.2);
+}
+
+/* Action Buttons */
+.action-btns {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.save-btn {
+  padding: 4px 10px !important;
+  font-size: var(--font-size-xs) !important;
+}
+
+.cancel-btn {
+  padding: 4px 8px !important;
+  font-size: var(--font-size-xs) !important;
+  color: var(--color-text-muted) !important;
+}
+
+.edit-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  transition: background var(--transition-fast);
+}
+
+.edit-btn:hover {
+  background: var(--color-bg);
+}

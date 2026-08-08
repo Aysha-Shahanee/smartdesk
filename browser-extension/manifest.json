@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "SmartDesk",
+  "version": "2.0.0",
+  "description": "SmartDesk browser session tracker — sends tab activity to the local SmartDesk backend.",
+  "permissions": ["tabs", "activeTab", "idle"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "SmartDesk"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

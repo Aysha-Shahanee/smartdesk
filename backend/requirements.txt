@@ -1,12 +1,17 @@
 fastapi
 uvicorn[standard]
-pydantic
-pydantic-settings
+alembic
+pydantic==2.7.0
+pydantic-core==2.18.1  # This matches what pydantic 2.7.0 expects
 python-dotenv
-psutil
-pywin32
 sqlalchemy
-google-api-python-client
-google-auth-httplib2
-google-auth-oauthlib
 tzdata
+psutil
+requests
+google-api-python-client
+google-auth
+google-auth-oauthlib
+sentence-transformers>=2.2.2
+torch>=2.0.0
+numpy>=1.24.0
+scikit-learn>=1.3.0

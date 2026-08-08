@@ -12,20 +12,25 @@ backend/.venv/
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
+backend/.pytest_cache/
+pytest-cache-files-*/
 
 # Runtime databases and logs
 *.db
+*.db.backup*
 *.sqlite
 *.sqlite3
 *.log
 emotion_15min_blocks*.jsonl
 
+# Backups / checkpoints
+*.backup
+*.backup_before_*
+
 # Node artifacts
 node_modules/
 *.vsix
-
-# IDE extension build output
-smartdesk-ide-logger/out/
 
 # OS/editor noise
 .DS_Store
@@ -36,3 +41,6 @@ Thumbs.db
 
 # Archive files (don't commit large zips)
 *.zip
+
+# Google Calendar OAuth secrets & sync state (never commit)
+backend/calendar_store/
