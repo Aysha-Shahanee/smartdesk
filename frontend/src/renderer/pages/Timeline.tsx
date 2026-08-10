@@ -13,11 +13,21 @@ import { getCategoryColor, getChartChrome } from '../theme/chartTheme';
 import { ChangeLabelTable } from '../components/ChangeLabelTable';
 import {
   capitalize, formatDuration, formatSegmentTime, formatEventTime, parseSegmentTime,
+  todayString,
 } from '../utils/time';
 import './Timeline.css';
 
 const SUB_TABS = ['IDE', 'Browser', 'OS / Apps', 'Calendar'] as const;
 type SubTab = typeof SUB_TABS[number];
+
+/* Timeline View is drawn against a fixed 24-hour day rather than against the
+   extent of whatever happened to be recorded, so a block's horizontal position
+   reads as a clock time and two days are directly comparable. */
+const DAY_MS = 24 * 60 * 60 * 1000;
+const GRID_HOURS = Array.from({ length: 25 }, (_, h) => h);
+const AXIS_HOURS = [0, 3, 6, 9, 12, 15, 18, 21, 24];
+
+type SummaryTile = { label: string; value: string; sub?: string };
 
 const TAB_ICONS: Record<SubTab, string> = {
   IDE: '💻', Browser: '🌐', 'OS / Apps': '⌨️', Calendar: '📅',
@@ -31,10 +41,17 @@ const TAB_ICONS: Record<SubTab, string> = {
  * and friends are absent from it) while wrongly claiming 736 non-IDE segments
  * as IDE because "Code" appears in unrelated window titles. The API now
  * returns each segment's real provenance, so the tab filters on that.
+ *
+ * `primary_source` alone, not `has_ide_session`/`has_browser_session`: those
+ * two mean "a session of this kind overlapped in time", which is not the same
+ * as "this is what the user was doing". An editor open behind a browser sets
+ * `has_ide_session` on the browsing segment, so including it put 716 s of one
+ * day's browser, VLC and WhatsApp time on the IDE tab. `primary_source` is
+ * decided from foreground overlap and answers the question the tab asks.
  */
 const TAB_FILTER: Record<Exclude<SubTab, 'Calendar'>, (seg: any) => boolean> = {
-  IDE: (s) => s.primary_source === 'ide' || s.has_ide_session === true,
-  Browser: (s) => s.primary_source === 'browser' || s.has_browser_session === true,
+  IDE: (s) => s.primary_source === 'ide',
+  Browser: (s) => s.primary_source === 'browser',
   'OS / Apps': () => true,
 };
 
@@ -246,14 +263,23 @@ const Timeline: React.FC = () => {
      counters that only ide_sessions carries (edits, saves, language,
      project) — IDE sessions were verified not to overlap, so its own
      coding-time figure is quoted directly. */
-  const summaryTiles = useMemo(() => {
+  const summaryTiles = useMemo<SummaryTile[]>(() => {
     const totalSec = visibleSegments.reduce((acc, s) => acc + segDuration(s), 0);
 
     if (activeTab === 'IDE') {
       const langs = idePanel?.top_languages || [];
       const projects = idePanel?.top_projects || [];
       return [
-        { label: 'Coding Time', value: formatDuration(idePanel?.coding_time_sec ?? 0) },
+        {
+          label: 'Coding Time',
+          value: formatDuration(idePanel?.coding_time_sec ?? 0),
+          /* The two tabs measure the editor differently and the numbers do not
+             match: OS / Apps counts every second its window held focus, this
+             counts only the seconds the IDE saw editor activity. Say which is
+             which on the tile rather than leaving two plausible "time in VS
+             Code" figures to be reconciled by guesswork. */
+          sub: 'Editor active — IDE-detected idle removed',
+        },
         { label: 'Top Language', value: langs[0]?.name ? capitalize(langs[0].name) : '—' },
         { label: 'Top Project', value: projects[0]?.name ?? '—' },
         { label: 'Edits / Saves', value: `${idePanel?.edits ?? 0} / ${idePanel?.saves ?? 0}` },
@@ -262,7 +288,7 @@ const Timeline: React.FC = () => {
 
     if (activeTab === 'Browser') {
       return [
-        { label: 'Browsing Time', value: formatDuration(totalSec) },
+        { label: 'Browsing Time', value: formatDuration(totalSec), sub: 'Browser window in focus' },
         { label: 'Top Domain', value: domainBreakdown[0]?.name ?? '—' },
         { label: 'Domains Visited', value: String(domainBreakdown.length) },
         { label: 'Segments', value: String(visibleSegments.length) },
@@ -271,7 +297,7 @@ const Timeline: React.FC = () => {
 
     const apps = new Set(visibleSegments.map(s => s.app_name).filter(Boolean));
     return [
-      { label: 'Active Time', value: formatDuration(totalSec) },
+      { label: 'Active Time', value: formatDuration(totalSec), sub: 'Window in focus, input detected' },
       { label: 'Idle Time', value: formatDuration(osPanel?.idle_time_sec ?? 0) },
       { label: 'Apps Used', value: String(apps.size) },
       { label: 'Segments', value: String(visibleSegments.length) },
@@ -291,7 +317,8 @@ const Timeline: React.FC = () => {
     if (activeTab === 'IDE') {
       return {
         title: 'Time by Language',
-        note: 'From IDE session records (ide_sessions.active_language).',
+        note: 'From IDE session records (ide_sessions.active_language), weighted by '
+          + 'active coding time — these add up to the Coding Time above.',
         rows: (idePanel?.top_languages || []).map((r: any) => ({
           name: capitalize(r.name || 'unknown'),
           seconds: r.seconds,
@@ -307,38 +334,54 @@ const Timeline: React.FC = () => {
     }
     return {
       title: 'Time by Application',
-      note: 'Derived from non-overlapping activity segments.',
+      note: 'Derived from non-overlapping activity segments. This is window-focus '
+        + 'time, so an editor or browser reads higher here than on its own tab, '
+        + "which also subtracts that source's own idle detection.",
       rows: appBreakdown,
     };
   }, [activeTab, idePanel, domainBreakdown, appBreakdown]);
 
-  /* Flame chart bounds. Lanes are packed so overlapping segments stack instead
-     of painting over each other on a single row. */
-  const flame = useMemo(() => {
-    const items = visibleSegments
+  /**
+   * Timeline View: one 00:00–24:00 track for the selected day.
+   *
+   * This used to pack segments into up to twelve lanes and scale the axis to
+   * the first and last thing recorded. Both were misleading. The lanes read as
+   * separate tracks — as if each row were a different source — when they were
+   * only an overlap-avoidance device over a single non-overlapping series, and
+   * the twelfth lane silently dropped everything after it. The data-fitted
+   * axis gave every tab and every date its own scale, so identical-looking
+   * blocks meant twenty minutes on one day and four hours on another.
+   *
+   * A fixed day makes position mean clock time, which is the one thing a
+   * timeline is for.
+   */
+  const dayTimeline = useMemo(() => {
+    const dayStart = new Date(`${date}T00:00:00`).getTime();
+    const dayEnd = dayStart + DAY_MS;
+
+    const blocks = visibleSegments
       .map(seg => {
         const s = parseSegmentTime(seg.start_time_utc);
         const e = parseSegmentTime(seg.end_time_utc);
         if (!s || !e) return null;
-        return { seg, start: s.getTime(), end: Math.max(e.getTime(), s.getTime() + 1000) };
+        // A segment can straddle midnight; draw only the part inside this day.
+        const start = Math.max(s.getTime(), dayStart);
+        const end = Math.min(Math.max(e.getTime(), s.getTime() + 1000), dayEnd);
+        if (end <= start) return null;
+        return { seg, start, end };
       })
       .filter(Boolean) as { seg: any; start: number; end: number }[];
 
-    if (items.length === 0) return { lanes: [], minTime: 0, maxTime: 1 };
+    blocks.sort((a, b) => a.start - b.start);
 
-    items.sort((a, b) => a.start - b.start);
-    const minTime = items[0].start;
-    const maxTime = Math.max(...items.map(i => i.end));
+    // Only meaningful for today: on any past date the whole track is behind us.
+    const nowMs = Date.now();
+    const nowPct = date === todayString() && nowMs > dayStart && nowMs < dayEnd
+      ? ((nowMs - dayStart) / DAY_MS) * 100
+      : null;
 
-    const lanes: { seg: any; start: number; end: number }[][] = [];
-    for (const item of items) {
-      // First lane whose last segment ends at or before this one starts.
-      const lane = lanes.find(l => l[l.length - 1].end <= item.start);
-      if (lane) lane.push(item);
-      else lanes.push([item]);
-    }
-    return { lanes: lanes.slice(0, 12), minTime, maxTime };
-  }, [visibleSegments]);
+    return { blocks, dayStart, nowPct };
+  }, [visibleSegments, date]);
 
   /* Calendar events for the selected day only. `getCalendarEvents` is now
      called with real day bounds; passing the bare date for both ends made the
@@ -523,9 +566,18 @@ const Timeline: React.FC = () => {
                 <div className="summary-stat" key={tile.label}>
                   <span className="summary-stat-label">{tile.label}</span>
                   <span className="summary-stat-value">{tile.value}</span>
+                  {tile.sub && <span className="summary-stat-sub">{tile.sub}</span>}
                 </div>
               ))}
             </div>
+            {activeTab === 'IDE' && (
+              <p className="chart-note" style={{ marginTop: 'var(--space-lg)' }}>
+                Coding Time comes from the IDE extension and drops the stretches it
+                saw no editor activity for. The OS / Apps tab measures the same
+                editor by window focus instead, so its row for this app reads
+                higher — reading, reviewing and thinking count there, not here.
+              </p>
+            )}
           </div>
 
           {visibleSegments.length === 0 ? (
@@ -635,51 +687,56 @@ const Timeline: React.FC = () => {
 
               <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
                 <h3>Timeline View</h3>
-                <div className="flame-chart-container">
-                  <div className="flame-tracks">
-                    {flame.lanes.map((lane, laneIdx) => (
-                      <div className="flame-track-row" key={laneIdx}>
-                        <div className="flame-track-area" style={{ height: 26 }}>
-                          {lane.map(({ seg, start, end }) => {
-                            const span = flame.maxTime - flame.minTime || 1;
-                            const leftPct = ((start - flame.minTime) / span) * 100;
-                            const widthPct = Math.max(0.4, ((end - start) / span) * 100);
-                            const cat = seg.correction_label || seg.predicted_category || 'system';
-                            const durMin = Math.round((end - start) / 60000);
-                            return (
-                              <div
-                                key={seg.id}
-                                className="flame-segment"
-                                style={{
-                                  left: `${leftPct}%`,
-                                  width: `${widthPct}%`,
-                                  backgroundColor: getCategoryColor(cat, theme),
-                                  opacity: seg.state === 'idle' ? 0.45 : 1,
-                                }}
-                                title={[
-                                  seg.title || seg.app_name || 'Unknown',
-                                  `${formatSegmentTime(seg.start_time_utc)} – ${formatSegmentTime(seg.end_time_utc)}`,
-                                  durMin >= 1 ? `${durMin}m` : `${Math.round((end - start) / 1000)}s`,
-                                  capitalize(cat),
-                                  seg.state === 'idle' ? '(idle)' : '',
-                                ].filter(Boolean).join('\n')}
-                              />
-                            );
-                          })}
-                        </div>
-                      </div>
+                <p className="chart-note">
+                  The full day, 00:00 to 24:00. Empty stretches are hours with no
+                  recorded {activeTab} activity.
+                </p>
+                <div className="day-timeline">
+                  <div className="day-timeline-track">
+                    {GRID_HOURS.map(h => (
+                      <div
+                        key={h}
+                        className={`day-timeline-gridline${h % 6 === 0 ? ' major' : ''}`}
+                        style={{ left: `${(h / 24) * 100}%` }}
+                      />
                     ))}
-                    <div className="flame-axis">
-                      <span style={{ position: 'absolute', left: '0%' }}>
-                        {new Date(flame.minTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    {dayTimeline.blocks.map(({ seg, start, end }) => {
+                      const cat = seg.correction_label || seg.predicted_category || 'system';
+                      const durMin = Math.round((end - start) / 60000);
+                      return (
+                        <div
+                          key={seg.id}
+                          className="day-timeline-segment"
+                          style={{
+                            left: `${((start - dayTimeline.dayStart) / DAY_MS) * 100}%`,
+                            width: `${((end - start) / DAY_MS) * 100}%`,
+                            backgroundColor: getCategoryColor(cat, theme),
+                            opacity: seg.state === 'idle' ? 0.45 : 1,
+                          }}
+                          title={[
+                            seg.title || seg.app_name || 'Unknown',
+                            `${formatSegmentTime(seg.start_time_utc)} – ${formatSegmentTime(seg.end_time_utc)}`,
+                            durMin >= 1 ? `${durMin}m` : `${Math.round((end - start) / 1000)}s`,
+                            capitalize(cat),
+                            seg.state === 'idle' ? '(idle)' : '',
+                          ].filter(Boolean).join('\n')}
+                        />
+                      );
+                    })}
+                    {dayTimeline.nowPct !== null && (
+                      <div
+                        className="day-timeline-now"
+                        style={{ left: `${dayTimeline.nowPct}%` }}
+                        title="Now"
+                      />
+                    )}
+                  </div>
+                  <div className="day-timeline-axis">
+                    {AXIS_HOURS.map(h => (
+                      <span key={h} style={{ left: `${(h / 24) * 100}%` }}>
+                        {String(h).padStart(2, '0')}:00
                       </span>
-                      <span style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)' }}>
-                        {new Date((flame.minTime + flame.maxTime) / 2).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                      <span style={{ position: 'absolute', right: '0%' }}>
-                        {new Date(flame.maxTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
+                    ))}
                   </div>
                 </div>
               </div>

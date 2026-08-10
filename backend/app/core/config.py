@@ -39,7 +39,20 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
     EMBEDDING_VERSION: str = "1.0"
     EMBEDDING_DIM: int = 384
+    # Applies to the rule and supervised classifiers, whose confidences are
+    # genuine probabilities/scores in [0, 1].
     CATEGORIZATION_THRESHOLD: float = 0.30
+
+    # The zero-shot embedding classifier is held to its own bar, expressed in
+    # raw cosine similarity. It used to report (cosine + 1) / 2, which turns a
+    # cosine of 0.28 into a "confidence" of 0.64 — nothing could ever fall
+    # below CATEGORIZATION_THRESHOLD, so the step was an unconditional argmax
+    # over eight labels and filed 3,797 browser-chrome segments as "meetings"
+    # on similarities no higher than 0.3. Both bars must now be cleared: the
+    # winning label has to actually resemble the segment, and it has to beat
+    # the runner-up by more than embedding noise.
+    EMBEDDING_MIN_SIMILARITY: float = 0.30
+    EMBEDDING_MIN_MARGIN: float = 0.04
 
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",

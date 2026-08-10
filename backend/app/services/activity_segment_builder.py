@@ -599,7 +599,12 @@ class ActivitySegmentBuilder:
         Returns:
             List of normalized IDE sessions
         """
-        sessions = ide_repo.get_all_sessions_db(db, user_id, start_iso, end_iso)
+        # Overlap, not start-membership — see
+        # IDESessionRepository.get_sessions_overlapping_db. get_all_sessions_db
+        # only returned sessions starting inside this window, so any coding
+        # block longer than one build tick was invisible here and the segments
+        # covering it were never linked to their IDE session.
+        sessions = ide_repo.get_sessions_overlapping_db(db, user_id, start_iso, end_iso)
         return self._normalize_sessions(sessions, "ide")
 
     def _load_and_normalize_browser_sessions(
@@ -624,7 +629,10 @@ class ActivitySegmentBuilder:
         Returns:
             List of normalized browser sessions
         """
-        sessions = browser_repo.get_all_sessions_db(db, user_id, start_iso, end_iso)
+        # Overlap, not start-membership — same reason as the IDE loader above.
+        sessions = browser_repo.get_sessions_overlapping_db(
+            db, user_id, start_iso, end_iso
+        )
         return self._normalize_sessions(sessions, "browser")
 
     def _normalize_sessions(
@@ -672,10 +680,27 @@ class ActivitySegmentBuilder:
                 continue
 
             if not end_time:
-                # Ongoing session — cover it up to the end of the window being
-                # processed. local_now() (not utcnow) so it is comparable with
-                # the parsed, timezone-pinned session times.
-                end_time = window_end or local_now()
+                # Ongoing session. Its true end is unknown, so cover it only as
+                # far as the evidence goes: not past the window, not past the
+                # present, and not more than one segment's length past its own
+                # start. local_now() (not utcnow) so it is comparable with the
+                # parsed, timezone-pinned session times.
+                #
+                # Both bounds are load-bearing, and only a backfill exposed
+                # them. A live tick ends its window at roughly now and runs
+                # every 5 minutes, so an open session was never stretched far;
+                # a backfill takes an arbitrary range and revisits it once.
+                # Running one over 2026-08-10 stretched a still-open session to
+                # midnight, 9.4 h of fabricated coverage. Clamping to now was
+                # not enough on its own: an open row is also how this tracker
+                # records a session it never got to close, so the Code session
+                # left open at 14:38 by a suspend claimed the six hours until
+                # the machine woke. A genuinely live session is at most one
+                # poll old, and segments are cut at MAX_SEGMENT_SEC anyway, so
+                # a stale row can now contribute at most that.
+                now = local_now()
+                bound = start_time + timedelta(seconds=MAX_SEGMENT_SEC)
+                end_time = min(window_end, now, bound) if window_end else min(now, bound)
 
             # Sessions are now loaded by overlap, so a multi-hour session can
             # arrive whole in a 5-minute window. Clip it, or one tick would
@@ -912,33 +937,60 @@ class ActivitySegmentBuilder:
         Returns:
             Segments with primary_source assigned
         """
+        def overlap_sec(session, segment: dict) -> float:
+            """Seconds ``session`` covers of ``segment``.
+
+            A session that is still open covers the segment to its end. The
+            previous version required ``session_end`` and skipped open ones
+            entirely, scoring them zero — which mattered once the loaders
+            started returning open sessions at all.
+            """
+            if not session.session_start:
+                return 0.0
+            try:
+                s_start = parse_iso(session.session_start)
+                s_end = (
+                    parse_iso(session.session_end)
+                    if session.session_end else segment["end_time"]
+                )
+            except Exception:
+                return 0.0
+            return max(
+                0.0,
+                (
+                    min(segment["end_time"], s_end)
+                    - max(segment["start_time"], s_start)
+                ).total_seconds(),
+            )
+
+        def is_foreground(session) -> bool:
+            """Was this session what the user was actually looking at?
+
+            OS sessions carry no such flag — the OS spine is foreground by
+            definition — so a missing attribute means yes.
+            """
+            flag = getattr(session, "is_foreground", None)
+            return True if flag is None else bool(flag)
+
         for segment in segments:
-            # Calculate overlap scores for each source type present
-            scores = {}
-
-            # OS overlap score (always present if we got here)
-            os_duration = sum(
-                (min(segment["end_time"], parse_iso(s.session_end)) - max(segment["start_time"], parse_iso(s.session_start))).total_seconds()
-                for s in segment["sources"]["os"]
-                if s.session_start and s.session_end
-            )
-            scores["os"] = max(0, os_duration)
-
-            # IDE overlap score
-            ide_duration = sum(
-                (min(segment["end_time"], parse_iso(s.session_end)) - max(segment["start_time"], parse_iso(s.session_start))).total_seconds()
-                for s in segment["sources"]["ide"]
-                if s.session_start and s.session_end
-            )
-            scores["ide"] = max(0, ide_duration)
-
-            # Browser overlap score
-            browser_duration = sum(
-                (min(segment["end_time"], parse_iso(s.session_end)) - max(segment["start_time"], parse_iso(s.session_start))).total_seconds()
-                for s in segment["sources"]["browser"]
-                if s.session_start and s.session_end
-            )
-            scores["browser"] = max(0, browser_duration)
+            # Calculate overlap scores for each source type present.
+            #
+            # Background sessions are excluded from the scoring but stay linked
+            # in ``sources``: an AI agent editing in a blurred window is real
+            # IDE data worth keeping, it just is not what the user was doing.
+            # Counting it here let a background editor outscore the foreground
+            # app it was sitting behind — with the 1.5x boost below, an IDE
+            # session merely open across a browsing segment took the segment
+            # from it. 716 s of one day's browser and media time was claimed by
+            # the IDE that way.
+            scores = {
+                source: sum(
+                    overlap_sec(s, segment)
+                    for s in segment["sources"][source]
+                    if is_foreground(s)
+                )
+                for source in ("os", "ide", "browser")
+            }
 
             # Determine primary source based on highest overlap
             # But apply heuristics: IDE/browser get boost for active work
@@ -1160,9 +1212,14 @@ class ActivitySegmentBuilder:
                 existing.browser_session_id = seg_dict["browser_session_ids"][0] if seg_dict["browser_session_ids"] else None
                 # Note: These are simplified - in reality we might want to store
                 # multiple IDs or use a junction table for many-to-many
-                existing.category = seg_dict.get("category")
-                existing.category_method = seg_dict.get("category_method")
-                existing.category_confidence = seg_dict.get("category_confidence")
+                # A category someone assigned by hand outranks anything the
+                # classifier has to say, and rebuilds are routine — without
+                # this guard every correction survives only until the next
+                # build pass rewrites these three columns.
+                if existing.category_method != "user":
+                    existing.category = seg_dict.get("category")
+                    existing.category_method = seg_dict.get("category_method")
+                    existing.category_confidence = seg_dict.get("category_confidence")
                 # focus_score, concurrent_json, signals_json are left as-is (to be updated by other processes)
                 existing.embedding_status = seg_dict.get("embedding_status", existing.embedding_status)
                 existing.sync_status = seg_dict.get("sync_status", existing.sync_status)

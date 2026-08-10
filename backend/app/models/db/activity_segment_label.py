@@ -36,6 +36,11 @@ class ActivitySegmentLabelRecord(Base):
     # The correct label provided by the user
     correct_label = Column(String, nullable=False)
 
+    # Where the label came from: 'user' for a correction someone typed,
+    # 'backfill' for one derived by a repair script. Both are trained on, but
+    # only 'user' rows are evidence of what the user actually meant.
+    source = Column(String, nullable=False, server_default="user")
+
     # Audit trail
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     used_in_training = Column(Integer, nullable=False, server_default="0")  # Use 0 for false, 1 for true

@@ -15,6 +15,7 @@ custom date-range queries.
 import json
 from collections import defaultdict
 from datetime import timedelta
+from typing import Callable
 
 from sqlalchemy.orm import Session
 
@@ -93,9 +94,7 @@ class DashboardService:
         rows = _ide_repo.get_foreground_sessions_db(db, user_id, from_iso, to_iso)
 
         return IDEDashboardResponse(
-            coding_time_sec=sum(
-                max(0, (r.duration_sec or 0) - (r.idle_sec or 0)) for r in rows
-            ),
+            coding_time_sec=sum(self._ide_active_sec(r) for r in rows),
             idle_sec=sum(r.idle_sec or 0 for r in rows),
             edits=sum(r.edit_count or 0 for r in rows),
             saves=sum(r.save_count or 0 for r in rows),
@@ -107,9 +106,33 @@ class DashboardService:
                 # foreground-only list would undercount them.
                 _ide_repo.get_all_sessions_db(db, user_id, from_iso, to_iso)
             ),
-            top_languages=self._top_by_field(rows, "active_language"),
-            top_projects=self._top_by_field(rows, "workspace_name"),
+            # Weighted by active coding time, not by raw session duration, so
+            # these lists add up to ``coding_time_sec`` above.
+            #
+            # They used to sum ``duration_sec``, which counts every second the
+            # editor was the foreground window — including the ones the IDE
+            # itself recorded as idle. An IDE session left open across a
+            # suspend is emitted as one row with ``idle_sec == duration_sec``:
+            # on 2026-08-10 a single 00:52–04:45 row contributed 14026 s of
+            # "python" while the machine was asleep, so the language breakdown
+            # read 5.97 h under a Coding Time tile reading 1.25 h.
+            top_languages=self._top_by_field(
+                rows, "active_language", weight=self._ide_active_sec
+            ),
+            top_projects=self._top_by_field(
+                rows, "workspace_name", weight=self._ide_active_sec
+            ),
         )
+
+    @staticmethod
+    def _ide_active_sec(row: IDESessionRecord) -> int:
+        """Seconds of an IDE session spent actually editing.
+
+        ``duration_sec`` is wall-clock time the editor held focus; ``idle_sec``
+        is the part of it the extension saw no editor activity for. Only the
+        difference is coding time.
+        """
+        return max(0, (row.duration_sec or 0) - (row.idle_sec or 0))
 
     @staticmethod
     def _distinct_edited_files(rows: list[IDESessionRecord]) -> int:
@@ -393,13 +416,28 @@ class DashboardService:
             for cat, sec in sorted(totals.items(), key=lambda x: x[1], reverse=True)
         ]
 
-    def _top_by_field(self, rows: list, field: str) -> list[NamedDuration]:
+    def _top_by_field(
+        self,
+        rows: list,
+        field: str,
+        weight: Callable[[object], int] | None = None,
+    ) -> list[NamedDuration]:
+        """Top-N values of ``field``, ranked by time.
+
+        ``weight`` chooses what "time" means for a row; it defaults to the
+        session's whole duration. Sources that distinguish active from idle
+        time pass their own so the breakdown reconciles with the headline
+        figure shown above it.
+        """
         totals: dict[str, int] = defaultdict(int)
         for r in rows:
             value = getattr(r, field, None)
             if value:
-                totals[value] += r.duration_sec or 0
+                totals[value] += weight(r) if weight else (r.duration_sec or 0)
         return [
             NamedDuration(name=name, seconds=sec)
+            # A value can collect only idle sessions and weigh nothing; charting
+            # it draws an empty bar with a "0s" label.
             for name, sec in sorted(totals.items(), key=lambda x: x[1], reverse=True)
+            if sec > 0
         ][:TOP_N]
