@@ -12,6 +12,7 @@ backend/.venv/
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
 
 # Runtime databases and logs
 *.db

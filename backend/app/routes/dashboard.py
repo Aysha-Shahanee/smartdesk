@@ -104,6 +104,7 @@ def dashboard_page() -> str:
       <div class="flex gap-2">
         <button id="connectCalendarBtn" class="px-3 py-1.5 rounded-md bg-blue-600 text-sm font-medium hover:bg-blue-500 transition-colors">Connect Calendar</button>
         <button id="syncCalendarBtn" class="px-3 py-1.5 rounded-md bg-indigo-600 text-sm font-medium hover:bg-indigo-500 transition-colors">Sync Calendar</button>
+        <a href="/api/v1/integrations/github/setup" class="px-3 py-1.5 rounded-md bg-slate-700 text-sm font-medium hover:bg-slate-600 transition-colors">GitHub Setup</a>
         <button id="refreshBtn" class="px-3 py-1.5 rounded-md bg-emerald-500 text-sm font-medium hover:bg-emerald-400 transition-colors">Refresh data</button>
       </div>
     </header>

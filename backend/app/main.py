@@ -14,6 +14,7 @@ from app.routes import (
     calendar,
     dashboard,
     health,
+    github_integration,
     ide,
     os_minute_window,
 )
@@ -65,6 +66,7 @@ app.include_router(os_minute_window.router, prefix="/api/v1/os", tags=["OS Minut
 app.include_router(browser.router, prefix="/api/v1/browser", tags=["Browser"])
 app.include_router(ide.router, prefix="/api/v1/ide", tags=["IDE"])
 app.include_router(calendar.router, prefix="/api/v1/calendar", tags=["Calendar"])
+app.include_router(github_integration.router, prefix="/api/v1/integrations/github", tags=["GitHub Integration"])
 app.include_router(activity_session_summary.router, prefix="/api/v1/activity-sessions", tags=["Activity Sessions"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
 

@@ -368,3 +368,49 @@ The backend accepts minute-window data from any IDE. The `source` field identifi
 - All timestamps are server-side — extensions don't set `created_at` or `updated_at`
 - Offline buffering: both extensions queue failed sends and retry on the next minute cycle
 - Use [DB Browser for SQLite](https://sqlitebrowser.org/) for manual inspection
+
+## GitHub Projects v2 integration
+
+The backend integrates with the independent `github_data_collection` package.
+Configure a GitHub App and its Projects v2 webhook using the variables in
+`backend/.env.example`. SmartDesk stores only connection, installation, and
+selected-project identifiers in `smartdesk.db`; short-lived installation tokens
+are minted when needed and are not persisted.
+
+API prefix: `/api/v1/integrations/github`
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/status` | Connection and selected-project status |
+| GET | `/setup` | Open the minimal GitHub setup and active-task UI |
+| GET | `/connect` | Create a CSRF-protected GitHub App installation URL |
+| GET | `/callback` | Complete GitHub App installation association |
+| GET | `/projects` | Discover accessible Projects v2 boards |
+| PUT | `/project` | Select an accessible board |
+| GET | `/status-options` | Discover the board's actual Status options |
+| PUT | `/status-mapping` | Save logical mappings and establish the initial baseline |
+| POST | `/initial-sync` | Manually reconcile the selected project |
+| POST | `/webhook` | Receive HMAC-verified project events |
+| GET | `/active-tasks` | List the current user's ACTIVE tasks with their initial prediction |
+| DELETE | `/connection` | Disconnect the local SmartDesk user |
+
+When a project item begins a new logical `ACTIVE` lifecycle, SmartDesk takes a
+snapshot of its title, description, labels, repository, and start time and runs
+the retained LightGBM quantile models in
+`backend/model_artifacts/github_effort/`. The stored low, typical, and high
+values are predicted elapsed hours from lifecycle start to completion. They are
+an initial estimate: subsequent metadata changes do not overwrite it. A reopen
+creates a new lifecycle and therefore a new estimate, while duplicate webhook
+delivery and repeated initial synchronization remain idempotent.
+
+The runtime preprocessing contract, feature order, fallback values, model
+version, and retained-artifact checksums are recorded in
+`backend/model_artifacts/github_effort/preprocessing_manifest.json`. Runtime
+code does not import the offline `github_issue_dataset_builder`. A missing or
+invalid artifact is recorded as a failed prediction without discarding the
+ACTIVE lifecycle. Override the packaged artifact directory only when needed
+with `SMARTDESK_GITHUB_MODEL_ARTIFACT_DIR`.
+
+SmartDesk currently has no login/authentication middleware, so the integration
+uses `DEFAULT_USER_ID`, consistent with the other local collectors. Add a real
+current-user dependency before exposing this API as a multi-user service.

@@ -4,7 +4,11 @@ All environment variables and settings are defined here.
 """
 
 from pydantic_settings import BaseSettings
+from pathlib import Path
 from typing import List
+
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
@@ -33,6 +37,15 @@ class Settings(BaseSettings):
     SMARTDESK_GOOGLE_CLIENT_ID: str = ""
     SMARTDESK_GOOGLE_CLIENT_SECRET: str = ""
     SMARTDESK_GOOGLE_PROJECT_ID: str = ""
+
+    # GitHub App installation integration.
+    SMARTDESK_GITHUB_APP_ID: str = ""
+    SMARTDESK_GITHUB_APP_SLUG: str = ""
+    SMARTDESK_GITHUB_APP_PRIVATE_KEY: str = ""
+    SMARTDESK_GITHUB_CALLBACK_URL: str = "http://127.0.0.1:8000/api/v1/integrations/github/callback"
+    SMARTDESK_GITHUB_WEBHOOK_SECRET: str = ""
+    SMARTDESK_GITHUB_MONITOR_MODE: str = "webhook"
+    SMARTDESK_GITHUB_MODEL_ARTIFACT_DIR: str = str(BACKEND_DIR / "model_artifacts" / "github_effort")
 
     class Config:
         env_file = ".env"
