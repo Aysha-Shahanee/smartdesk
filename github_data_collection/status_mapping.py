@@ -19,3 +19,8 @@ def set_status_mapping(project_id: str, mapping: Dict[str, str]) -> None:
 
 def map_status(project_id: str, status_option_name: Optional[str]) -> str:
     return _repository.get_logical(project_id, status_option_name)
+
+
+def get_status_mapping(project_id: str) -> Dict[str, str]:
+    """Return the saved GitHub option-name to logical-state mapping."""
+    return _repository.get_mapping(project_id)

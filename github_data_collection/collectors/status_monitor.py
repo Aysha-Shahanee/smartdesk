@@ -41,6 +41,30 @@ def _status_value(field_nodes: List[Dict]) -> Optional[str]:
     return None
 
 
+def fetch_project_item_status(project_item_id: str, token: str) -> Optional[str]:
+    """Fetch the authoritative Status field value for one ProjectV2 item."""
+    query = '''
+    query($id: ID!) {
+      node(id: $id) {
+        ... on ProjectV2Item {
+          fieldValues(first: 50) {
+            nodes {
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                field { ... on ProjectV2FieldCommon { name } }
+                name
+              }
+            }
+          }
+        }
+      }
+    }
+    '''
+    item = execute_query(query, {"id": project_item_id}, token=token).get("node")
+    if not item:
+        raise LookupError(f"Project item {project_item_id} is not accessible")
+    return _status_value((item.get("fieldValues") or {}).get("nodes") or [])
+
+
 def fetch_all_project_items(owner: str = GITHUB_OWNER, number: int = PROJECT_NUMBER,
                             token: Optional[str] = None) -> Tuple[str, List[Dict]]:
     """Return the project node ID and every item using cursor pagination."""

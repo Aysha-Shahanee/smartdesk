@@ -29,9 +29,10 @@ def initial_sync(owner: Optional[str] = None, project_number: Optional[int] = No
         option_name = item.get("status")
         logical = status_mapper(project_id, option_name)
         if logical == "ACTIVE":
-            is_new_lifecycle = previous is None or previous.get("logical_status") != "ACTIVE"
-            service.synchronize_active(item_id, is_new=is_new_lifecycle, token=token)
-        elif previous and previous.get("logical_status") == "ACTIVE":
-            service.active.remove(item_id)
+            # The open lifecycle is authoritative for idempotency. Stored
+            # project_item_state may be stale after a missed webhook.
+            service.synchronize_active(item_id, token=token)
+        else:
+            service.synchronize_inactive(item_id, token=token)
         states.upsert(item_id, project_id, option_name, logical)
     return project_id

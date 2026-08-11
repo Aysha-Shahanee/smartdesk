@@ -4,7 +4,9 @@ SmartDesk collects developer activity from four sources and stores everything lo
 
 **Sources:** OS activity · Browser tabs · IDE (VS Code, Antigravity, JetBrains, etc.) · Google Calendar
 
-**Dashboard:** http://127.0.0.1:8000/dashboard/
+**Desktop dashboard:** Electron renderer started from `frontend/`
+
+**Backend development dashboard:** http://127.0.0.1:8000/dashboard/
 
 ---
 
@@ -31,7 +33,23 @@ Starting Calendar Collector background service...
 Starting Activity Session Scheduler...
 ```
 
-### 2. Browser Extension
+### 2. Desktop dashboard
+
+The normal SmartDesk UI is the Electron + React frontend. In a second terminal:
+
+```powershell
+cd frontend
+Copy-Item .env.example .env
+# For local development set VITE_BACKEND_URL=http://127.0.0.1:8000 in .env
+npm install
+npm run dev
+```
+
+Electron Vite starts its renderer on `http://localhost:5173` and opens the
+desktop window. The backend remains at `http://127.0.0.1:8000`. The renderer API
+target is required through `VITE_BACKEND_URL`.
+
+### 3. Browser Extension
 
 Folder: `browser extension/`
 
@@ -379,15 +397,31 @@ are minted when needed and are not persisted.
 
 API prefix: `/api/v1/integrations/github`
 
+For local testing, configure the GitHub App's **Setup URL** (not an OAuth user
+callback) as
+`http://127.0.0.1:8000/api/v1/integrations/github/callback`, and leave
+"Request user authorization during installation" disabled. Configure the App
+webhook with a public HTTPS URL that forwards to the local backend:
+`https://<public-tunnel-host>/api/v1/integrations/github/webhook`. The current
+webhook is for organization-owned Projects v2 boards.
+
+Minimum App permissions are organization **Projects: Read-only** and repository
+**Issues: Read-only**; GitHub supplies repository Metadata read access. Subscribe
+only to **Project v2 item** (`projects_v2_item`). SmartDesk reads project fields,
+issue title/body, labels, assignees, comment count, and repository identity. It
+does not need write permission. Draft issues and pull-request project items are
+acknowledged but intentionally excluded from issue-duration prediction.
+
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/status` | Connection and selected-project status |
-| GET | `/setup` | Open the minimal GitHub setup and active-task UI |
+| GET | `/setup` | Open the development-only GitHub setup/diagnostic utility |
 | GET | `/connect` | Create a CSRF-protected GitHub App installation URL |
 | GET | `/callback` | Complete GitHub App installation association |
 | GET | `/projects` | Discover accessible Projects v2 boards |
 | PUT | `/project` | Select an accessible board |
 | GET | `/status-options` | Discover the board's actual Status options |
+| GET | `/status-mapping` | Read the selected board's saved logical mapping |
 | PUT | `/status-mapping` | Save logical mappings and establish the initial baseline |
 | POST | `/initial-sync` | Manually reconcile the selected project |
 | POST | `/webhook` | Receive HMAC-verified project events |
@@ -414,3 +448,5 @@ with `SMARTDESK_GITHUB_MODEL_ARTIFACT_DIR`.
 SmartDesk currently has no login/authentication middleware, so the integration
 uses `DEFAULT_USER_ID`, consistent with the other local collectors. Add a real
 current-user dependency before exposing this API as a multi-user service.
+See `docs/github_integration_requirements.md` for deployment, authentication,
+dashboard, and explicitly deferred remaining-time requirements.

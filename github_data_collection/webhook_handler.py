@@ -7,6 +7,8 @@ steps have completed.
 
 from typing import Dict, Optional
 
+from .collectors.metadata_collector import UnsupportedProjectItemError
+from .collectors.status_monitor import fetch_project_item_status
 from .repositories import ProjectItemStateRepository, WebhookDeliveryRepository
 from .status_mapping import map_status
 from .task_metadata_service import TaskMetadataService
@@ -57,10 +59,11 @@ def handle_github_webhook_event(payload: dict, headers: dict,
                                 metadata_service=None,
                                 state_repository=None,
                                 delivery_repository=None,
-                                status_mapper=map_status) -> None:
+                                status_mapper=map_status,
+                                status_fetcher=fetch_project_item_status) -> None:
     """Process a projects_v2_item event; safe to call for unrelated events."""
     event_name = _header(headers, "X-GitHub-Event")
-    if event_name and event_name not in {"projects_v2_item", "project_v2_item"}:
+    if event_name not in {"projects_v2_item", "project_v2_item"}:
         return
 
     delivery_id = _header(headers, "X-GitHub-Delivery")
@@ -68,10 +71,15 @@ def handle_github_webhook_event(payload: dict, headers: dict,
     if deliveries.is_processed(delivery_id):
         return
 
-    project_id, item_id, payload_old_name, new_name = _event_values(payload)
-    if not project_id or not item_id or new_name is None:
+    project_id, item_id, payload_old_name, payload_new_name = _event_values(payload)
+    if not project_id or not item_id:
         deliveries.mark_processed(delivery_id)
         return
+
+    # GitHub's projects_v2_item payload identifies the changed item but does
+    # not guarantee the current Status option name. Authenticated runtime
+    # handling therefore resolves the actual field named "Status" via GraphQL.
+    new_name = status_fetcher(item_id, token) if token else payload_new_name
 
     states = state_repository or ProjectItemStateRepository()
     previous = states.get(item_id)
@@ -85,10 +93,15 @@ def handle_github_webhook_event(payload: dict, headers: dict,
         return
 
     service = metadata_service or TaskMetadataService()
-    if old_logical != "ACTIVE" and new_logical == "ACTIVE":
-        service.task_started(item_id, token=token)
-    elif old_logical == "ACTIVE" and new_logical == "DONE":
-        service.task_completed(item_id, token=token)
+    try:
+        if old_logical != "ACTIVE" and new_logical == "ACTIVE":
+            service.task_started(item_id, token=token)
+        elif old_logical == "ACTIVE" and new_logical != "ACTIVE":
+            service.task_completed(item_id, token=token)
+    except UnsupportedProjectItemError:
+        # Draft issues and pull requests are intentionally outside the runtime
+        # inference contract. Record their project state and acknowledge once.
+        pass
 
     states.upsert(item_id, project_id, new_name, new_logical)
     deliveries.mark_processed(delivery_id)

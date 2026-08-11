@@ -3,6 +3,10 @@ from datetime import datetime, timezone
 from ..github_client import execute_query
 
 
+class UnsupportedProjectItemError(ValueError):
+    """The selected ProjectV2 item is not backed by a GitHub Issue."""
+
+
 def _build_query_for_item():
     return '''
     query($id:ID!){
@@ -10,6 +14,7 @@ def _build_query_for_item():
         ... on ProjectV2Item{
           id
           content{
+            __typename
             ... on Issue{
               id
               title
@@ -66,6 +71,12 @@ def collect(project_item_id: str, token: Optional[str] = None) -> Dict:
         raise Exception(f"Project item {project_item_id} not found")
 
     content = node.get("content") or {}
+    content_type = content.get("__typename")
+    if content_type != "Issue":
+        raise UnsupportedProjectItemError(
+            f"Project item {project_item_id} has unsupported content type "
+            f"{content_type or 'DraftIssue'}; only Issue items are collected"
+        )
     issue = content
     issue_id = issue.get("id")
     title = issue.get("title")

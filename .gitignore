@@ -1,6 +1,7 @@
 # Environment & secrets
 .env
 backend/.env
+*.pem
 
 # Python virtual environments
 venv/
@@ -8,16 +9,27 @@ venv/
 backend/venv/
 backend/.venv/
 
+# Project-local development tools
+.tools/
+.cloudflared/
+cloudflared.yml
+cloudflared.yaml
+
 # Python cache/compiled files
 __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
+.pytest_cache/
 
 # Runtime databases and logs
 *.db
 *.sqlite
 *.sqlite3
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
 *.log
 emotion_15min_blocks*.jsonl
 

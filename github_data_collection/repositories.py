@@ -40,53 +40,60 @@ class CollectedTaskRepository:
             session.refresh(row)
             return row.id
 
-    def update_latest(self, project_item_id: str, metadata: Dict) -> int:
-        """Refresh mutable fields without changing lifecycle timestamps."""
+    def update_open(self, project_item_id: str, metadata: Dict) -> Optional[int]:
+        """Refresh the open lifecycle, returning ``None`` when none exists."""
         with self.session_factory() as session:
-            row = (
+            rows = (
                 session.query(CollectedTask)
-                .filter(CollectedTask.project_item_id == project_item_id)
-                .order_by(CollectedTask.id.desc())
-                .first()
-            )
-            if row is None:
-                started_at = metadata.get("started_at") or metadata.get("detected_start_time") or utc_now()
-                row = CollectedTask(
-                    **self._mutable_values(metadata),
-                    detected_start_time=started_at,
-                    started_at=started_at,
+                .filter(
+                    CollectedTask.project_item_id == project_item_id,
+                    CollectedTask.completed_at.is_(None),
                 )
-                session.add(row)
-            else:
-                for key, value in self._mutable_values(metadata).items():
-                    setattr(row, key, value)
+                .order_by(CollectedTask.id.desc())
+                .all()
+            )
+            if not rows:
+                return None
+            row = rows[0]
+            # Preserve duplicate historical rows but resolve every older open
+            # lifecycle so exactly one current lifecycle remains.
+            repaired_at = utc_now()
+            for duplicate in rows[1:]:
+                duplicate.completed_at = repaired_at
+            for key, value in self._mutable_values(metadata).items():
+                setattr(row, key, value)
             session.commit()
-            session.refresh(row)
             return row.id
 
-    def complete_latest(self, project_item_id: str, metadata: Dict,
-                        completed_at: Optional[str] = None) -> None:
-        """Complete the latest lifecycle while preserving its original start."""
+    def complete_open(self, project_item_id: str, metadata: Dict,
+                      completed_at: Optional[str] = None) -> Optional[int]:
+        """Complete only the currently open lifecycle, preserving history."""
         with self.session_factory() as session:
-            row = (
+            rows = (
                 session.query(CollectedTask)
-                .filter(CollectedTask.project_item_id == project_item_id)
-                .order_by(CollectedTask.id.desc())
-                .first()
-            )
-            if row is None:
-                started_at = metadata.get("started_at") or metadata.get("detected_start_time") or utc_now()
-                row = CollectedTask(
-                    **self._mutable_values(metadata),
-                    detected_start_time=started_at,
-                    started_at=started_at,
+                .filter(
+                    CollectedTask.project_item_id == project_item_id,
+                    CollectedTask.completed_at.is_(None),
                 )
-                session.add(row)
-            else:
+                .order_by(CollectedTask.id.desc())
+                .all()
+            )
+            if not rows:
+                return None
+            resolved_at = completed_at or utc_now()
+            for row in rows:
                 for key, value in self._mutable_values(metadata).items():
                     setattr(row, key, value)
-            row.completed_at = completed_at or utc_now()
+                row.completed_at = resolved_at
             session.commit()
+            return rows[0].id
+
+    def has_open(self, project_item_id: str) -> bool:
+        with self.session_factory() as session:
+            return session.query(CollectedTask.id).filter(
+                CollectedTask.project_item_id == project_item_id,
+                CollectedTask.completed_at.is_(None),
+            ).first() is not None
 
     @staticmethod
     def _mutable_values(metadata: Dict) -> Dict:
@@ -126,6 +133,9 @@ class ActiveTaskRepository:
                     repository=metadata.get("repository"),
                 ))
             else:
+                row.issue_id = metadata["issue_id"]
+                row.title = metadata.get("title") or ""
+                row.started_at = metadata["detected_start_time"]
                 row.smartdesk_user_id = metadata.get("smartdesk_user_id") or row.smartdesk_user_id
                 row.project_id = metadata.get("project_id") or row.project_id
                 row.repository = metadata.get("repository") or row.repository
@@ -136,17 +146,24 @@ class ActiveTaskRepository:
             query = session.query(ActiveTask).filter(ActiveTask.smartdesk_user_id == smartdesk_user_id)
             if project_id:
                 query = query.filter(ActiveTask.project_id == project_id)
-            return [
-                {
+            result = []
+            for row in query.all():
+                lifecycle = session.query(CollectedTask).filter(
+                    CollectedTask.project_item_id == row.project_item_id,
+                    CollectedTask.completed_at.is_(None),
+                ).order_by(CollectedTask.id.desc()).first()
+                if lifecycle is None:
+                    continue
+                result.append({
                     "project_item_id": row.project_item_id,
                     "issue_id": row.issue_id,
                     "title": row.title,
                     "started_at": row.started_at,
                     "project_id": row.project_id,
                     "repository": row.repository,
-                }
-                for row in query.all()
-            ]
+                    "collector_lifecycle_id": lifecycle.id,
+                })
+            return result
 
     def remove(self, project_item_id: str) -> None:
         with SessionLocal() as session:
@@ -210,6 +227,13 @@ class StatusMappingRepository:
                 if row.status_option_name.strip().casefold() == wanted:
                     return row.logical_status
         return "OTHER"
+
+    def get_mapping(self, project_id: str) -> Dict[str, str]:
+        with SessionLocal() as session:
+            rows = session.query(ProjectStatusMapping).filter(
+                ProjectStatusMapping.project_id == project_id
+            ).all()
+            return {row.status_option_name: row.logical_status for row in rows}
 
 
 class WebhookDeliveryRepository:

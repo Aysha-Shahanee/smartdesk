@@ -32,26 +32,32 @@ class TaskMetadataService:
         self._notify_started(metadata, lifecycle_id)
 
     def task_started(self, project_item_id: str, token: Optional[str] = None) -> dict:
-        metadata = self._fetch(project_item_id, token)
-        self._started(metadata)
-        return metadata
+        return self.synchronize_active(project_item_id, token=token)
 
     def task_completed(self, project_item_id: str, token: Optional[str] = None) -> dict:
         metadata = self._fetch(project_item_id, token)
-        self.collected.complete_latest(project_item_id, metadata)
+        self.collected.complete_open(project_item_id, metadata)
         self.active.remove(project_item_id)
         return metadata
 
-    def synchronize_active(self, project_item_id: str, is_new: bool,
+    def synchronize_active(self, project_item_id: str, is_new: bool | None = None,
                            token: Optional[str] = None) -> dict:
         metadata = self._fetch(project_item_id, token)
-        if is_new:
+        lifecycle_id = self.collected.update_open(project_item_id, metadata)
+        if lifecycle_id is None:
             self._started(metadata)
         else:
-            lifecycle_id = self.collected.update_latest(project_item_id, metadata)
             self.active.add(metadata)
             self._notify_started(metadata, lifecycle_id)
         return metadata
+
+    def synchronize_inactive(self, project_item_id: str,
+                             token: Optional[str] = None) -> None:
+        """Remove current-active state and close an orphaned open lifecycle."""
+        self.active.remove(project_item_id)
+        if self.collected.has_open(project_item_id):
+            metadata = self._fetch(project_item_id, token)
+            self.collected.complete_open(project_item_id, metadata)
 
     def _fetch(self, project_item_id: str, token: Optional[str]) -> dict:
         try:

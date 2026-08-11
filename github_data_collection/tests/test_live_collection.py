@@ -8,7 +8,9 @@ from sqlalchemy.orm import sessionmaker
 from github_data_collection.config import MODULE_DIR, Settings
 from github_data_collection.database import Base, CollectedTask
 from github_data_collection.collectors.status_monitor import fetch_all_project_items
+from github_data_collection.collectors.metadata_collector import UnsupportedProjectItemError
 from github_data_collection.initial_sync import initial_sync
+from github_data_collection.project_service import discover_projects
 from github_data_collection.repositories import CollectedTaskRepository
 from github_data_collection.task_metadata_service import TaskMetadataService
 from github_data_collection.webhook_handler import handle_github_webhook_event
@@ -52,7 +54,7 @@ class LifecycleTimestampTests(unittest.TestCase):
 
     def test_completion_preserves_started_at_and_sets_completed_at(self):
         self.repository.insert(self.metadata("2026-01-01T10:00:00Z"))
-        self.repository.complete_latest(
+        self.repository.complete_open(
             "PVTI_1", self.metadata("2026-01-01T11:00:00Z"),
             completed_at="2026-01-01T12:00:00Z",
         )
@@ -64,7 +66,7 @@ class LifecycleTimestampTests(unittest.TestCase):
 
     def test_reopened_task_creates_a_new_lifecycle(self):
         self.repository.insert(self.metadata("2026-01-01T10:00:00Z"))
-        self.repository.complete_latest(
+        self.repository.complete_open(
             "PVTI_1", self.metadata("2026-01-01T11:00:00Z"),
             completed_at="2026-01-01T12:00:00Z",
         )
@@ -74,6 +76,19 @@ class LifecycleTimestampTests(unittest.TestCase):
         self.assertEqual(first.completed_at, "2026-01-01T12:00:00Z")
         self.assertEqual(reopened.started_at, "2026-01-02T09:00:00Z")
         self.assertIsNone(reopened.completed_at)
+
+    def test_update_open_resolves_duplicate_open_lifecycles_without_deleting_history(self):
+        self.repository.insert(self.metadata("2026-01-01T10:00:00Z"))
+        self.repository.insert(self.metadata("2026-01-01T11:00:00Z"))
+
+        lifecycle_id = self.repository.update_open(
+            "PVTI_1", self.metadata("2026-01-01T11:00:00Z")
+        )
+
+        first, latest = self.rows()
+        self.assertEqual(lifecycle_id, latest.id)
+        self.assertIsNotNone(first.completed_at)
+        self.assertIsNone(latest.completed_at)
 
 
 class FakeStates:
@@ -115,6 +130,7 @@ class FakeMetadata:
         self.started = []
         self.completed = []
         self.synced = []
+        self.inactive = []
         self.active = FakeActive()
 
     def task_started(self, item_id, token=None):
@@ -123,8 +139,11 @@ class FakeMetadata:
     def task_completed(self, item_id, token=None):
         self.completed.append(item_id)
 
-    def synchronize_active(self, item_id, is_new, token=None):
+    def synchronize_active(self, item_id, is_new=None, token=None):
         self.synced.append((item_id, is_new))
+
+    def synchronize_inactive(self, item_id, token=None):
+        self.inactive.append(item_id)
 
 
 def mapper(mapping):
@@ -150,7 +169,7 @@ class WebhookTests(unittest.TestCase):
         ):
             service, states = FakeMetadata(), FakeStates()
             handle_github_webhook_event(
-                event(old=old, new=active), {}, metadata_service=service,
+                event(old=old, new=active), {"X-GitHub-Event": "projects_v2_item"}, metadata_service=service,
                 state_repository=states, delivery_repository=FakeDeliveries(),
                 status_mapper=mapper(mapping),
             )
@@ -161,12 +180,12 @@ class WebhookTests(unittest.TestCase):
         service, states, deliveries = FakeMetadata(), FakeStates(), FakeDeliveries()
         states.upsert("PVTI_1", "PVT_1", "Development", "ACTIVE")
         handle_github_webhook_event(
-            event(old="Development", new="Released"), {}, metadata_service=service,
+            event(old="Development", new="Released"), {"X-GitHub-Event": "projects_v2_item"}, metadata_service=service,
             state_repository=states, delivery_repository=deliveries,
             status_mapper=mapper(mapping),
         )
         handle_github_webhook_event(
-            event(old="Released", new="Development"), {}, metadata_service=service,
+            event(old="Released", new="Development"), {"X-GitHub-Event": "projects_v2_item"}, metadata_service=service,
             state_repository=states, delivery_repository=deliveries,
             status_mapper=mapper(mapping),
         )
@@ -184,8 +203,65 @@ class WebhookTests(unittest.TestCase):
         handle_github_webhook_event(payload, headers, **kwargs)
         self.assertEqual(service.started, ["PVTI_1"])
 
+    def test_authenticated_webhook_fetches_authoritative_status(self):
+        service, states = FakeMetadata(), FakeStates()
+        states.upsert("PVTI_1", "PVT_1", "Todo", "NOT_STARTED")
+        payload = event(old="Todo", new="Unrelated single select")
+        handle_github_webhook_event(
+            payload, {"X-GitHub-Event": "projects_v2_item"}, token="installation-token",
+            metadata_service=service, state_repository=states,
+            delivery_repository=FakeDeliveries(),
+            status_mapper=mapper({"Todo": "NOT_STARTED", "Doing": "ACTIVE"}),
+            status_fetcher=lambda item_id, token: "Doing",
+        )
+        self.assertEqual(service.started, ["PVTI_1"])
+        self.assertEqual(states.get("PVTI_1")["status_option_name"], "Doing")
+
+    def test_unsupported_item_is_acknowledged_without_lifecycle(self):
+        service, states, deliveries = FakeMetadata(), FakeStates(), FakeDeliveries()
+        service.task_started = lambda item_id, token=None: (_ for _ in ()).throw(
+            UnsupportedProjectItemError("PullRequest")
+        )
+        headers = {"X-GitHub-Event": "projects_v2_item", "X-GitHub-Delivery": "unsupported-1"}
+        handle_github_webhook_event(
+            event(new="Doing"), headers, token="installation-token",
+            metadata_service=service, state_repository=states,
+            delivery_repository=deliveries,
+            status_mapper=mapper({"Doing": "ACTIVE"}),
+            status_fetcher=lambda item_id, token: "Doing",
+        )
+        self.assertTrue(deliveries.is_processed("unsupported-1"))
+        self.assertEqual(states.get("PVTI_1")["logical_status"], "ACTIVE")
+
+    def test_missing_or_unrelated_event_header_is_ignored(self):
+        service = FakeMetadata()
+        kwargs = dict(metadata_service=service, state_repository=FakeStates(),
+                      delivery_repository=FakeDeliveries(),
+                      status_mapper=mapper({"Doing": "ACTIVE"}))
+        handle_github_webhook_event(event(new="Doing"), {}, **kwargs)
+        handle_github_webhook_event(event(new="Doing"), {"X-GitHub-Event": "issues"}, **kwargs)
+        self.assertEqual(service.started, [])
+
 
 class SyncAndPaginationTests(unittest.TestCase):
+    def test_project_discovery_queries_installation_organization_and_paginates(self):
+        responses = [
+            {"organization": {"login": "example-org", "projectsV2": {
+                "nodes": [{"id": "PVT_1", "number": 1, "title": "First"}],
+                "pageInfo": {"hasNextPage": True, "endCursor": "next"},
+            }}},
+            {"organization": {"login": "example-org", "projectsV2": {
+                "nodes": [{"id": "PVT_2", "number": 2, "title": "Second"}],
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+            }}},
+        ]
+        with patch("github_data_collection.project_service.execute_query", side_effect=responses) as execute:
+            projects = discover_projects("installation-token", "example-org")
+        self.assertEqual([project["number"] for project in projects], [1, 2])
+        self.assertIn("organization(login: $login)", execute.call_args_list[0].args[0])
+        self.assertEqual(execute.call_args_list[0].args[1]["login"], "example-org")
+        self.assertEqual(execute.call_args_list[1].args[1]["cursor"], "next")
+
     def test_initial_sync_collects_already_active_item(self):
         service, states = FakeMetadata(), FakeStates()
 
@@ -195,8 +271,24 @@ class SyncAndPaginationTests(unittest.TestCase):
         initial_sync(fetcher=fetcher, metadata_service=service,
                      state_repository=states,
                      status_mapper=mapper({"Development": "ACTIVE"}))
-        self.assertEqual(service.synced, [("PVTI_ACTIVE", True)])
+        self.assertEqual(service.synced, [("PVTI_ACTIVE", None)])
         self.assertEqual(states.get("PVTI_ACTIVE")["logical_status"], "ACTIVE")
+
+    def test_initial_sync_reconciles_stale_active_item_to_inactive(self):
+        service, states = FakeMetadata(), FakeStates()
+        states.upsert("PVTI_DONE", "PVT_1", "Development", "ACTIVE")
+
+        initial_sync(
+            fetcher=lambda **kwargs: (
+                "PVT_1", [{"project_item_id": "PVTI_DONE", "status": "Released"}]
+            ),
+            metadata_service=service,
+            state_repository=states,
+            status_mapper=mapper({"Development": "ACTIVE", "Released": "DONE"}),
+        )
+
+        self.assertEqual(service.inactive, ["PVTI_DONE"])
+        self.assertEqual(states.get("PVTI_DONE")["logical_status"], "DONE")
 
     def test_pagination_returns_more_than_100_items(self):
         def response(start, count, has_next, cursor):

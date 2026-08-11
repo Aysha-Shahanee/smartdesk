@@ -1,0 +1,227 @@
+.recommendations-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xl);
+}
+
+/* Immediate Suggestions */
+.imm-suggestions-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.imm-suggestion-card {
+  background-color: var(--color-primary-light);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.imm-suggestion-content strong {
+  display: block;
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+  margin-bottom: 2px;
+}
+
+.imm-suggestion-content p {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.imm-suggestion-actions {
+  display: flex;
+  gap: var(--space-md);
+}
+
+.imm-dismiss-btn {
+  background-color: var(--color-surface) !important;
+  border: 1px solid var(--color-border) !important;
+  color: var(--color-text-primary) !important;
+}
+.imm-dismiss-btn:hover {
+  background-color: var(--color-bg) !important;
+}
+
+/* Key Insights Banner */
+.rec-key-insights {
+  background-color: var(--color-primary-light);
+  border-radius: var(--radius-lg);
+  padding: var(--space-xl);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.rec-key-insights-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.rec-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--color-primary);
+  color: var(--color-primary);
+  font-weight: bold;
+}
+
+.rec-key-insights-header h3 {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 2px;
+}
+
+.rec-subtitle {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.rec-key-insights-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.rec-insight-row {
+  background-color: var(--color-surface);
+  border-radius: var(--radius-md);
+  padding: var(--space-md) var(--space-lg);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-md);
+}
+
+.rec-icon-small {
+  margin-top: 2px;
+  font-weight: bold;
+}
+
+.rec-icon-small.green { color: var(--color-success); }
+.rec-icon-small.red { color: var(--color-danger); }
+
+.rec-insight-row strong {
+  display: block;
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+  margin-bottom: 2px;
+}
+
+.rec-insight-row p {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* Sections */
+.rec-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.rec-section-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.rec-section-icon {
+  font-size: 1.2rem;
+}
+.rec-section-icon.green { color: var(--color-success); }
+
+.rec-section-header h2 {
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.rec-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.rec-list-card {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg) var(--space-xl);
+}
+
+.rec-list-card h4 {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-md);
+}
+
+.rec-list-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-lg);
+}
+
+.rec-detail-row {
+  display: flex;
+  align-items: flex-start;
+}
+
+.rec-detail-label {
+  width: 80px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.rec-detail-value {
+  flex: 1;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.rec-card-footer {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  border-top: 1px solid var(--color-border-light);
+  padding-top: var(--space-md);
+}
+
+.rec-card-actions {
+  display: flex;
+  gap: var(--space-md);
+  align-items: center;
+}
+
+.rec-action-btn {
+  background: none;
+  border: none;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rec-action-btn.applied {
+  color: var(--color-success);
+  font-weight: 500;
+}
+
+.rec-action-btn:not(.applied) {
+  color: var(--color-text-muted);
+}
+
+.rec-action-btn:not(.applied):hover {
+  color: var(--color-text-secondary);
+}
