@@ -50,6 +50,9 @@ def callback(installation_id: int = Query(...), state: str = Query(...),
              service: GitHubIntegrationService = Depends(get_service)):
     try:
         service.complete_installation(installation_id, state)
+        if settings.SMARTDESK_FRONTEND_URL:
+            frontend = settings.SMARTDESK_FRONTEND_URL.rstrip("/")
+            return RedirectResponse(url=f"{frontend}/#/settings?github=connected", status_code=303)
         return RedirectResponse(url="/api/v1/integrations/github/setup?connected=1", status_code=303)
     except Exception as exc:
         translate_error(exc)
@@ -88,6 +91,11 @@ def save_status_mapping(payload: GitHubStatusMappingUpdate,
         return {"saved": True, "initial_sync_project_id": project_id}
     except Exception as exc:
         translate_error(exc)
+
+
+@router.get("/status-mapping")
+def current_status_mapping(service: GitHubIntegrationService = Depends(get_service)):
+    return {"mapping": service.current_mapping(local_user_id())}
 
 
 @router.post("/initial-sync")
@@ -130,10 +138,10 @@ def disconnect(service: GitHubIntegrationService = Depends(get_service)):
 def setup_page() -> str:
     return """<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SmartDesk GitHub Integration</title>
+<title>SmartDesk GitHub Development Setup</title>
 <style>
 body{font:15px system-ui;max-width:900px;margin:40px auto;padding:0 20px;color:#18202a}button,select{padding:8px;margin:4px}section{border:1px solid #ccd5df;border-radius:8px;padding:18px;margin:14px 0}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.error{color:#a00}.ok{color:#076b35}pre{white-space:pre-wrap;background:#f5f7f9;padding:12px}</style>
-</head><body><h1>GitHub Projects integration</h1><div id="message"></div>
+</head><body><h1>GitHub Projects development setup</h1><p>This utility is for local setup and diagnostics. Use SmartDesk Settings for the normal interface.</p><div id="message"></div>
 <section><h2>Connection</h2><pre id="status">Loading...</pre><button onclick="connectGitHub()">Connect GitHub</button><button onclick="disconnectGitHub()">Disconnect</button></section>
 <section><h2>Project</h2><button onclick="loadProjects()">Load projects</button><select id="projects"></select><button onclick="selectProject()">Select project</button></section>
 <section><h2>Status mapping</h2><button onclick="loadOptions()">Load Status options</button><div id="mappings"></div><button onclick="saveMapping()">Save mapping and initial sync</button></section>

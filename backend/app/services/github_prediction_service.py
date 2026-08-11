@@ -32,12 +32,12 @@ class GitHubPredictionService:
 
     def active_tasks(self, user_id: str, project_id: str | None = None) -> list[dict]:
         active = ActiveTaskRepository().list_for_user(user_id, project_id)
-        predictions = self.repository.latest_for_items(
-            user_id, [task["project_item_id"] for task in active]
+        predictions = self.repository.for_open_lifecycles(
+            user_id, [task["collector_lifecycle_id"] for task in active]
         )
         result = []
         for task in active:
-            prediction = predictions.get(task["project_item_id"])
+            prediction = predictions.get(task["collector_lifecycle_id"])
             result.append({
                 **task,
                 "description": prediction.description if prediction else None,

@@ -56,19 +56,15 @@ class GitHubPredictionRepository:
         row.prediction_error = str(exc)[:1000]
         self.db.commit()
 
-    def latest_for_items(self, user_id: str, project_item_ids: list[str]) -> dict:
-        if not project_item_ids:
+    def for_open_lifecycles(self, user_id: str, lifecycle_ids: list[int]) -> dict:
+        if not lifecycle_ids:
             return {}
         rows = (
             self.db.query(GitHubInitialPredictionRecord)
             .filter(
                 GitHubInitialPredictionRecord.user_id == user_id,
-                GitHubInitialPredictionRecord.project_item_id.in_(project_item_ids),
+                GitHubInitialPredictionRecord.collector_lifecycle_id.in_(lifecycle_ids),
             )
-            .order_by(GitHubInitialPredictionRecord.id.desc())
             .all()
         )
-        result = {}
-        for row in rows:
-            result.setdefault(row.project_item_id, row)
-        return result
+        return {row.collector_lifecycle_id: row for row in rows}

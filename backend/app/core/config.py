@@ -42,7 +42,8 @@ class Settings(BaseSettings):
     SMARTDESK_GITHUB_APP_ID: str = ""
     SMARTDESK_GITHUB_APP_SLUG: str = ""
     SMARTDESK_GITHUB_APP_PRIVATE_KEY: str = ""
-    SMARTDESK_GITHUB_CALLBACK_URL: str = "http://127.0.0.1:8000/api/v1/integrations/github/callback"
+    SMARTDESK_GITHUB_CALLBACK_URL: str = ""
+    SMARTDESK_FRONTEND_URL: str = ""
     SMARTDESK_GITHUB_WEBHOOK_SECRET: str = ""
     SMARTDESK_GITHUB_MONITOR_MODE: str = "webhook"
     SMARTDESK_GITHUB_MODEL_ARTIFACT_DIR: str = str(BACKEND_DIR / "model_artifacts" / "github_effort")

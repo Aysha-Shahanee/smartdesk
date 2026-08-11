@@ -129,8 +129,9 @@ class GitHubPredictionFlowTests(unittest.TestCase):
         self.states.upsert("PVTI_1", "PVT_1", "Todo", "NOT_STARTED")
         self.deliver("Doing", "delivery-user")
         repository = GitHubPredictionService(self.smart_session, self.predictor).repository
-        self.assertIn("PVTI_1", repository.latest_for_items("user-one", ["PVTI_1"]))
-        self.assertNotIn("PVTI_1", repository.latest_for_items("user-two", ["PVTI_1"]))
+        lifecycle_id = self.prediction_rows()[0].collector_lifecycle_id
+        self.assertIn(lifecycle_id, repository.for_open_lifecycles("user-one", [lifecycle_id]))
+        self.assertNotIn(lifecycle_id, repository.for_open_lifecycles("user-two", [lifecycle_id]))
 
     def test_repeated_initial_sync_predicts_already_active_task_once(self):
         fetcher = lambda **kwargs: ("PVT_1", [{"project_item_id": "PVTI_1", "status": "Doing"}])
@@ -142,6 +143,39 @@ class GitHubPredictionFlowTests(unittest.TestCase):
                 status_mapper=self.mapping,
             )
         self.assertEqual(self.predictor.calls, 1)
+        self.assertEqual(len(self.prediction_rows()), 1)
+
+    def test_active_to_not_started_closes_lifecycle_and_removes_active_task(self):
+        self.states.upsert("PVTI_1", "PVT_1", "Doing", "ACTIVE")
+        self.metadata_service.task_started("PVTI_1")
+        self.deliver("Todo", "delivery-not-started")
+
+        with self.collected.session_factory() as session:
+            lifecycle = session.query(CollectedTask).one()
+            self.assertIsNotNone(lifecycle.completed_at)
+        self.assertNotIn("PVTI_1", self.active.rows)
+        self.assertEqual(len(self.prediction_rows()), 1)
+
+    def test_reconciliation_repairs_missed_done_and_is_idempotent(self):
+        self.states.upsert("PVTI_1", "PVT_1", "Doing", "ACTIVE")
+        self.metadata_service.task_started("PVTI_1")
+        fetcher = lambda **kwargs: (
+            "PVT_1", [{"project_item_id": "PVTI_1", "status": "Done"}]
+        )
+
+        for _ in range(2):
+            initial_sync(
+                fetcher=fetcher,
+                metadata_service=self.metadata_service,
+                state_repository=self.states,
+                status_mapper=self.mapping,
+            )
+
+        with self.collected.session_factory() as session:
+            rows = session.query(CollectedTask).all()
+            self.assertEqual(len(rows), 1)
+            self.assertIsNotNone(rows[0].completed_at)
+        self.assertNotIn("PVTI_1", self.active.rows)
         self.assertEqual(len(self.prediction_rows()), 1)
 
 

@@ -17,6 +17,7 @@ from github_data_collection import (
     discover_projects,
     get_event_identity,
     get_installation,
+    get_status_mapping,
     get_status_options,
     handle_github_webhook_event,
     initial_sync,
@@ -124,6 +125,12 @@ class GitHubIntegrationService:
         set_status_mapping(row.selected_project_id, mapping)
         # Mapping is required before a meaningful baseline can be established.
         return self.synchronize(user_id)
+
+    def current_mapping(self, user_id: str) -> dict[str, str]:
+        row = self.repository.get_connection(user_id)
+        if row is None or not row.selected_project_id:
+            return {}
+        return get_status_mapping(row.selected_project_id)
 
     def _metadata_service(self, user_id: str, project_id: str) -> TaskMetadataService:
         def fetcher(item_id: str, token: str | None = None):
