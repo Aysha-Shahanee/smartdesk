@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 from app.models.db_models import Base
 from app.models.github_integration import GitHubProjectSelection
+from app.routes.github_integration import setup_page
 from app.services.github_integration_service import GitHubIntegrationService
 
 
@@ -70,6 +71,17 @@ class GitHubIntegrationTests(unittest.TestCase):
         self.service.disconnect("user-one")
         self.assertEqual(self.service.connection_status("user-one")["connection_status"], "disconnected")
         self.assertEqual(self.service.active_tasks("user-one"), [])
+
+    def test_setup_project_selector_uses_title_id_and_expected_payload(self):
+        html = setup_page()
+        self.assertIn("o.textContent=p.title", html)
+        self.assertIn("o.value=id", html)
+        self.assertIn("loadedProjects.set(id,p)", html)
+        self.assertIn(
+            "payload={owner:p.owner,project_number:p.number,"
+            "project_id:p.project_id??p.id,title:p.title}",
+            html,
+        )
 
 
 if __name__ == "__main__":

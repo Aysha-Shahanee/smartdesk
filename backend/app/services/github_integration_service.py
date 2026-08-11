@@ -91,7 +91,10 @@ class GitHubIntegrationService:
         return create_installation_token(self._app_jwt(), row.installation_id)
 
     def projects(self, user_id: str) -> list[dict]:
-        return discover_projects(self._token(user_id))
+        row = self.repository.get_connection(user_id)
+        if row is None or not row.github_login:
+            raise PermissionError("GitHub App is not installed for this SmartDesk user")
+        return discover_projects(self._token(user_id), row.github_login)
 
     def select_project(self, user_id: str, selection) -> dict:
         accessible = self.projects(user_id)

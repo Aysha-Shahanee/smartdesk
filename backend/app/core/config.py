@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     SMARTDESK_GITHUB_MODEL_ARTIFACT_DIR: str = str(BACKEND_DIR / "model_artifacts" / "github_effort")
 
     class Config:
-        env_file = ".env"
+        env_file = BACKEND_DIR / ".env"
         env_file_encoding = "utf-8"
 
 

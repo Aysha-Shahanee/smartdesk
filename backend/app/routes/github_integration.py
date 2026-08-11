@@ -140,13 +140,14 @@ body{font:15px system-ui;max-width:900px;margin:40px auto;padding:0 20px;color:#
 <section><h2>Active task and initial duration estimate</h2><button onclick="loadActive()">Refresh</button><pre id="active">No data loaded.</pre></section>
 <script>
 const base='/api/v1/integrations/github'; const msg=document.getElementById('message');
+const projectSelect=document.getElementById('projects'); const loadedProjects=new Map();
 async function api(path,options={}){const r=await fetch(base+path,{headers:{'Content-Type':'application/json'},...options});const data=await r.json();if(!r.ok)throw new Error(data.detail||r.statusText);return data}
 function show(text,ok=true){msg.className=ok?'ok':'error';msg.textContent=text}
 async function loadStatus(){try{status.textContent=JSON.stringify(await api('/status'),null,2)}catch(e){show(e.message,false)}}
 async function connectGitHub(){try{location.href=(await api('/connect')).installation_url}catch(e){show(e.message,false)}}
 async function disconnectGitHub(){try{await api('/connection',{method:'DELETE'});show('Disconnected');loadStatus()}catch(e){show(e.message,false)}}
-async function loadProjects(){try{const data=await api('/projects');projects.innerHTML='';for(const p of data.projects){const o=document.createElement('option');o.value=JSON.stringify(p);o.textContent=`${p.owner} / ${p.title} (#${p.number})`;projects.appendChild(o)}}catch(e){show(e.message,false)}}
-async function selectProject(){try{if(!projects.value)throw new Error('Load and choose a project');await api('/project',{method:'PUT',body:projects.value});show('Project selected');loadStatus()}catch(e){show(e.message,false)}}
+async function loadProjects(){try{const data=await api('/projects');projectSelect.innerHTML='';loadedProjects.clear();for(const p of data.projects){const id=p.project_id??p.id;if(!id)continue;loadedProjects.set(id,p);const o=document.createElement('option');o.value=id;o.textContent=p.title;projectSelect.appendChild(o)}}catch(e){show(e.message,false)}}
+async function selectProject(){try{const p=loadedProjects.get(projectSelect.value);if(!p)throw new Error('Load and choose a project');const payload={owner:p.owner,project_number:p.number,project_id:p.project_id??p.id,title:p.title};await api('/project',{method:'PUT',body:JSON.stringify(payload)});show('Project selected');loadStatus()}catch(e){show(e.message,false)}}
 async function loadOptions(){try{const data=await api('/status-options');mappings.innerHTML='';for(const option of data.options){const row=document.createElement('div');row.className='row';row.dataset.name=option.name;row.innerHTML=`<span>${option.name}</span><select><option>OTHER</option><option>NOT_STARTED</option><option>ACTIVE</option><option>DONE</option></select>`;mappings.appendChild(row)}}catch(e){show(e.message,false)}}
 async function saveMapping(){try{const mapping={};for(const row of mappings.children)mapping[row.dataset.name]=row.querySelector('select').value;const data=await api('/status-mapping',{method:'PUT',body:JSON.stringify({mapping})});show(`Mapping saved; initial sync ${data.initial_sync_project_id}`);loadActive()}catch(e){show(e.message,false)}}
 async function loadActive(){try{active.textContent=JSON.stringify((await api('/active-tasks')).tasks,null,2)}catch(e){show(e.message,false)}}
