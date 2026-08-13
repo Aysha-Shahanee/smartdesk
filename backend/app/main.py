@@ -17,6 +17,7 @@ from app.routes import dashboard
 from app.routes import health
 from app.routes import ingest
 from app.routes import segment_feedback
+from app.routes import window_clusters
 from app.services.activity_segment_builder import ActivitySegmentBuilder
 from app.services.calendar_sync_job import CalendarSyncJob
 from app.services.liveness import get_last_heartbeat
@@ -107,6 +108,7 @@ app.include_router(ingest.router, prefix="/api/v1/ingest", tags=["Ingest"])
 app.include_router(calendar.router, prefix="/api/v1/calendar", tags=["Calendar"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
 app.include_router(segment_feedback.router, prefix="/api/v1/activity-segments", tags=["Segment Feedback"])
+app.include_router(window_clusters.router, prefix="/api/v1", tags=["Window Clusters"])
 
 
 @app.get("/")

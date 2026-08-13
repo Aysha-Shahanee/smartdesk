@@ -4,11 +4,12 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell,
   ResponsiveContainer, LabelList,
 } from 'recharts';
-import { getSegmentsSummary, getAllSegments } from '../services/api';
+import { getSegmentsSummary, getAllSegments, getWindowClusters } from '../services/api';
 import { useDateContext } from '../contexts/DateContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { getCategoryColor, getChartChrome } from '../theme/chartTheme';
 import { capitalize, formatDuration, parseSegmentTime } from '../utils/time';
+import { bucketWindowsByScope, type PatternScope, type WindowCluster } from './patternDetection';
 import './Dashboard.css';
 
 const EMPTY_SUMMARY = {
@@ -26,19 +27,32 @@ const Dashboard: React.FC = () => {
 
   const [summary, setSummary] = useState<any>(null);
   const [segments, setSegments] = useState<any[]>([]);
+  const [patternRows, setPatternRows] = useState<Record<PatternScope, WindowCluster[]>>({
+    day: [],
+    week: [],
+    month: [],
+  });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       setLoading(true);
-      const [sum, segs] = await Promise.all([
+      const [sum, segs, dayRows, weekRows, monthRows] = await Promise.all([
         getSegmentsSummary(selectedDate).catch(() => null),
         getAllSegments(selectedDate).catch(() => []),
+        getWindowClusters(undefined, 1000, 'day').catch(() => []),
+        getWindowClusters(undefined, 1000, 'week').catch(() => []),
+        getWindowClusters(undefined, 1000, 'month').catch(() => []),
       ]);
       if (cancelled) return;
       setSummary(sum || EMPTY_SUMMARY);
       setSegments(segs);
+      setPatternRows({
+        day: dayRows as WindowCluster[],
+        week: weekRows as WindowCluster[],
+        month: monthRows as WindowCluster[],
+      });
       setLoading(false);
     };
     load();
@@ -47,14 +61,9 @@ const Dashboard: React.FC = () => {
 
   const { total_duration_sec = 0, duration_by_category = {} } = summary || {};
 
-  /* Ranked category breakdown. A horizontal bar chart is used instead of the
-     previous donut: with up to nine categories, angular slices are very hard
-     to rank by eye, whereas bar length reads directly. */
   const categoryRanking = useMemo(
     () =>
       Object.entries(duration_by_category as Record<string, number>)
-        // Categories that total zero seconds draw a zero-length bar with a
-        // "0s" label — noise that pushes real categories out of the ranking.
         .filter(([, seconds]) => seconds > 0)
         .map(([key, seconds]) => ({
           key,
@@ -67,19 +76,21 @@ const Dashboard: React.FC = () => {
     [duration_by_category, total_duration_sec, theme]
   );
 
-  /* Real observed activity window and busiest hour, replacing the previously
-     hardcoded "focus peak 9:30-11:30" copy. Idle/gap segments are excluded so
-     the numbers agree with the summary endpoint, which counts active only. */
   const derived = useMemo(() => {
     const active = segments.filter(s => (s.state ?? 'active') === 'active');
     if (active.length === 0) {
-      return { firstSeen: null as Date | null, lastSeen: null as Date | null, peakHour: null as number | null, peakSec: 0, idleSec: 0, topApp: null as string | null };
+      return {
+        firstSeen: null as Date | null,
+        lastSeen: null as Date | null,
+        peakHour: null as number | null,
+        peakSec: 0,
+        idleSec: 0,
+      };
     }
 
     const perHour = new Array(24).fill(0);
     let firstSeen: Date | null = null;
     let lastSeen: Date | null = null;
-    const appTotals: Record<string, number> = {};
 
     for (const seg of active) {
       const start = parseSegmentTime(seg.start_time_utc);
@@ -88,56 +99,66 @@ const Dashboard: React.FC = () => {
       if (!firstSeen || start < firstSeen) firstSeen = start;
       if (!lastSeen || end > lastSeen) lastSeen = end;
 
-      const app = seg.app_name || 'Unknown';
-      appTotals[app] = (appTotals[app] || 0) + (end.getTime() - start.getTime()) / 1000;
-
-      // Split across every hour the segment touches rather than charging the
-      // whole span to its starting hour.
       let cursor = start.getTime();
       const endMs = end.getTime();
       while (cursor < endMs) {
-        const c = new Date(cursor);
-        const hourEnd = new Date(c.getFullYear(), c.getMonth(), c.getDate(), c.getHours() + 1, 0, 0, 0).getTime();
+        const current = new Date(cursor);
+        const hourEnd = new Date(current.getFullYear(), current.getMonth(), current.getDate(), current.getHours() + 1, 0, 0, 0).getTime();
         const sliceEnd = Math.min(hourEnd, endMs);
-        perHour[c.getHours()] += (sliceEnd - cursor) / 1000;
+        perHour[current.getHours()] += (sliceEnd - cursor) / 1000;
         cursor = sliceEnd;
       }
     }
 
     let peakHour: number | null = null;
     let peakSec = 0;
-    perHour.forEach((sec, h) => {
-      if (sec > peakSec) { peakSec = sec; peakHour = h; }
+    perHour.forEach((sec, hour) => {
+      if (sec > peakSec) {
+        peakSec = sec;
+        peakHour = hour;
+      }
     });
 
     const idleSec = segments
       .filter(s => s.state === 'idle')
       .reduce((acc, s) => acc + (s.duration_sec || 0), 0);
 
-    const topApp = Object.entries(appTotals).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
-
-    return { firstSeen, lastSeen, peakHour, peakSec, idleSec, topApp };
+    return { firstSeen, lastSeen, peakHour, peakSec, idleSec };
   }, [segments]);
 
-  if (loading) return <div className="sd-loader">Loading dashboard for {selectedDate}…</div>;
+  const patternSnapshot = useMemo(() => {
+    const summarize = (scope: PatternScope) => {
+      const buckets = bucketWindowsByScope(patternRows[scope], scope);
+      if (buckets.length === 0) return null;
+      return {
+        strongest: [...buckets].sort((a, b) => b.avgFocusScore - a.avgFocusScore)[0],
+        weakest: [...buckets].sort((a, b) => a.avgFocusScore - b.avgFocusScore)[0],
+      };
+    };
+
+    return {
+      day: summarize('day'),
+      week: summarize('week'),
+      month: summarize('month'),
+    };
+  }, [patternRows]);
+
+  if (loading) return <div className="sd-loader">Loading dashboard for {selectedDate}...</div>;
 
   const hasData = total_duration_sec > 0;
-  const topCategory = categoryRanking[0];
-  const hourLabel = (h: number) => `${String(h).padStart(2, '0')}:00–${String((h + 1) % 24).padStart(2, '0')}:00`;
+  const hourLabel = (h: number) => `${String(h).padStart(2, '0')}:00-${String((h + 1) % 24).padStart(2, '0')}:00`;
   const spanLabel = derived.firstSeen && derived.lastSeen
-    ? `${derived.firstSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} – ${derived.lastSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-    : '—';
+    ? `${derived.firstSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${derived.lastSeen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    : '-';
 
   return (
     <div className="dashboard sd-fade-in">
       <div className="sd-page-header">
         <h1>Dashboard</h1>
-        <p className="subtitle">{selectedDate} • Activity Overview</p>
+        <p className="subtitle">{selectedDate} - Activity Overview</p>
       </div>
 
       <div className="hub-layout">
-        {/* Headline metrics — all derived from the segments actually recorded
-            for the selected date, with no assumed target workday. */}
         <div className="sd-grid-4">
           <div className="sd-card metric-card">
             <span className="metric-card-label">Tracked Active Time</span>
@@ -152,7 +173,7 @@ const Dashboard: React.FC = () => {
           <div className="sd-card metric-card">
             <span className="metric-card-label">Busiest Hour</span>
             <span className="metric-card-value" style={{ fontSize: 'var(--font-size-lg)' }}>
-              {derived.peakHour !== null ? hourLabel(derived.peakHour) : '—'}
+              {derived.peakHour !== null ? hourLabel(derived.peakHour) : '-'}
             </span>
             <span className="metric-card-sub">
               {derived.peakHour !== null ? `${formatDuration(derived.peakSec)} of activity` : 'No activity recorded'}
@@ -165,11 +186,10 @@ const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Category breakdown — ranked bars replace the donut. */}
         <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
           <div className="card-header">
-            <h3><span className="card-icon">📊</span> Time by Category</h3>
-            <span className="sd-view-details" onClick={() => navigate('/insights')}>View Insights →</span>
+            <h3><span className="card-icon">Time</span> Time by Category</h3>
+            <span className="sd-view-details" onClick={() => navigate('/insights')}>View Insights</span>
           </div>
 
           {hasData ? (
@@ -196,7 +216,7 @@ const Dashboard: React.FC = () => {
                 />
                 <Tooltip
                   cursor={{ fill: chrome.grid, fillOpacity: 0.4 }}
-                  formatter={(value: number, _n, entry: any) => [
+                  formatter={(value: number, _name, entry: { payload?: { pct?: number } }) => [
                     `${formatDuration(value)} (${entry?.payload?.pct ?? 0}%)`,
                     'Time',
                   ]}
@@ -226,47 +246,43 @@ const Dashboard: React.FC = () => {
           )}
         </div>
 
-        {/* Observations derived from the loaded data. */}
         <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
           <div className="card-header">
-            <h3><span className="card-icon">💡</span> Today at a Glance</h3>
-            <span className="sd-view-details" onClick={() => navigate('/recommendations')}>Recommendations →</span>
+            <h3><span className="card-icon">Pattern</span> Pattern Snapshot</h3>
+            <span className="sd-view-details" onClick={() => navigate('/insights')}>Pattern Detection</span>
           </div>
-          {hasData ? (
+          {patternSnapshot.day || patternSnapshot.week || patternSnapshot.month ? (
             <div className="hub-rec-preview">
-              <div className="rec-insight-row">
-                <span className="rec-icon-small green">↗</span>
-                <div>
-                  <strong>
-                    {topCategory.name} led your day at {formatDuration(topCategory.seconds)} ({topCategory.pct}%)
-                  </strong>
-                  <p>
-                    Across {summary?.count_by_category?.[topCategory.key] ?? 0} segments
-                    {derived.topApp ? ` • most-used app: ${derived.topApp}` : ''}
-                  </p>
-                </div>
-              </div>
-              {derived.peakHour !== null && (
+              {patternSnapshot.day && (
                 <div className="rec-insight-row">
-                  <span className="rec-icon-small green">↗</span>
+                  <span className="rec-icon-small green">^</span>
                   <div>
-                    <strong>Peak activity between {hourLabel(derived.peakHour)}</strong>
-                    <p>{formatDuration(derived.peakSec)} of tracked activity in that hour</p>
+                    <strong>Yesterday's strongest hour was {patternSnapshot.day.strongest.label}</strong>
+                    <p>{patternSnapshot.day.strongest.rangeLabel} - {Math.round(patternSnapshot.day.strongest.avgFocusScore * 100)}% focus score</p>
                   </div>
                 </div>
               )}
-              {derived.idleSec > 0 && (
+              {patternSnapshot.week && (
+                <div className="rec-insight-row">
+                  <span className="rec-icon-small green">^</span>
+                  <div>
+                    <strong>Last week's weakest day was {patternSnapshot.week.weakest.label}</strong>
+                    <p>{patternSnapshot.week.weakest.rangeLabel} - {Math.round(patternSnapshot.week.weakest.avgFocusScore * 100)}% focus score</p>
+                  </div>
+                </div>
+              )}
+              {patternSnapshot.month && (
                 <div className="rec-insight-row">
                   <span className="rec-icon-small red">!</span>
                   <div>
-                    <strong>{formatDuration(derived.idleSec)} recorded as idle</strong>
-                    <p>Time the machine was on but unattended — excluded from the totals above</p>
+                    <strong>Last month's best week was {patternSnapshot.month.strongest.label}</strong>
+                    <p>{patternSnapshot.month.strongest.rangeLabel} - {Math.round(patternSnapshot.month.strongest.avgFocusScore * 100)}% focus score</p>
                   </div>
                 </div>
               )}
             </div>
           ) : (
-            <p className="dash-empty">Observations appear once activity is recorded for this date.</p>
+            <p className="dash-empty">Pattern snapshots appear once clustering results are available.</p>
           )}
         </div>
       </div>

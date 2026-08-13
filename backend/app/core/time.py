@@ -6,6 +6,7 @@ via the TIMEZONE setting) — regardless of the machine's OS timezone.
 """
 
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from zoneinfo import ZoneInfo
 
@@ -34,6 +35,19 @@ def to_local_iso(value: datetime) -> str:
 
 def local_day_start_iso() -> str:
     return local_now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+
+def local_day_start(value: datetime | None = None) -> datetime:
+    base = ensure_aware(value).astimezone(APP_TZ) if value is not None else local_now()
+    return base.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def completed_day_range(days: int, run_at: datetime | None = None) -> tuple[datetime, datetime]:
+    if days <= 0:
+        raise ValueError("days must be positive")
+    end = local_day_start(run_at)
+    start = end - timedelta(days=days)
+    return start, end
 
 
 def parse_iso(value: str) -> datetime:
