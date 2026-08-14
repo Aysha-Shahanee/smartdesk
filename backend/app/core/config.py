@@ -37,6 +37,15 @@ class Settings(BaseSettings):
     # Public URL of this backend, used to build the OAuth redirect URI.
     BACKEND_BASE_URL: str = "http://127.0.0.1:8000"
 
+    # ── Shared label sheet ─────────────────────────────────────────
+    # Mirrors every typed label correction to a Google Sheet so a team can
+    # pool training data. The database is always written first and remains
+    # the source of truth; the sheet is best-effort. Requires a one-time
+    # `python -c "import gspread; gspread.oauth()"` to cache credentials.
+    ENABLE_GSHEET_SYNC: bool = False
+    GSHEET_KEY: str = "1G_oudT83kv-JSugqzbVE-nbLyjmQ0c7YY5EGpbLUaG8"
+    GSHEET_WORKSHEET: str = "Labels"
+
     # ── Embedding / Categorization Settings ────────────────────────
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
     EMBEDDING_VERSION: str = "1.0"

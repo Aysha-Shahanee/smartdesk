@@ -25,7 +25,10 @@ from sklearn.preprocessing import LabelEncoder
 
 from app.models.db import ActivitySegmentRecord, ActivitySegmentLabelRecord
 from app.services.embedder import embedder
+from app.services.focus_scorer import FocusScorer
+from app.services.sheet_sync import sheet_sync
 from app.core.database import SessionLocal
+from app.core.time import local_now
 
 logger = logging.getLogger("smartdesk.categorizer")
 
@@ -687,6 +690,9 @@ class Categorizer:
         self._retrain_threshold: int = 5
         self._model_lock = threading.Lock()
         self._new_labels_since_training: int = 0
+        # Rescoring a corrected segment needs the same scorer the builder uses;
+        # it is stateless, so one instance is enough.
+        self._focus_scorer = FocusScorer()
         # How much more a typed correction counts than a backfilled label.
         self._USER_LABEL_WEIGHT: float = 5.0
         # Upper bound on already-trained labels carried into a retrain, newest
@@ -740,6 +746,35 @@ class Categorizer:
                 source=source,
             )
             db.add(label_record)
+
+            # A training row alone leaves the segment showing its old category
+            # in the timeline, so a correction appears to do nothing while
+            # quietly feeding the model. Write the category too, in the same
+            # transaction as the label, and only for labels someone typed --
+            # 'backfill' rows are a repair script's opinion and must not stamp
+            # 'user' on a segment, which is what freezes it against future
+            # reclassification.
+            if source == "user":
+                stored = db.get(ActivitySegmentRecord, segment.id)
+                if stored is not None:
+                    stored.category = correct_label
+                    stored.category_method = "user"
+                    stored.category_confidence = 1.0
+                    # FocusScorer applies a per-category adjustment, so a
+                    # changed category makes the old score stale. Rescore from
+                    # the components already persisted in signals_json rather
+                    # than rebuilding session context. An empty dict means
+                    # nothing usable was stored; leave the score alone rather
+                    # than compute one from invented defaults.
+                    if stored.focus_score is not None:
+                        components = self._focus_scorer.components_from_signals_json(
+                            stored.signals_json
+                        )
+                        if components:
+                            stored.focus_score = self._focus_scorer.score_from_components(
+                                components, correct_label
+                            )
+
             db.commit()
             db.refresh(label_record)
             return label_record.id
@@ -761,29 +796,22 @@ class Categorizer:
         _ = self.record_user_correction(segment, correct_label)
         seg_emb = embedder.embed_segment(segment) or []
 
-        # DEV-ONLY: Google Sheets synchronization (REMOVE AFTER DEVELOPMENT)
-        if os.getenv("ENABLE_GSHEET_SYNC", "false").lower() == "true":
-            try:
-                import gspread
-                from datetime import datetime
-                # Uses cached credentials from one-time `gspread.oauth()` call
-                gc = gspread.oauth()
-                sh = gc.open_by_key("1G_oudT83kv-JSugqzbVE-nbLyjmQ0c7YY5EGpbLUaG8")
-                worksheet = sh.worksheet("Labels")
-                worksheet.append_row([
-                    datetime.now().isoformat(),                    # timestamp
-                    segment.id,                                    # segment_id
-                    segment.user_id,                               # user_id
-                    correct_label,                                 # label
-                    json.dumps(seg_emb),                           # embedding (JSON string)
-                    segment.device_id or "",                       # device_id
-                    segment.app_name or "",                        # app_name
-                    segment.title or "",                           # title
-                    segment.detail or ""                           # detail
-                ])
-            except Exception as e:
-                # Never let a sheet failure break the main correction flow
-                print(f"[DEV] Google Sheet sync failed (non‑critical): {e}")
+        # Mirror to the shared sheet. The database write above has already
+        # committed, so this is best-effort by design: the queue hands the row
+        # to a worker thread and returns, and anything it drops is recoverable
+        # with scripts/export_labels_to_sheet.py, which skips rows already
+        # present. Column order must match HEADER in sheet_sync.
+        sheet_sync.enqueue([
+            local_now().isoformat(),                       # timestamp
+            segment.id,                                    # segment_id
+            segment.user_id,                               # user_id
+            correct_label,                                 # label
+            json.dumps(seg_emb) if seg_emb else "",        # embedding
+            segment.device_id or "",                       # device_id
+            segment.app_name or "",                        # app_name
+            segment.title or "",                           # title
+            segment.detail or "",                          # detail
+        ])
 
         # Increment counter and check if we should retrain (same logic as before)
         with self._model_lock:
