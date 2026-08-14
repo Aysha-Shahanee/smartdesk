@@ -1,8 +1,10 @@
 fastapi
 uvicorn[standard]
 alembic
-pydantic==2.7.0
-pydantic-core==2.18.1  # This matches what pydantic 2.7.0 expects
+# fastapi requires >=2.9.0. Do not pin pydantic-core separately: pydantic
+# already pins the exact matching version, and hand-pinning it is what made
+# this file unsatisfiable (2.18.1 has no wheel for Python 3.13).
+pydantic>=2.9.0
 python-dotenv
 sqlalchemy
 tzdata
