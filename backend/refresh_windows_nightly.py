@@ -11,12 +11,16 @@ from pathlib import Path
 import sqlite3
 import logging
 
+BACKEND_ROOT = Path(__file__).resolve().parent
+DB_PATH = BACKEND_ROOT / "smartdesk.db"
+LOG_PATH = BACKEND_ROOT / "logs" / "refresh_windows_nightly.log"
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('logs/refresh_windows_nightly.log'),
+        logging.FileHandler(LOG_PATH),
         logging.StreamHandler()
     ]
 )
@@ -27,7 +31,7 @@ def populate_additive_columns():
     logger.info("Populating additive columns after window table rebuild...")
 
     try:
-        con = sqlite3.connect("backend\\smartdesk.db")
+        con = sqlite3.connect(DB_PATH)
         cur = con.cursor()
 
         # Populate additive columns based on current window table values
@@ -66,7 +70,7 @@ def main():
 
     try:
         # Option 1: Call the existing make_window_table.py script
-        script_path = Path(__file__).with_name('make_window_table.py')
+        script_path = BACKEND_ROOT / 'make_window_table.py'
         if not script_path.exists():
             raise FileNotFoundError(f"make_window_table.py not found at {script_path}")
 

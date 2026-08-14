@@ -35,6 +35,27 @@ export interface FocusTrendPoint {
   focusScore: number;
 }
 
+export interface WorkRatioPoint {
+  label: string;
+  workRatio: number;
+}
+
+export interface CategoryMixPoint {
+  name: string;
+  value: number;
+}
+
+export interface PatternTimelinePoint {
+  label: string;
+  focusScore: number;
+  patternBand: number;
+  focusLevel: FocusLevel;
+  workRatio: number;
+  learnRatio: number;
+  communicationRatio: number;
+  anomalyScore: number | null;
+}
+
 const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -201,6 +222,69 @@ export const buildFocusTrend = (
   }
 
   return [];
+};
+
+export const rowsForBucket = (
+  rows: WindowCluster[],
+  bucket: PatternBucket | null,
+): WindowCluster[] => {
+  if (!bucket) return [];
+  return rows.filter(row => row.window_start >= bucket.start && row.window_end <= bucket.end);
+};
+
+export const buildWorkRatioTrend = (
+  rows: WindowCluster[],
+  bucket: PatternBucket | null,
+): WorkRatioPoint[] => {
+  return rowsForBucket(rows, bucket).map(row => ({
+    label: row.window_start.slice(11, 16),
+    workRatio: Number((row.work_ratio * 100).toFixed(1)),
+  }));
+};
+
+export const buildCategoryMix = (
+  rows: WindowCluster[],
+  bucket: PatternBucket | null,
+): CategoryMixPoint[] => {
+  const bucketRows = rowsForBucket(rows, bucket);
+  if (bucketRows.length === 0) return [];
+
+  const totals = {
+    Work: 0,
+    Learning: 0,
+    Communication: 0,
+    Other: 0,
+  };
+
+  for (const row of bucketRows) {
+    totals.Work += row.work_ratio;
+    totals.Learning += row.learn_ratio;
+    totals.Communication += row.communication_ratio;
+    totals.Other += Math.max(0, 1 - row.work_ratio - row.learn_ratio - row.communication_ratio);
+  }
+
+  return Object.entries(totals)
+    .map(([name, value]) => ({
+      name,
+      value: Number(((value / bucketRows.length) * 100).toFixed(1)),
+    }))
+    .filter(item => item.value > 0);
+};
+
+export const buildPatternTimeline = (
+  rows: WindowCluster[],
+  bucket: PatternBucket | null,
+): PatternTimelinePoint[] => {
+  return rowsForBucket(rows, bucket).map(row => ({
+    label: row.window_start.slice(11, 16),
+    focusScore: Number((row.avg_focus_score * 100).toFixed(1)),
+    patternBand: 14,
+    focusLevel: row.focus_level,
+    workRatio: Number((row.work_ratio * 100).toFixed(1)),
+    learnRatio: Number((row.learn_ratio * 100).toFixed(1)),
+    communicationRatio: Number((row.communication_ratio * 100).toFixed(1)),
+    anomalyScore: row.anomaly_score,
+  }));
 };
 
 export const describeBucketUnit = (scope: PatternScope): string => {

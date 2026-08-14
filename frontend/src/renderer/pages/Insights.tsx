@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, PieChart, Pie, Cell, Legend,
+  ComposedChart,
 } from 'recharts';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDateContext } from '../contexts/DateContext';
@@ -10,13 +11,18 @@ import { getWindowClusters } from '../services/api';
 import SampleDataBanner from '../components/SampleDataBanner';
 import { formatSegmentTime } from '../utils/time';
 import {
-  buildFocusTrend,
+  buildCategoryMix,
+  buildPatternTimeline,
+  buildWorkRatioTrend,
   bucketWindowsByScope,
   describeBucketUnit,
   describeRangeLabel,
+  type CategoryMixPoint,
   type FocusLevel,
   type PatternBucket,
+  type PatternTimelinePoint,
   type PatternScope,
+  type WorkRatioPoint,
   type WindowCluster,
 } from './patternDetection';
 import './Insights.css';
@@ -50,32 +56,65 @@ const EMOTION_DATA = [
 const FOCUS_LEVEL_LABELS: Record<FocusLevel, string> = {
   high_focus: 'High Focus',
   low_focus: 'Low Focus',
-  distracted: 'Distracted',
+  distracted: 'Moderate Focus',
 };
 
 const PATTERN_SCOPE_LABELS: Record<PatternScope, string> = {
   day: 'Last Day',
-  week: 'Last Week',
+  week: 'Day Analysis',
   month: 'Last Month',
 };
 
 const focusLevelColor = (level: FocusLevel, theme: 'light' | 'dark') => {
   if (level === 'high_focus') return getCategoryColor('learn', theme);
-  if (level === 'low_focus') return getCategoryColor('documentation', theme);
-  return getEmotionColor('stressed', theme);
+  if (level === 'distracted') return getCategoryColor('documentation', theme);
+  return 'var(--color-text-muted)';
 };
 
 const formatPct = (value: number) => `${Math.round(value * 100)}%`;
 
+const recentDates = (endDate: string, days: number): string[] => {
+  const anchor = new Date(`${endDate}T00:00:00`);
+  const dates: string[] = [];
+  for (let offset = 0; offset < days; offset += 1) {
+    const current = new Date(anchor);
+    current.setDate(anchor.getDate() - offset);
+    dates.push(current.toISOString().slice(0, 10));
+  }
+  return dates;
+};
+
+const recentCompletedDates = (endDate: string, days: number): string[] => {
+  const anchor = new Date(`${endDate}T00:00:00`);
+  anchor.setDate(anchor.getDate() - 1);
+  const dates: string[] = [];
+  for (let offset = 0; offset < days; offset += 1) {
+    const current = new Date(anchor);
+    current.setDate(anchor.getDate() - offset);
+    dates.push(current.toISOString().slice(0, 10));
+  }
+  return dates;
+};
+
+const formatShortDate = (value: string) => {
+  const date = new Date(`${value}T00:00:00`);
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+};
+
 const describeScopeSelection = (scope: PatternScope) => {
   if (scope === 'day') return 'the latest completed day (yesterday)';
-  if (scope === 'week') return 'latest weekly clustering run';
+  if (scope === 'week') return 'any of the last 30 completed days';
   return 'latest monthly clustering run';
+};
+
+const describePatternView = (scope: PatternScope) => {
+  if (scope === 'week') return 'Review one selected day from the last 30 completed days.';
+  return `Compare focus patterns ${describeRangeLabel(scope)} using ${describeScopeSelection(scope)}.`;
 };
 
 const Insights: React.FC = () => {
   const { theme } = useTheme();
-  const { refreshCount } = useDateContext();
+  const { selectedDate, refreshCount } = useDateContext();
   const chrome = getChartChrome(theme);
   const emotionDistribution = EMOTION_DATA.map(e => ({ ...e, color: getEmotionColor(e.key, theme) }));
   const [activeTab, setActiveTab] = useState<InsightTab>('Focus Insights');
@@ -84,6 +123,20 @@ const Insights: React.FC = () => {
   const [patternLoading, setPatternLoading] = useState(false);
   const [patternError, setPatternError] = useState<string | null>(null);
   const [selectedBucketId, setSelectedBucketId] = useState<string | null>(null);
+  const [selectedAnalysisDate, setSelectedAnalysisDate] = useState<string | null>(null);
+
+  const analysisDates = useMemo(
+    () => recentCompletedDates(selectedDate, 30),
+    [selectedDate]
+  );
+
+  useEffect(() => {
+    setSelectedAnalysisDate(prev => (
+      prev && analysisDates.includes(prev)
+        ? prev
+        : analysisDates[0] ?? null
+    ));
+  }, [analysisDates]);
 
   useEffect(() => {
     if (activeTab !== 'Pattern Detection') return;
@@ -93,11 +146,44 @@ const Insights: React.FC = () => {
       setPatternLoading(true);
       setPatternError(null);
       try {
-        const rows = await getWindowClusters(undefined, 1000, patternScope) as WindowCluster[];
+        const effectiveScope = patternScope === 'week' ? 'day' : patternScope;
+        const effectiveDate = patternScope === 'week' ? selectedAnalysisDate ?? undefined : undefined;
+        const limit = patternScope === 'month' ? 5000 : 1000;
+        let rows = await getWindowClusters(effectiveDate, limit, effectiveScope) as WindowCluster[];
+        if (patternScope === 'month' && rows.length === 0) {
+          rows = [];
+        }
         if (cancelled) return;
         const sorted = [...rows].sort((a, b) => a.window_start.localeCompare(b.window_start));
         setPatternWindows(sorted);
       } catch (error) {
+        if (
+          patternScope === 'month'
+          && error instanceof Error
+          && error.message.includes('less than or equal to 1000')
+        ) {
+          try {
+            const perDayRows = await Promise.all(
+              recentDates(selectedDate, 35).map(date => (
+                getWindowClusters(date, 500, 'month').catch(() => [])
+              ))
+            );
+            if (cancelled) return;
+            const deduped = new Map<string, WindowCluster>();
+            for (const dayRows of perDayRows as WindowCluster[][]) {
+              for (const row of dayRows) deduped.set(row.window_id, row);
+            }
+            const sorted = [...deduped.values()].sort((a, b) => a.window_start.localeCompare(b.window_start));
+            setPatternWindows(sorted);
+            return;
+          } catch (fallbackError) {
+            if (cancelled) return;
+            setPatternWindows([]);
+            setSelectedBucketId(null);
+            setPatternError(fallbackError instanceof Error ? fallbackError.message : 'Failed to load month pattern data');
+            return;
+          }
+        }
         if (cancelled) return;
         setPatternWindows([]);
         setSelectedBucketId(null);
@@ -109,11 +195,13 @@ const Insights: React.FC = () => {
 
     loadPatterns();
     return () => { cancelled = true; };
-  }, [activeTab, patternScope, refreshCount]);
+  }, [activeTab, patternScope, refreshCount, selectedAnalysisDate, selectedDate]);
+
+  const bucketScope = patternScope === 'week' ? 'day' : patternScope;
 
   const patternBuckets = useMemo(
-    () => bucketWindowsByScope(patternWindows, patternScope),
-    [patternScope, patternWindows]
+    () => bucketWindowsByScope(patternWindows, bucketScope),
+    [bucketScope, patternWindows]
   );
 
   useEffect(() => {
@@ -129,9 +217,73 @@ const Insights: React.FC = () => {
     [patternBuckets, selectedBucketId]
   );
 
-  const selectedTrend = useMemo(
-    () => buildFocusTrend(patternWindows, patternScope, selectedBucket),
-    [patternScope, patternWindows, selectedBucket]
+  const wholeDayBucket = useMemo<PatternBucket | null>(() => {
+    if (patternScope !== 'week' || patternWindows.length === 0) return null;
+
+    const counts: Record<FocusLevel, number> = {
+      high_focus: 0,
+      low_focus: 0,
+      distracted: 0,
+    };
+
+    let totalFocus = 0;
+    let totalWork = 0;
+    let totalLearn = 0;
+    let totalCommunication = 0;
+    let totalAnomaly = 0;
+    let anomalyCount = 0;
+
+    for (const row of patternWindows) {
+      counts[row.focus_level] += 1;
+      totalFocus += row.avg_focus_score;
+      totalWork += row.work_ratio;
+      totalLearn += row.learn_ratio;
+      totalCommunication += row.communication_ratio;
+      if (row.anomaly_score !== null) {
+        totalAnomaly += row.anomaly_score;
+        anomalyCount += 1;
+      }
+    }
+
+    const focusLevel = (Object.entries(counts) as [FocusLevel, number][])
+      .sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'low_focus';
+
+    const sorted = [...patternWindows].sort((a, b) => a.window_start.localeCompare(b.window_start));
+    const start = sorted[0]?.window_start ?? '';
+    const end = sorted[sorted.length - 1]?.window_end ?? '';
+
+    return {
+      id: selectedAnalysisDate ?? 'selected-day',
+      label: selectedAnalysisDate ? formatShortDate(selectedAnalysisDate) : 'Selected Day',
+      rangeLabel: selectedAnalysisDate ?? '',
+      focusLevel,
+      avgFocusScore: totalFocus / patternWindows.length,
+      anomalyScore: anomalyCount > 0 ? totalAnomaly / anomalyCount : null,
+      totalWindows: patternWindows.length,
+      counts,
+      workRatio: totalWork / patternWindows.length,
+      learnRatio: totalLearn / patternWindows.length,
+      communicationRatio: totalCommunication / patternWindows.length,
+      start,
+      end,
+    };
+  }, [patternScope, patternWindows, selectedAnalysisDate]);
+
+  const activeDetailBucket = patternScope === 'week' ? wholeDayBucket : selectedBucket;
+
+  const selectedWorkTrend = useMemo<WorkRatioPoint[]>(
+    () => (patternScope === 'week' ? buildWorkRatioTrend(patternWindows, activeDetailBucket) : []),
+    [activeDetailBucket, patternScope, patternWindows]
+  );
+
+  const selectedCategoryMix = useMemo<CategoryMixPoint[]>(
+    () => (patternScope === 'week' ? buildCategoryMix(patternWindows, activeDetailBucket) : []),
+    [activeDetailBucket, patternScope, patternWindows]
+  );
+
+  const selectedPatternTimeline = useMemo<PatternTimelinePoint[]>(
+    () => (patternScope === 'week' ? buildPatternTimeline(patternWindows, activeDetailBucket) : []),
+    [activeDetailBucket, patternScope, patternWindows]
   );
 
   const patternSummary = useMemo(() => {
@@ -151,7 +303,7 @@ const Insights: React.FC = () => {
       .filter(row => row.anomaly_score !== null)
       .sort((a, b) => (a.anomaly_score ?? 0) - (b.anomaly_score ?? 0))
       .slice(0, 5);
-    const unit = describeBucketUnit(patternScope);
+    const unit = describeBucketUnit(bucketScope);
     const bestBucket = [...patternBuckets]
       .sort((a, b) => b.counts.high_focus - a.counts.high_focus || b.avgFocusScore - a.avgFocusScore)[0] ?? null;
     const weakestBucket = [...patternBuckets]
@@ -165,16 +317,16 @@ const Insights: React.FC = () => {
       findings.push(`Best focus ${unit}: ${bestBucket.label} (${bestBucket.rangeLabel}) with ${formatPct(bestBucket.avgFocusScore)} average focus.`);
     }
     if (weakestBucket) {
-      findings.push(`Weakest ${unit}: ${weakestBucket.label} (${weakestBucket.rangeLabel}) with ${weakestBucket.counts.low_focus + weakestBucket.counts.distracted} lower-focus windows.`);
+      findings.push(`Weakest ${unit}: ${weakestBucket.label} (${weakestBucket.rangeLabel}) with ${weakestBucket.counts.low_focus + weakestBucket.counts.distracted} lower-focus periods.`);
     }
     if (counts.distracted > 0) {
-      findings.push(`${counts.distracted} distracted windows were detected in this ${PATTERN_SCOPE_LABELS[patternScope].toLowerCase()} view.`);
+      findings.push(`${counts.distracted} moderate-focus periods were detected in this ${PATTERN_SCOPE_LABELS[patternScope].toLowerCase()} view.`);
     }
     if (total > 0) {
-      findings.push(`Average focus score across analyzed windows: ${formatPct(avgFocus)}.`);
+      findings.push(`Average focus score across analyzed periods: ${formatPct(avgFocus)}.`);
     }
 
-    const distribution = (Object.keys(counts) as FocusLevel[])
+    const distribution = (['high_focus', 'distracted'] as FocusLevel[])
       .map(level => ({
         key: level,
         name: FOCUS_LEVEL_LABELS[level],
@@ -184,7 +336,7 @@ const Insights: React.FC = () => {
       .filter(item => item.value > 0);
 
     return { counts, total, avgFocus, unusual, findings, distribution };
-  }, [patternBuckets, patternScope, patternWindows, theme]);
+  }, [bucketScope, patternBuckets, patternScope, patternWindows, theme]);
 
   return (
     <div className="insights-page sd-fade-in">
@@ -335,7 +487,7 @@ const Insights: React.FC = () => {
             <div>
               <h3>Pattern Detection</h3>
               <p className="pattern-description">
-                Compare focus patterns {describeRangeLabel(patternScope)} using {describeScopeSelection(patternScope)}.
+                {describePatternView(patternScope)}
               </p>
             </div>
             <div className="pattern-scope-toggle">
@@ -352,6 +504,22 @@ const Insights: React.FC = () => {
             </div>
           </div>
 
+          {patternScope === 'week' && analysisDates.length > 0 && (
+            <div className="pattern-date-strip">
+              {analysisDates.map(date => (
+                <button
+                  key={date}
+                  type="button"
+                  className={`pattern-date-chip ${selectedAnalysisDate === date ? 'active' : ''}`}
+                  onClick={() => setSelectedAnalysisDate(date)}
+                >
+                  <span className="pattern-date-chip-title">{formatShortDate(date)}</span>
+                  <span className="pattern-date-chip-sub">{date}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
           {patternLoading ? (
             <div className="sd-loader">Loading {PATTERN_SCOPE_LABELS[patternScope].toLowerCase()} pattern data…</div>
           ) : patternError ? (
@@ -366,127 +534,326 @@ const Insights: React.FC = () => {
             <div className="sd-card">
               <h3>Pattern Detection</h3>
               <p className="pattern-description">
-                No clustered windows are available for this {patternScope} view yet. Run pattern analysis and refresh to see focus patterns here.
+                No clustered periods are available for this {patternScope === 'week' ? selectedAnalysisDate ?? 'selected day' : patternScope} view yet. Run pattern analysis and refresh to see focus patterns here.
               </p>
             </div>
           ) : (
             <>
-              <div className="sd-grid-3 pattern-overview-grid">
+              <div className="sd-grid-2 pattern-overview-grid">
                 <div className="pattern-stat-card">
                   <span className="pattern-stat-value" style={{ color: focusLevelColor('high_focus', theme) }}>
                     {patternSummary.counts.high_focus}
                   </span>
-                  <span className="pattern-stat-label">High Focus Windows</span>
-                  <span className="pattern-stat-sub">Strong focus in this scope</span>
-                </div>
-                <div className="pattern-stat-card">
-                  <span className="pattern-stat-value" style={{ color: focusLevelColor('low_focus', theme) }}>
-                    {patternSummary.counts.low_focus}
-                  </span>
-                  <span className="pattern-stat-label">Low Focus Windows</span>
-                  <span className="pattern-stat-sub">Windows to improve</span>
+                  <span className="pattern-stat-label">High Focus Periods</span>
+                  <span className="pattern-stat-sub">{patternScope === 'week' ? 'Strong focus on this day' : 'Strong focus in this scope'}</span>
                 </div>
                 <div className="pattern-stat-card">
                   <span className="pattern-stat-value" style={{ color: focusLevelColor('distracted', theme) }}>
                     {patternSummary.counts.distracted}
                   </span>
-                  <span className="pattern-stat-label">Distracted Windows</span>
-                  <span className="pattern-stat-sub">Interruption-heavy periods</span>
+                  <span className="pattern-stat-label">Moderate Focus Periods</span>
+                  <span className="pattern-stat-sub">{patternScope === 'week' ? 'Some focus on this day' : 'Some focus, lighter consistency'}</span>
                 </div>
               </div>
 
               <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
-                <h3>{describeRangeLabel(patternScope).replace('-', ' ').replace('-', ' ').replace(/\b\w/g, char => char.toUpperCase())} View</h3>
+                <h3>
+                  {patternScope === 'week'
+                    ? `Day Analysis${selectedAnalysisDate ? ` | ${selectedAnalysisDate}` : ''}`
+                    : `${describeRangeLabel(patternScope).replace('-', ' ').replace('-', ' ').replace(/\b\w/g, char => char.toUpperCase())} View`}
+                </h3>
                 <p className="pattern-description">
-                  Select a {describeBucketUnit(patternScope)} to inspect the dominant pattern, focus score, and work mix for that period.
+                  {patternScope === 'week'
+                    ? 'This summary covers the full selected day directly.'
+                    : `Select a ${describeBucketUnit(bucketScope)} to inspect the dominant pattern, focus score, and work mix for that period.`}
                 </p>
-                <div className="pattern-period-grid">
-                  {patternBuckets.map((bucket: PatternBucket) => (
-                    <button
-                      key={bucket.id}
-                      type="button"
-                      className={`pattern-period-card ${selectedBucket?.id === bucket.id ? 'active' : ''}`}
-                      onClick={() => setSelectedBucketId(bucket.id)}
-                    >
-                      <span
-                        className="pattern-period-accent"
-                        style={{ background: focusLevelColor(bucket.focusLevel, theme) }}
-                      />
-                      <span className="pattern-period-label">{bucket.label}</span>
-                      <span className="pattern-period-range">{bucket.rangeLabel}</span>
-                      <span className="pattern-period-meta">
-                        {bucket.totalWindows} windows · {formatPct(bucket.avgFocusScore)}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-                {selectedBucket && (
-                  <div className="pattern-window-detail">
-                    <div>
-                      <span className="pattern-detail-label">Period</span>
-                      <strong>{selectedBucket.label}</strong>
-                      <p>{selectedBucket.rangeLabel}</p>
+                {patternScope === 'week' ? (
+                  activeDetailBucket && (
+                    <div className="pattern-window-detail">
+                      <div>
+                        <span className="pattern-detail-label">Day</span>
+                        <strong>{activeDetailBucket.label}</strong>
+                        <p>{activeDetailBucket.rangeLabel}</p>
+                      </div>
+                      <div>
+                        <span className="pattern-detail-label">Dominant Pattern</span>
+                        <strong style={{ color: focusLevelColor(activeDetailBucket.focusLevel, theme) }}>
+                          {FOCUS_LEVEL_LABELS[activeDetailBucket.focusLevel]}
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="pattern-detail-label">Avg Focus</span>
+                        <strong>{formatPct(activeDetailBucket.avgFocusScore)}</strong>
+                      </div>
+                      <div>
+                        <span className="pattern-detail-label">Periods</span>
+                        <strong>{activeDetailBucket.totalWindows}</strong>
+                      </div>
+                      <div>
+                        <span className="pattern-detail-label">Work Mix</span>
+                        <strong>{formatPct(activeDetailBucket.workRatio)}</strong>
+                      </div>
+                      <div>
+                        <span className="pattern-detail-label">Learning Mix</span>
+                        <strong>{formatPct(activeDetailBucket.learnRatio)}</strong>
+                      </div>
+                      <div>
+                        <span className="pattern-detail-label">Communication Mix</span>
+                        <strong>{formatPct(activeDetailBucket.communicationRatio)}</strong>
+                      </div>
+                      <div>
+                        <span className="pattern-detail-label">Anomaly</span>
+                        <strong>{activeDetailBucket.anomalyScore?.toFixed(2) ?? '—'}</strong>
+                      </div>
                     </div>
-                    <div>
-                      <span className="pattern-detail-label">Dominant Pattern</span>
-                      <strong style={{ color: focusLevelColor(selectedBucket.focusLevel, theme) }}>
-                        {FOCUS_LEVEL_LABELS[selectedBucket.focusLevel]}
-                      </strong>
+                  )
+                ) : (
+                  <>
+                    <div className="pattern-period-grid">
+                      {patternBuckets.map((bucket: PatternBucket) => (
+                        <button
+                          key={bucket.id}
+                          type="button"
+                          className={`pattern-period-card ${selectedBucket?.id === bucket.id ? 'active' : ''}`}
+                          onClick={() => setSelectedBucketId(bucket.id)}
+                        >
+                          <span
+                            className="pattern-period-accent"
+                            style={{ background: focusLevelColor(bucket.focusLevel, theme) }}
+                          />
+                          <span className="pattern-period-label">{bucket.label}</span>
+                          <span className="pattern-period-range">{bucket.rangeLabel}</span>
+                          <span className="pattern-period-meta">
+                            {bucket.totalWindows} periods | {formatPct(bucket.avgFocusScore)}
+                          </span>
+                        </button>
+                      ))}
                     </div>
-                    <div>
-                      <span className="pattern-detail-label">Avg Focus</span>
-                      <strong>{formatPct(selectedBucket.avgFocusScore)}</strong>
-                    </div>
-                    <div>
-                      <span className="pattern-detail-label">Windows</span>
-                      <strong>{selectedBucket.totalWindows}</strong>
-                    </div>
-                    <div>
-                      <span className="pattern-detail-label">Work Mix</span>
-                      <strong>{formatPct(selectedBucket.workRatio)}</strong>
-                    </div>
-                    <div>
-                      <span className="pattern-detail-label">Learning Mix</span>
-                      <strong>{formatPct(selectedBucket.learnRatio)}</strong>
-                    </div>
-                    <div>
-                      <span className="pattern-detail-label">Communication Mix</span>
-                      <strong>{formatPct(selectedBucket.communicationRatio)}</strong>
-                    </div>
-                    <div>
-                      <span className="pattern-detail-label">Anomaly</span>
-                      <strong>{selectedBucket.anomalyScore?.toFixed(2) ?? '—'}</strong>
-                    </div>
-                  </div>
+                    {selectedBucket && (
+                      <div className="pattern-window-detail">
+                        <div>
+                          <span className="pattern-detail-label">Period</span>
+                          <strong>{selectedBucket.label}</strong>
+                          <p>{selectedBucket.rangeLabel}</p>
+                        </div>
+                        <div>
+                          <span className="pattern-detail-label">Dominant Pattern</span>
+                          <strong style={{ color: focusLevelColor(selectedBucket.focusLevel, theme) }}>
+                            {FOCUS_LEVEL_LABELS[selectedBucket.focusLevel]}
+                          </strong>
+                        </div>
+                        <div>
+                          <span className="pattern-detail-label">Avg Focus</span>
+                          <strong>{formatPct(selectedBucket.avgFocusScore)}</strong>
+                        </div>
+                        <div>
+                          <span className="pattern-detail-label">Periods</span>
+                          <strong>{selectedBucket.totalWindows}</strong>
+                        </div>
+                        <div>
+                          <span className="pattern-detail-label">Work Mix</span>
+                          <strong>{formatPct(selectedBucket.workRatio)}</strong>
+                        </div>
+                        <div>
+                          <span className="pattern-detail-label">Learning Mix</span>
+                          <strong>{formatPct(selectedBucket.learnRatio)}</strong>
+                        </div>
+                        <div>
+                          <span className="pattern-detail-label">Communication Mix</span>
+                          <strong>{formatPct(selectedBucket.communicationRatio)}</strong>
+                        </div>
+                        <div>
+                          <span className="pattern-detail-label">Anomaly</span>
+                          <strong>{selectedBucket.anomalyScore?.toFixed(2) ?? '—'}</strong>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
 
-              {patternScope === 'week' && selectedBucket && selectedTrend.length > 0 && (
-                <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
-                  <h3>Focus Score vs Time</h3>
-                  <p className="pattern-description">
-                    {selectedBucket.label} ({selectedBucket.rangeLabel}) shown in 10-minute windows.
-                  </p>
-                  <ResponsiveContainer width="100%" height={280}>
-                    <LineChart data={selectedTrend}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={chrome.grid} />
-                      <XAxis dataKey="label" tick={{ fontSize: 12, fill: chrome.axisText }} />
-                      <YAxis domain={[0, 100]} tick={{ fontSize: 12, fill: chrome.axisText }} />
-                      <Tooltip
-                        formatter={(value: number) => [`${value}%`, 'Focus score']}
-                        contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="focusScore"
-                        stroke={getCategoryColor('work', theme)}
-                        strokeWidth={2.5}
-                        dot={false}
-                        activeDot={{ r: 4 }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
+              {patternScope === 'week' && activeDetailBucket && (
+                <>
+                  <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
+                    <h3>Behavior Pattern Timeline</h3>
+                    <p className="pattern-description">
+                      The day summary above shows the dominant cluster, while this chart shows how behavior changed across the selected day.
+                    </p>
+                    {selectedPatternTimeline.length > 0 ? (
+                      <>
+                        <div className="pattern-timeline-legend">
+                          {(['high_focus', 'distracted', 'low_focus'] as FocusLevel[]).map(level => (
+                            <div className="pattern-timeline-legend-item" key={level}>
+                              <span
+                                className="pattern-timeline-swatch"
+                                style={{ background: focusLevelColor(level, theme) }}
+                              />
+                              <span>{FOCUS_LEVEL_LABELS[level]}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <ResponsiveContainer width="100%" height={320}>
+                          <ComposedChart data={selectedPatternTimeline}>
+                            <CartesianGrid strokeDasharray="3 3" stroke={chrome.grid} />
+                            <XAxis dataKey="label" tick={{ fontSize: 12, fill: chrome.axisText }} />
+                            <YAxis
+                              yAxisId="focus"
+                              domain={[0, 100]}
+                              tick={{ fontSize: 12, fill: chrome.axisText }}
+                              label={{ value: 'Focus %', angle: -90, position: 'insideLeft', fill: chrome.axisText }}
+                            />
+                            <YAxis yAxisId="pattern" domain={[0, 20]} hide />
+                            <Tooltip
+                              formatter={(value: number, name: string, entry: { payload?: PatternTimelinePoint }) => {
+                                const payload = entry.payload;
+                                if (name === 'focusScore') return [`${value}%`, 'Focus score'];
+                                if (name === 'patternBand') return [payload ? FOCUS_LEVEL_LABELS[payload.focusLevel] : value, 'Pattern'];
+                                return [value, name];
+                              }}
+                              labelFormatter={(label, payload) => {
+                                const point = payload?.[0]?.payload as PatternTimelinePoint | undefined;
+                                if (!point) return `${label}`;
+                                return `${label} • ${FOCUS_LEVEL_LABELS[point.focusLevel]}`;
+                              }}
+                              contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }}
+                            />
+                            <Bar
+                              yAxisId="pattern"
+                              dataKey="patternBand"
+                              radius={[6, 6, 0, 0]}
+                              barSize={18}
+                            >
+                              {selectedPatternTimeline.map(point => (
+                                <Cell key={`${point.label}-${point.focusLevel}`} fill={focusLevelColor(point.focusLevel, theme)} />
+                              ))}
+                            </Bar>
+                            <Line
+                              yAxisId="focus"
+                              type="monotone"
+                              dataKey="focusScore"
+                              name="focusScore"
+                              stroke={getCategoryColor('work', theme)}
+                              strokeWidth={2.5}
+                              dot={{ r: 3, fill: getCategoryColor('work', theme) }}
+                              activeDot={{ r: 5 }}
+                            />
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      </>
+                    ) : (
+                      <p className="pattern-empty-state">No detailed pattern changes are available for this day yet.</p>
+                    )}
+                  </div>
+
+                  <div className="sd-grid-2" style={{ marginTop: 'var(--space-xl)' }}>
+                  <div className="sd-card">
+                    <div className="pattern-selected-cluster">
+                      <span className="pattern-detail-label">Dominant Cluster for This Day</span>
+                      <strong style={{ color: focusLevelColor(activeDetailBucket.focusLevel, theme) }}>
+                        {FOCUS_LEVEL_LABELS[activeDetailBucket.focusLevel]}
+                      </strong>
+                      <p className="pattern-description">
+                        {activeDetailBucket.label} ({activeDetailBucket.rangeLabel}). This is the most common pattern for the day, not the only one.
+                      </p>
+                    </div>
+                    <h3>Work Ratio vs Time</h3>
+                    <p className="pattern-description">
+                      How work-oriented activity changed through the selected day.
+                    </p>
+                    {selectedWorkTrend.length > 0 ? (
+                      <ResponsiveContainer width="100%" height={280}>
+                        <LineChart data={selectedWorkTrend}>
+                          <CartesianGrid strokeDasharray="3 3" stroke={chrome.grid} />
+                          <XAxis dataKey="label" tick={{ fontSize: 12, fill: chrome.axisText }} />
+                          <YAxis domain={[0, 100]} tick={{ fontSize: 12, fill: chrome.axisText }} />
+                          <Tooltip
+                            formatter={(value: number) => [`${value}%`, 'Work ratio']}
+                            contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="workRatio"
+                            stroke={getCategoryColor('work', theme)}
+                            strokeWidth={2.5}
+                            dot={false}
+                            activeDot={{ r: 4 }}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <p className="pattern-empty-state">No detailed time breakdown is available for this day yet.</p>
+                    )}
+                  </div>
+
+                  <div className="sd-card">
+                    <h3>Category Mix for This Day</h3>
+                    <p className="pattern-description">
+                      Average time split across activity categories for the selected day.
+                    </p>
+                    {selectedCategoryMix.length > 0 ? (
+                      <div className="donut-container pattern-day-mix">
+                        <ResponsiveContainer width="50%" height={240}>
+                          <PieChart>
+                            <Pie
+                              data={selectedCategoryMix}
+                              dataKey="value"
+                              nameKey="name"
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={48}
+                              outerRadius={82}
+                              paddingAngle={2}
+                              strokeWidth={0}
+                            >
+                              {selectedCategoryMix.map(item => (
+                                <Cell
+                                  key={item.name}
+                                  fill={
+                                    item.name === 'Work'
+                                      ? getCategoryColor('work', theme)
+                                      : item.name === 'Learning'
+                                        ? getCategoryColor('learn', theme)
+                                        : item.name === 'Communication'
+                                          ? getCategoryColor('communication', theme)
+                                          : getCategoryColor('documentation', theme)
+                                  }
+                                />
+                              ))}
+                            </Pie>
+                            <Tooltip
+                              formatter={(value: number) => [`${value}%`, 'Category share']}
+                              contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }}
+                            />
+                          </PieChart>
+                        </ResponsiveContainer>
+                        <div className="donut-legend">
+                          {selectedCategoryMix.map(item => (
+                            <div className="legend-item" key={item.name}>
+                              <span
+                                className="legend-dot"
+                                style={{
+                                  background:
+                                    item.name === 'Work'
+                                      ? getCategoryColor('work', theme)
+                                      : item.name === 'Learning'
+                                        ? getCategoryColor('learn', theme)
+                                        : item.name === 'Communication'
+                                          ? getCategoryColor('communication', theme)
+                                          : getCategoryColor('documentation', theme),
+                                }}
+                              />
+                              <span className="legend-name">{item.name}</span>
+                              <span className="legend-value">{item.value}%</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="pattern-empty-state">No category mix is available for this day yet.</p>
+                    )}
+                  </div>
+                  </div>
+                </>
               )}
 
               <div className="sd-grid-2" style={{ marginTop: 'var(--space-xl)' }}>
@@ -505,16 +872,16 @@ const Insights: React.FC = () => {
                 </div>
 
                 <div className="sd-card">
-                  <h3>Most Unusual Windows</h3>
+                  <h3>Most Unusual Periods</h3>
                   <div className="pattern-unusual-list">
-                    {patternSummary.unusual.map(window => (
-                      <div key={window.window_id} className="pattern-unusual-item">
+                    {patternSummary.unusual.map(period => (
+                      <div key={period.window_id} className="pattern-unusual-item">
                         <div>
-                          <strong>{formatSegmentTime(window.window_start)} - {formatSegmentTime(window.window_end)}</strong>
-                          <p>{FOCUS_LEVEL_LABELS[window.focus_level]}</p>
+                          <strong>{formatSegmentTime(period.window_start)} - {formatSegmentTime(period.window_end)}</strong>
+                          <p>{FOCUS_LEVEL_LABELS[period.focus_level]}</p>
                         </div>
                         <div className="pattern-anomaly-pill">
-                          {window.anomaly_score?.toFixed(2) ?? '—'}
+                          {period.anomaly_score?.toFixed(2) ?? '—'}
                         </div>
                       </div>
                     ))}
@@ -525,7 +892,7 @@ const Insights: React.FC = () => {
               <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
                 <h3>Pattern Distribution</h3>
                 <p className="pattern-description">
-                  Average focus across this {patternScope} scope is {formatPct(patternSummary.avgFocus)}.
+                  Average focus across this {patternScope === 'week' ? 'selected day' : `${patternScope} scope`} is {formatPct(patternSummary.avgFocus)}.
                 </p>
                 <div className="donut-container">
                   <ResponsiveContainer width="45%" height={220}>
@@ -549,7 +916,7 @@ const Insights: React.FC = () => {
                           const pct = patternSummary.total > 0
                             ? Math.round((value / patternSummary.total) * 100)
                             : 0;
-                          return [`${value} windows (${pct}%)`, entry?.payload?.name ?? ''];
+                          return [`${value} periods (${pct}%)`, entry?.payload?.name ?? ''];
                         }}
                         contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }}
                       />

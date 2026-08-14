@@ -1,15 +1,17 @@
 import socket
 from typing import List
+from pathlib import Path
 
 from pydantic_settings import BaseSettings
 
 # Stamped on every collected row. Bump when the row shape changes so
 # training/aggregation pipelines can tell schema generations apart.
 SCHEMA_VERSION = "3"
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = "sqlite:///./smartdesk.db"
+    DATABASE_URL: str = f"sqlite:///{(BACKEND_ROOT / 'smartdesk.db').as_posix()}"
     DEFAULT_USER_ID: str = "local_user"
     LOG_LEVEL: str = "INFO"
 

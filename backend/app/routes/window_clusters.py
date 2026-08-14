@@ -15,7 +15,7 @@ router = APIRouter()
 
 @router.get("/window-clusters")
 def get_window_clusters(
-    limit: int = Query(200, gt=0, le=1000, description="Maximum number of recent windows to return"),
+    limit: int = Query(200, gt=0, le=5000, description="Maximum number of recent windows to return"),
     date: str | None = None,
     scope: str = "day",
     db: Session = Depends(get_db),

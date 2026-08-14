@@ -19,8 +19,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from app.core.time import local_now
 from app.services.scoped_window_pattern_analysis import ScopedWindowPatternAnalysisService, compute_scope_runs
 
+BACKEND_ROOT = Path(__file__).resolve().parent
 
-def setup_logging(log_dir: str = "logs") -> None:
+def setup_logging(log_dir: str | Path = BACKEND_ROOT / "logs") -> None:
     log_path = Path(log_dir)
     log_path.mkdir(exist_ok=True)
 
@@ -35,7 +36,9 @@ def setup_logging(log_dir: str = "logs") -> None:
 
     root = logging.getLogger()
     root.setLevel(logging.INFO)
-    root.handlers.clear()
+    for existing in list(root.handlers):
+        existing.close()
+        root.removeHandler(existing)
     root.addHandler(handler)
 
     console = logging.StreamHandler()

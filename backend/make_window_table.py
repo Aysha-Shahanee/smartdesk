@@ -21,7 +21,7 @@ from pathlib import Path
 # ----------------------------------------------------------------------
 # CONFIGURATION – change only if your column names differ in activity_segments
 # ----------------------------------------------------------------------
-DB_PATH = Path("smartdesk.db")
+DB_PATH = Path(__file__).resolve().with_name("smartdesk.db")
 SRC_TABLE = "activity_segments"
 DST_TABLE = "activity_window_10m"
 
