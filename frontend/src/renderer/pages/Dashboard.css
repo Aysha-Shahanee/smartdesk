@@ -129,6 +129,26 @@
   color: var(--color-text-muted);
 }
 
+/* Prediction panel — a whole-card link to the Prediction page. */
+.prediction-panel {
+  cursor: pointer;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.prediction-panel:hover,
+.prediction-panel:focus-visible {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-lg);
+  outline: none;
+}
+
+.prediction-panel:hover .card-goto,
+.prediction-panel:focus-visible .card-goto {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
 .card-header-actions {
   display: flex;
   align-items: center;
@@ -165,11 +185,17 @@
   padding: var(--space-lg);
 }
 
-.github-task-estimate {
+.pred-panel-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-xl);
   margin-top: var(--space-lg);
-  color: var(--color-primary);
-  font-size: var(--font-size-lg);
-  font-weight: 700;
+}
+
+.pred-panel-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
 }
 
 /* Share of the day, trailing the absolute duration in the donut legend. */

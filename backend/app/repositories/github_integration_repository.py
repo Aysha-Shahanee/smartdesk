@@ -3,7 +3,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.models.db_models import GitHubConnectionRecord, GitHubOAuthStateRecord
+from app.models.db.github import GitHubConnectionRecord, GitHubOAuthStateRecord
 
 
 def utc_now() -> str:

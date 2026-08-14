@@ -3,7 +3,8 @@ import unittest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.models.db_models import Base, GitHubInitialPredictionRecord
+from app.core.database import Base
+from app.models.db.github import GitHubInitialPredictionRecord
 from app.services.github_prediction_service import GitHubPredictionService
 from github_data_collection.database import Base as CollectorBase, CollectedTask
 from github_data_collection.initial_sync import initial_sync
@@ -61,7 +62,10 @@ class FakeDeliveries:
 class GitHubPredictionFlowTests(unittest.TestCase):
     def setUp(self):
         smart_engine = create_engine("sqlite:///:memory:")
-        Base.metadata.create_all(smart_engine)
+        Base.metadata.create_all(
+            smart_engine,
+            tables=[GitHubInitialPredictionRecord.__table__],
+        )
         self.smart_session = sessionmaker(bind=smart_engine)()
         collector_engine = create_engine("sqlite:///:memory:")
         CollectorBase.metadata.create_all(collector_engine)

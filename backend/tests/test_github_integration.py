@@ -7,7 +7,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
-from app.models.db_models import Base
+from app.core.database import Base
+from app.models.db.github import GitHubConnectionRecord, GitHubOAuthStateRecord
 from app.models.github_integration import GitHubProjectSelection
 from app.routes.github_integration import setup_page
 from app.services.github_integration_service import GitHubIntegrationService
@@ -16,7 +17,13 @@ from app.services.github_integration_service import GitHubIntegrationService
 class GitHubIntegrationTests(unittest.TestCase):
     def setUp(self):
         engine = create_engine("sqlite:///:memory:")
-        Base.metadata.create_all(engine)
+        Base.metadata.create_all(
+            engine,
+            tables=[
+                GitHubConnectionRecord.__table__,
+                GitHubOAuthStateRecord.__table__,
+            ],
+        )
         self.db = sessionmaker(bind=engine)()
         self.service = GitHubIntegrationService(self.db)
 

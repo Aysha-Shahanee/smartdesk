@@ -25,17 +25,20 @@ This is the frontend for the SmartDesk desktop application, built with React, Ty
 ## Development
 
 ```bash
-# Install the locked dependencies
-npm ci
+# Install dependencies
+npm install
 
-# Start Electron and its Vite renderer (development URL: http://localhost:5173)
+# Start Vite dev server
 npm run dev
+
+# Start Electron with hot reload
+npm run electron:dev
 ```
 
 ## Building for Production
 
 ```bash
-# Build the Electron main, preload, and renderer bundles
+# Build the React app
 npm run build
 
 # Build Electron app
@@ -48,5 +51,3 @@ Create a `.env` file in the frontend directory:
 ```
 VITE_BACKEND_URL=http://127.0.0.1:8000
 ```
-
-`VITE_BACKEND_URL` is required. Use the deployed backend URL for production builds.

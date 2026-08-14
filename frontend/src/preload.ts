@@ -12,6 +12,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAppVersion: () => app.getVersion(),
   // Example: get environment info
   getEnv: () => ({
-    backendUrl: import.meta.env.VITE_BACKEND_URL,
+    backendUrl: import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000',
   }),
 })

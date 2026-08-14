@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.models.db_models import GitHubInitialPredictionRecord
+from app.models.db.github import GitHubInitialPredictionRecord
 
 
 def utc_now() -> str:

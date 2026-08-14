@@ -1,14 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
-import {
-  dayBounds,
-  getAllSegments,
-  getGitHubActiveTasks,
-  getIDEDashboard,
-  getSegmentsSummary,
-  GitHubActiveTask,
-} from '../services/api';
+import { getSegmentsSummary, getAllSegments, getIDEDashboard, dayBounds } from '../services/api';
 import { useDateContext } from '../contexts/DateContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { getCategoryColor, getChartChrome } from '../theme/chartTheme';
@@ -44,9 +37,19 @@ const SWITCH_RATE_SCALE = 30;
    nothing ever fills it in, and there is no stress model at all. Task detection
    is the same story, which is why the whole Prediction page is sample data.
    These are flagged in the UI with <SampleBadge /> rather than presented as
-   measurements. */
+   measurements. The prediction figures mirror the first mock task on the
+   Prediction page so the preview and the page agree. */
 const SAMPLE_FOCUS_SCORE = 78;
 const SAMPLE_STRESS_SCORE = 42;
+const SAMPLE_PREDICTION = {
+  title: 'User Authentication Module',
+  context: 'VS Code • auth-service.ts',
+  status: 'ongoing',
+  progress: 53,
+  timeSpent: '2h 7m',
+  predictedTotal: '4h 0m',
+  remaining: '1h 53m',
+};
 
 interface ActiveSegment {
   start: Date;
@@ -66,11 +69,6 @@ const hourLabel = (h: number) =>
 
 const clock = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-const formatInitialEstimate = (hours?: number) =>
-  hours === undefined || hours === null
-    ? 'Estimate unavailable'
-    : `Initial estimate: ${hours.toFixed(1)} hours`;
-
 const Dashboard: React.FC = () => {
   const { selectedDate, refreshCount } = useDateContext();
   const { theme } = useTheme();
@@ -80,7 +78,6 @@ const Dashboard: React.FC = () => {
   const [summary, setSummary] = useState<any>(null);
   const [segments, setSegments] = useState<any[]>([]);
   const [ide, setIde] = useState<any>(null);
-  const [githubTasks, setGithubTasks] = useState<GitHubActiveTask[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -88,17 +85,15 @@ const Dashboard: React.FC = () => {
     const load = async () => {
       setLoading(true);
       const { from, to } = dayBounds(selectedDate);
-      const [sum, segs, ideSummary, github] = await Promise.all([
+      const [sum, segs, ideSummary] = await Promise.all([
         getSegmentsSummary(selectedDate).catch(() => null),
         getAllSegments(selectedDate).catch(() => []),
         getIDEDashboard(from, to).catch(() => null),
-        getGitHubActiveTasks().catch(() => ({ tasks: [] })),
       ]);
       if (cancelled) return;
       setSummary(sum || EMPTY_SUMMARY);
       setSegments(segs);
       setIde(ideSummary);
-      setGithubTasks(github.tasks);
       setLoading(false);
     };
     load();
@@ -242,7 +237,6 @@ const Dashboard: React.FC = () => {
   if (loading) return <div className="sd-loader">Loading dashboard for {selectedDate}…</div>;
 
   const hasData = total_duration_sec > 0;
-  const githubTask = githubTasks[0];
 
   const trackedSec = total_duration_sec + stats.idleSec;
   const activePct = trackedSec > 0 ? Math.round((total_duration_sec / trackedSec) * 100) : 0;
@@ -534,36 +528,61 @@ const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* ---- Initial GitHub issue prediction ---- */}
-        <div className="sd-card prediction-panel">
+        {/* ---- Prediction → Prediction page ---- */}
+        <div
+          className="sd-card prediction-panel"
+          role="link"
+          tabIndex={0}
+          onClick={() => navigate('/prediction')}
+          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') navigate('/prediction'); }}
+        >
           <div className="card-header">
-            <h3><span className="card-icon">🎯</span> Active GitHub issue</h3>
-            <span className="sd-view-details" onClick={() => navigate('/settings')}>GitHub settings →</span>
+            <h3><span className="card-icon">🎯</span> Prediction</h3>
+            <div className="card-header-actions">
+              <SampleBadge title="Task detection and completion forecasting are not implemented — every figure in this panel is a fixed placeholder." />
+              <span className="card-goto" aria-label="Open Prediction">→</span>
+            </div>
           </div>
-          <p className="card-subtitle">Initial duration estimate captured when work becomes active</p>
+          <p className="card-subtitle">Task-level time forecasting and progress tracking</p>
 
-          {githubTask ? (
-            <div className="pred-panel-task">
-              <div className="pred-task-card-header">
-                <h4>{githubTask.title}</h4>
-                <span className="pred-status-badge ongoing">{githubTask.logical_status}</span>
-              </div>
-              <div className="pred-task-context">{githubTask.repository || 'Repository unavailable'}</div>
-              <div className="github-task-estimate">
-                {formatInitialEstimate(githubTask.predicted_typical_hours)}
-              </div>
-              <div className="card-footnote">
-                Started {new Date(githubTask.started_at).toLocaleString()}
-              </div>
+          <div className="pred-panel-task">
+            <div className="pred-task-card-header">
+              <h4>{SAMPLE_PREDICTION.title}</h4>
+              <span className={`pred-status-badge ${SAMPLE_PREDICTION.status}`}>
+                {SAMPLE_PREDICTION.status}
+              </span>
             </div>
-          ) : (
-            <div className="pred-panel-task">
-              <h4>No ACTIVE GitHub issue</h4>
-              <p className="card-footnote">
-                Connect a Project and map its statuses in Settings, then move an issue to ACTIVE.
-              </p>
+            <div className="pred-task-context">{SAMPLE_PREDICTION.context}</div>
+            <div className="pred-task-progress-row">
+              <div className="pred-progress-track">
+                <div
+                  className="pred-progress-fill"
+                  style={{ width: `${SAMPLE_PREDICTION.progress}%` }}
+                />
+              </div>
+              <span className="pred-progress-pct">{SAMPLE_PREDICTION.progress}%</span>
             </div>
-          )}
+          </div>
+
+          <div className="pred-panel-stats">
+            <div>
+              <span className="metric-card-label">Time Spent</span>
+              <span className="metric-card-value">{SAMPLE_PREDICTION.timeSpent}</span>
+            </div>
+            <div>
+              <span className="metric-card-label">Predicted Total</span>
+              <span className="metric-card-value">{SAMPLE_PREDICTION.predictedTotal}</span>
+            </div>
+            <div>
+              <span className="metric-card-label">Remaining</span>
+              <span className="metric-card-value">{SAMPLE_PREDICTION.remaining}</span>
+            </div>
+          </div>
+
+          <p className="card-footnote">
+            Sample values — task detection is not implemented, so this panel does not change with
+            the selected date.
+          </p>
         </div>
 
         {/* ---- Reference figures. No redirects: these are endpoints, not

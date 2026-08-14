@@ -1,11 +1,7 @@
 import axios from 'axios';
 
 // Base URL from environment or fallback
-const BASE_URL = import.meta.env.VITE_BACKEND_URL;
-
-if (!BASE_URL) {
-  throw new Error('VITE_BACKEND_URL must be configured for the SmartDesk frontend');
-}
+const BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
 
 const api = axios.create({
   baseURL: BASE_URL,
