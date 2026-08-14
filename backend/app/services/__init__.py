@@ -1,15 +1,7 @@
-"""Business services for the session architecture."""
+"""Service package.
 
-from app.services.activity_segment_builder import ActivitySegmentBuilder
-from app.services.categorizer import Categorizer
-from app.services.embedder import Embedder
-from app.services.focus_scorer import FocusScorer
-from app.services.session_timeout_job import SessionTimeoutJob
+Keep package imports lightweight so importing one service module does not
+eagerly load heavyweight dependencies from unrelated modules.
+"""
 
-__all__ = [
-    "ActivitySegmentBuilder",
-    "Categorizer",
-    "Embedder",
-    "FocusScorer",
-    "SessionTimeoutJob",
-]
+__all__: list[str] = []

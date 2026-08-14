@@ -25,7 +25,9 @@ from app.repositories.browser_session_repository import BrowserSessionRepository
 from app.repositories.ide_session_repository import IDESessionRepository
 from app.repositories.os_session_repository import OSSessionRepository
 from app.services.categorizer import Categorizer
-from app.services.categorizer import Categorizer
+from app.services.focus_scorer import NEIGHBOURHOOD_WINDOW_SEC
+from app.services.focus_scorer import FocusScorer
+from app.services.focus_scorer import neighbourhood_switch_rates
 from app.services.embedder import embedder
 
 logger = logging.getLogger(__name__)
@@ -46,6 +48,11 @@ MAX_CATCHUP_SPAN_SEC: int = 6 * 3600
 # Segments are cut at this length so one long focus block becomes a run of
 # bounded rows rather than a single unwieldy one.
 MAX_SEGMENT_SEC: int = 900
+
+# Shortest segment worth scoring. Below this the per-minute rates the focus
+# scorer derives are dominated by rounding, so no score is written at all —
+# better an honest NULL than a confident number built from three seconds.
+MIN_SCORABLE_SEC: int = 5
 
 # Whether to synthesise "gap" rows over stretches no OS session covers.
 #
@@ -94,17 +101,44 @@ class ActivitySegmentBuilder:
             self._device_id = device_id
         self._timer: threading.Timer | None = None
         self._running = False
+        self._interval_seconds = BUILD_INTERVAL_SEC
         self.logger = logging.getLogger(__name__)
 
-    def start(self) -> None:
-        """Start the recurring background timer."""
+    def start(
+        self,
+        user_id: str | None = None,
+        device_id: str | None = None,
+        interval_seconds: int | None = None,
+    ) -> None:
+        """Start the recurring background timer.
+
+        Every argument defaults to whatever ``__init__`` was given, so calling
+        ``start()`` bare keeps the identity the builder was constructed with.
+        A second definition of this method used to shadow this one with defaults
+        of ``user_id="local_user", device_id=""``, which meant the bare call in
+        main.py silently discarded ``settings.DEFAULT_USER_ID`` and
+        ``settings.DEVICE_ID`` and processed whatever those literals named.
+
+        Args:
+            user_id: Override the user to process segments for
+            device_id: Override the device (empty or None keeps the current one)
+            interval_seconds: Override how often the builder runs
+        """
         if self._running:
             self.logger.warning("ActivitySegmentBuilder already running — ignoring start().")
             return
+
+        if user_id:
+            self._user_id = user_id
+        if device_id:
+            self._device_id = device_id
+        if interval_seconds:
+            self._interval_seconds = interval_seconds
+
         self._running = True
         self.logger.info(
-            "ActivitySegmentBuilder started (interval=%ds).",
-            BUILD_INTERVAL_SEC,
+            "ActivitySegmentBuilder started (interval=%ds, user=%s, device=%s).",
+            self._interval_seconds, self._user_id, self._device_id,
         )
         self._schedule()
 
@@ -123,7 +157,7 @@ class ActivitySegmentBuilder:
     def _schedule(self) -> None:
         if not self._running:
             return
-        self._timer = threading.Timer(BUILD_INTERVAL_SEC, self._tick)
+        self._timer = threading.Timer(self._interval_seconds, self._tick)
         self._timer.daemon = True
         self._timer.name = "smartdesk-activity-segment-builder"
         self._timer.start()
@@ -153,7 +187,7 @@ class ActivitySegmentBuilder:
             .scalar()
         )
         if latest is None:
-            return now - timedelta(seconds=BUILD_INTERVAL_SEC)
+            return now - timedelta(seconds=self._interval_seconds)
         if isinstance(latest, str):
             latest = parse_iso(latest)
         latest = latest if latest.tzinfo else latest.replace(tzinfo=now.tzinfo)
@@ -476,25 +510,41 @@ class ActivitySegmentBuilder:
         # Step 8: Validate no temporal overlaps
         validated_segments = self._validate_no_overlaps(complete_segments)
 
-        # Step 9: Categorize segments (embedding-based with rule-based fallback)
+        # Step 9: Categorize segments and calculate focus scoring metadata
         categorized_segments = []
         categorizer = Categorizer()  # Initialize categorizer for this batch
+        focus_scorer = FocusScorer()
+        self._attach_neighbourhood_switches(db, user_id, device_id, validated_segments)
         for seg_dict in validated_segments:
-            # Determine state (simple version matching _determine_state logic)
-            state = "gap" if seg_dict.get("is_gap", False) else "active"
-
-            # Create a temporary segment record for categorization
+            # Resolve state once, here, and let both the categorizer and the
+            # focus scorer read it off seg_dict. It used to be a local that only
+            # the categorizer's throwaway record saw, so FocusScorer's
+            # segment.get("state") was None for every segment ever scored —
+            # idle, locked and active all landed on the same fallback.
+            seg_dict["state"] = self._determine_state(seg_dict)
             temp_segment = ActivitySegmentRecord(
                 title=seg_dict["text_content"].get("title"),
                 detail=seg_dict["text_content"].get("detail"),
                 app_name=seg_dict["text_content"].get("app_name"),
-                state=state,
+                state=seg_dict["state"],
                 primary_source=seg_dict.get("primary_source", "os")
             )
             category, method, confidence = categorizer.predict(temp_segment)
             seg_dict["category"] = category
             seg_dict["category_method"] = method
             seg_dict["category_confidence"] = confidence
+
+            # Below MIN_SCORABLE_SEC the signals are too coarse to mean anything,
+            # so no score is produced. The keys are left absent rather than set
+            # to None: _upsert_segments reads them with .get(key, existing), and
+            # an explicit None would have overwritten a good stored score with
+            # nothing every time such a segment was rebuilt.
+            if seg_dict.get("duration", 0) >= MIN_SCORABLE_SEC:
+                focus_score, concurrent_json, signals_json = focus_scorer.score_segment(seg_dict)
+                seg_dict["focus_score"] = float(focus_score)
+                seg_dict["concurrent_json"] = concurrent_json
+                seg_dict["signals_json"] = signals_json
+
             categorized_segments.append(seg_dict)
 
         # Step 10: Upsert to database
@@ -1206,7 +1256,7 @@ class ActivitySegmentBuilder:
                 existing.app_name = seg_dict["text_content"].get("app_name") or None
                 existing.title = seg_dict["text_content"].get("title") or None
                 existing.detail = seg_dict["text_content"].get("detail") or None
-                existing.state = self._determine_state(seg_dict)
+                existing.state = seg_dict.get("state") or self._determine_state(seg_dict)
                 existing.os_session_id = seg_dict["os_session_ids"][0] if seg_dict["os_session_ids"] else None
                 existing.ide_session_id = seg_dict["ide_session_ids"][0] if seg_dict["ide_session_ids"] else None
                 existing.browser_session_id = seg_dict["browser_session_ids"][0] if seg_dict["browser_session_ids"] else None
@@ -1220,7 +1270,9 @@ class ActivitySegmentBuilder:
                     existing.category = seg_dict.get("category")
                     existing.category_method = seg_dict.get("category_method")
                     existing.category_confidence = seg_dict.get("category_confidence")
-                # focus_score, concurrent_json, signals_json are left as-is (to be updated by other processes)
+                existing.focus_score = seg_dict.get("focus_score", existing.focus_score)
+                existing.concurrent_json = seg_dict.get("concurrent_json", existing.concurrent_json)
+                existing.signals_json = seg_dict.get("signals_json", existing.signals_json)
                 existing.embedding_status = seg_dict.get("embedding_status", existing.embedding_status)
                 existing.sync_status = seg_dict.get("sync_status", existing.sync_status)
 
@@ -1246,7 +1298,7 @@ class ActivitySegmentBuilder:
                     app_name=seg_dict["text_content"].get("app_name") or None,
                     title=seg_dict["text_content"].get("title") or None,
                     detail=seg_dict["text_content"].get("detail") or None,
-                    state=self._determine_state(seg_dict),
+                    state=seg_dict.get("state") or self._determine_state(seg_dict),
                     os_session_id=seg_dict["os_session_ids"][0] if seg_dict["os_session_ids"] else None,
                     ide_session_id=seg_dict["ide_session_ids"][0] if seg_dict["ide_session_ids"] else None,
                     browser_session_id=seg_dict["browser_session_ids"][0] if seg_dict["browser_session_ids"] else None,
@@ -1255,9 +1307,9 @@ class ActivitySegmentBuilder:
                     category=seg_dict.get("category"),
                     category_method=seg_dict.get("category_method"),
                     category_confidence=seg_dict.get("category_confidence"),
-                    focus_score=None,  # To be set by focus scorer
-                    concurrent_json=None,  # JSON of concurrent activity
-                    signals_json=None,  # JSON of signals used for scoring
+                    focus_score=seg_dict.get("focus_score"),
+                    concurrent_json=seg_dict.get("concurrent_json"),
+                    signals_json=seg_dict.get("signals_json"),
                     embedding_status="pending",
                     sync_status="pending",
                 )
@@ -1277,6 +1329,66 @@ class ActivitySegmentBuilder:
             raise
 
         return result
+
+    def _attach_neighbourhood_switches(
+        self,
+        db: DbSession,
+        user_id: str,
+        device_id: str,
+        segments: list[dict],
+    ) -> None:
+        """Set the timeline switch rate on each segment before it is scored.
+
+        A tick only holds the few minutes it just built, but the window the rate
+        is measured over is wider than that, so the segments at the start of a
+        tick would see a truncated neighbourhood and look artificially calm. Rows
+        already persisted just before the window are pulled back in as context —
+        they are not rescored, they only supply boundaries.
+        """
+        if not segments:
+            return
+
+        window = timedelta(seconds=NEIGHBOURHOOD_WINDOW_SEC)
+        earliest = min(seg["start_time"] for seg in segments)
+        latest = max(seg["end_time"] for seg in segments)
+
+        context: list[tuple] = []
+        try:
+            rows = (
+                db.query(
+                    ActivitySegmentRecord.start_time_utc,
+                    ActivitySegmentRecord.end_time_utc,
+                    ActivitySegmentRecord.app_name,
+                )
+                .filter(
+                    ActivitySegmentRecord.user_id == user_id,
+                    ActivitySegmentRecord.device_id == device_id,
+                    ActivitySegmentRecord.start_time_utc >= (earliest - window).replace(tzinfo=None),
+                    ActivitySegmentRecord.start_time_utc < latest.replace(tzinfo=None),
+                )
+                .all()
+            )
+            for start, end, app_name in rows:
+                start = start if start.tzinfo else start.replace(tzinfo=earliest.tzinfo)
+                end = end if end.tzinfo else end.replace(tzinfo=earliest.tzinfo)
+                context.append((start, end, app_name))
+        except Exception:
+            # Context is an accuracy improvement, not a precondition. Losing it
+            # narrows the window for the first segments of a tick; failing the
+            # whole build over it would cost the segments themselves.
+            self.logger.exception(
+                "Could not load neighbourhood context; scoring from this tick alone."
+            )
+            context = []
+
+        timeline = [
+            (seg["start_time"], seg["end_time"], seg["text_content"].get("app_name"))
+            for seg in segments
+        ] + context
+
+        rates = neighbourhood_switch_rates(timeline)
+        for seg, rate in zip(segments, rates):
+            seg[FocusScorer.NEIGHBOURHOOD_KEY] = rate
 
     def _determine_state(self, segment: dict) -> str:
         """Determine the state (active, idle, locked, gap) for a segment.
@@ -1330,143 +1442,23 @@ class ActivitySegmentBuilder:
             return best_state
         return "active"
 
-    def start(self, user_id: str = "local_user", device_id: str = "", interval_seconds: int = 300) -> None:
-        """Start the activity segment builder as a periodic background job.
-
-        Args:
-            user_id: User identifier to process segments for
-            device_id: Device identifier to process segments for (empty for current device)
-            interval_seconds: How often to run the builder (default 5 minutes)
-        """
-        if hasattr(self, '_running') and self._running:
-            self.logger.warning("ActivitySegmentBuilder already running — ignoring start().")
-            return
-
-        self._user_id = user_id
-        self._device_id = device_id or self._get_device_id()
-        self._interval_seconds = interval_seconds
-        self._running = True
-        self._timer = None
-
-        self.logger.info(
-            f"ActivitySegmentBuilder started (interval={interval_seconds}s, user={user_id}, device={self._device_id})."
-        )
-        self._schedule()
-
-    def stop(self) -> None:
-        """Stop the activity segment builder background job."""
-        if not hasattr(self, '_running') or not self._running:
-            return
-
-        self._running = False
-        if self._timer is not None:
-            self._timer.cancel()
-            self._timer = None
-        self.logger.info("ActivitySegmentBuilder stopped.")
-
     def run_once(self) -> str:
-        """Run the builder once immediately (for testing/debug routes).
+        """Run one build cycle immediately (for debug routes and manual triggers).
+
+        Deliberately the same code path as a scheduled tick, so a manual run
+        cannot succeed while the real thing is broken. Note it still cannot
+        reprocess history — the watermark only ever moves forward. Use
+        :meth:`backfill` for that.
 
         Returns:
             Status message
         """
-        db: DbSession = SessionLocal()
         try:
-            # Calculate time window: end now, start from one interval ago
-            end_time = local_now()
-            start_time = end_time - timedelta(seconds=self._interval_seconds)
-
-            # Apply event arrival delay to end time
-            safe_end_time = end_time - timedelta(seconds=EVENT_ARRIVAL_DELAY_SECONDS)
-
-            if start_time >= safe_end_time:
-                self.logger.warning(
-                    f"Invalid time range after applying delay: {start_time.isoformat()} to {safe_end_time.isoformat()}"
-                )
-                return "Skipped: invalid time range"
-
-            # Initialize repositories with current database session
-            os_repo = OSSessionRepository()
-            ide_repo = IDESessionRepository()
-            browser_repo = BrowserSessionRepository()
-            segment_repo = ActivitySegmentRepository()
-
-            self._build_segments_for_timerange(
-                db=db,
-                user_id=self._user_id,
-                device_id=self._device_id,
-                start_time_iso=start_time.isoformat(),
-                end_time_iso=safe_end_time.isoformat(),
-                os_repo=os_repo,
-                ide_repo=ide_repo,
-                browser_repo=browser_repo,
-                segment_repo=segment_repo,
-            )
+            self._build_recent_segments()
             return "OK"
-        except Exception as e:
-            self.logger.error(f"Error in ActivitySegmentBuilder.run_once: {e}")
-            return f"Error: {e}"
-        finally:
-            db.close()
-
-    # ------------------------------------------------------------------ #
-    # Internal                                                             #
-    # ------------------------------------------------------------------ #
-
-    def _schedule(self) -> None:
-        """Schedule the next tick."""
-        if not self._running:
-            return
-        self._timer = threading.Timer(self._interval_seconds, self._tick)
-        self._timer.daemon = True
-        self._timer.name = "smartdesk-activity-segment-builder"
-        self._timer.start()
-
-    def _tick(self) -> None:
-        """Process one scheduling cycle."""
-        try:
-            self._process()
-        except Exception:
-            self.logger.exception("ActivitySegmentBuilder encountered an error during tick.")
-        finally:
-            self._schedule()
-
-    def _process(self) -> None:
-        """Process one build cycle."""
-        db: DbSession = SessionLocal()
-        try:
-            # Calculate time window: end now, start from one interval ago
-            end_time = local_now()
-            start_time = end_time - timedelta(seconds=self._interval_seconds)
-
-            # Apply event arrival delay to end time
-            safe_end_time = end_time - timedelta(seconds=EVENT_ARRIVAL_DELAY_SECONDS)
-
-            if start_time >= safe_end_time:
-                self.logger.warning(
-                    f"Invalid time range after applying delay: {start_time.isoformat()} to {safe_end_time.isoformat()}"
-                )
-                return
-
-            # Initialize repositories with current database session
-            os_repo = OSSessionRepository()
-            ide_repo = IDESessionRepository()
-            browser_repo = BrowserSessionRepository()
-            segment_repo = ActivitySegmentRepository()
-
-            self._build_segments_for_timerange(
-                db=db,
-                user_id=self._user_id,
-                device_id=self._device_id,
-                start_time_iso=start_time.isoformat(),
-                end_time_iso=safe_end_time.isoformat(),
-                os_repo=os_repo,
-                ide_repo=ide_repo,
-                browser_repo=browser_repo,
-                segment_repo=segment_repo,
-            )
-        finally:
-            db.close()
+        except Exception as exc:
+            self.logger.exception("Error in ActivitySegmentBuilder.run_once")
+            return f"Error: {exc}"
 
     # Helper methods to match the interface used in other services
     def local_now_iso(self) -> str:
@@ -1478,11 +1470,3 @@ class ActivitySegmentBuilder:
         """Parse ISO string to datetime."""
         from app.core.time import parse_iso
         return parse_iso(value)
-
-    def _get_device_id(self) -> str:
-        """Get the current device ID."""
-        import socket
-        from app.core.config import settings
-        if not settings.DEVICE_ID:
-            settings.DEVICE_ID = socket.gethostname().lower()
-        return settings.DEVICE_ID

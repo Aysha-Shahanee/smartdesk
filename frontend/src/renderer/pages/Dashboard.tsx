@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
-import { getSegmentsSummary, getAllSegments, getIDEDashboard, dayBounds } from '../services/api';
+import { getSegmentsSummary, getAllSegments, getIDEDashboard, getWindowClusters, dayBounds } from '../services/api';
 import { useDateContext } from '../contexts/DateContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { getCategoryColor, getChartChrome } from '../theme/chartTheme';
 import SampleBadge from '../components/SampleBadge';
 import { capitalize, formatDuration, parseSegmentTime } from '../utils/time';
+import { bucketWindowsByScope, type PatternScope, type WindowCluster } from './patternDetection';
 import './Dashboard.css';
 
 const EMPTY_SUMMARY = {
@@ -78,6 +79,11 @@ const Dashboard: React.FC = () => {
   const [summary, setSummary] = useState<any>(null);
   const [segments, setSegments] = useState<any[]>([]);
   const [ide, setIde] = useState<any>(null);
+  const [patternRows, setPatternRows] = useState<Record<PatternScope, WindowCluster[]>>({
+    day: [],
+    week: [],
+    month: [],
+  });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -85,15 +91,23 @@ const Dashboard: React.FC = () => {
     const load = async () => {
       setLoading(true);
       const { from, to } = dayBounds(selectedDate);
-      const [sum, segs, ideSummary] = await Promise.all([
+      const [sum, segs, ideSummary, dayRows, weekRows, monthRows] = await Promise.all([
         getSegmentsSummary(selectedDate).catch(() => null),
         getAllSegments(selectedDate).catch(() => []),
         getIDEDashboard(from, to).catch(() => null),
+        getWindowClusters(undefined, 1000, 'day').catch(() => []),
+        getWindowClusters(undefined, 1000, 'week').catch(() => []),
+        getWindowClusters(undefined, 1000, 'month').catch(() => []),
       ]);
       if (cancelled) return;
       setSummary(sum || EMPTY_SUMMARY);
       setSegments(segs);
       setIde(ideSummary);
+      setPatternRows({
+        day: dayRows as WindowCluster[],
+        week: weekRows as WindowCluster[],
+        month: monthRows as WindowCluster[],
+      });
       setLoading(false);
     };
     load();
@@ -234,6 +248,27 @@ const Dashboard: React.FC = () => {
     };
   }, [segments, total_duration_sec]);
 
+  /* Strongest and weakest bucket per scope, from the nightly clustering run.
+     Unlike the metrics above these are not scoped to the selected date — they
+     summarise the last completed day, week and month, so the card stays empty
+     until `run_pattern_analysis.py` has populated activity_window_patterns. */
+  const patternSnapshot = useMemo(() => {
+    const summarize = (scope: PatternScope) => {
+      const buckets = bucketWindowsByScope(patternRows[scope], scope);
+      if (buckets.length === 0) return null;
+      return {
+        strongest: [...buckets].sort((a, b) => b.avgFocusScore - a.avgFocusScore)[0],
+        weakest: [...buckets].sort((a, b) => a.avgFocusScore - b.avgFocusScore)[0],
+      };
+    };
+
+    return {
+      day: summarize('day'),
+      week: summarize('week'),
+      month: summarize('month'),
+    };
+  }, [patternRows]);
+
   if (loading) return <div className="sd-loader">Loading dashboard for {selectedDate}…</div>;
 
   const hasData = total_duration_sec > 0;
@@ -324,6 +359,49 @@ const Dashboard: React.FC = () => {
             </div>
           ) : (
             <p className="dash-empty">No activity recorded for {selectedDate}.</p>
+          )}
+        </div>
+
+        {/* ---- Pattern snapshot → Insights ---- */}
+        <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
+          <div className="card-header">
+            <h3><span className="card-icon">🔍</span> Pattern Snapshot</h3>
+            <span className="sd-view-details" onClick={() => navigate('/insights')}>
+              Pattern Detection →
+            </span>
+          </div>
+          {patternSnapshot.day || patternSnapshot.week || patternSnapshot.month ? (
+            <div className="hub-rec-preview">
+              {patternSnapshot.day && (
+                <div className="rec-insight-row">
+                  <span className="rec-icon-small green">↗</span>
+                  <div>
+                    <strong>Yesterday's strongest hour was {patternSnapshot.day.strongest.label}</strong>
+                    <p>{patternSnapshot.day.strongest.rangeLabel} — {Math.round(patternSnapshot.day.strongest.avgFocusScore * 100)}% focus score</p>
+                  </div>
+                </div>
+              )}
+              {patternSnapshot.week && (
+                <div className="rec-insight-row">
+                  <span className="rec-icon-small red">!</span>
+                  <div>
+                    <strong>Last week's weakest day was {patternSnapshot.week.weakest.label}</strong>
+                    <p>{patternSnapshot.week.weakest.rangeLabel} — {Math.round(patternSnapshot.week.weakest.avgFocusScore * 100)}% focus score</p>
+                  </div>
+                </div>
+              )}
+              {patternSnapshot.month && (
+                <div className="rec-insight-row">
+                  <span className="rec-icon-small green">↗</span>
+                  <div>
+                    <strong>Last month's best week was {patternSnapshot.month.strongest.label}</strong>
+                    <p>{patternSnapshot.month.strongest.rangeLabel} — {Math.round(patternSnapshot.month.strongest.avgFocusScore * 100)}% focus score</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="dash-empty">Pattern snapshots appear once clustering results are available.</p>
           )}
         </div>
 

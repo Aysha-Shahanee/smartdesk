@@ -319,6 +319,7 @@ class SegmentItem(BaseModel):
     predicted_method: Optional[str]
     predicted_confidence: Optional[float]
     correction_label: Optional[str]
+    focus_score: Optional[float]
     start_time_utc: Optional[str]
     end_time_utc: Optional[str]
     duration_sec: Optional[int]
@@ -408,6 +409,7 @@ def get_segments_list(
                 predicted_method=seg.category_method,
                 predicted_confidence=seg.category_confidence,
                 correction_label=corrections.get(seg.id),
+                focus_score=seg.focus_score,
                 start_time_utc=seg.start_time_utc.isoformat() if seg.start_time_utc else None,
                 end_time_utc=seg.end_time_utc.isoformat() if seg.end_time_utc else None,
                 duration_sec=seg.duration_sec,
