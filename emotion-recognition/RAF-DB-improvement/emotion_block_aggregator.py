@@ -86,7 +86,6 @@ class EmotionBlockAggregator:
             "dominant_emotion": dominant_emotion,
             "emotion_scores": dict(self.emotion_scores),
             "processed_frame_count": self.processed_frame_count,
-            "synced": False,
             "id": str(uuid4()),
             "created_at": datetime.now().astimezone().isoformat(),
         }
