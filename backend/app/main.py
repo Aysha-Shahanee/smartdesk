@@ -14,6 +14,7 @@ from app.core.database import SessionLocal
 from app.core.logging import setup_logging
 from app.routes import calendar
 from app.routes import dashboard
+from app.routes import emotion
 from app.routes import health
 from app.routes import ingest
 from app.routes import segment_feedback
@@ -66,6 +67,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Graceful shutdown
+    emotion.stop_emotion_service_if_running()
     _activity_segment_builder.stop()
     _calendar_sync_job.stop()
     _os_collector.stop()
@@ -105,6 +107,7 @@ app.add_middleware(
 app.include_router(health.router, prefix="/health", tags=["Health"])
 app.include_router(ingest.router, prefix="/api/v1/ingest", tags=["Ingest"])
 app.include_router(calendar.router, prefix="/api/v1/calendar", tags=["Calendar"])
+app.include_router(emotion.router, prefix="/api/v1/emotion", tags=["Emotion"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
 app.include_router(segment_feedback.router, prefix="/api/v1/activity-segments", tags=["Segment Feedback"])
 
@@ -122,6 +125,7 @@ def root():
             "os_collector",
             "calendar_sync_job",
             "activity_segment_builder",
+            "emotion_detection_api",
         ],
         "dashboard_ui": "/dashboard/ui",
     }

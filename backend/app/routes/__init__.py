@@ -1,5 +1,5 @@
 """API route modules."""
 
-from . import calendar, dashboard, health, ingest, segment_feedback
+from . import calendar, dashboard, emotion, health, ingest, segment_feedback
 
-__all__ = ["calendar", "dashboard", "health", "ingest", "segment_feedback"]
+__all__ = ["calendar", "dashboard", "emotion", "health", "ingest", "segment_feedback"]
