@@ -16,6 +16,8 @@ from app.routes import calendar
 from app.routes import dashboard
 from app.routes import health
 from app.routes import ingest
+from app.routes import recommendations
+from app.routes import reports
 from app.routes import segment_feedback
 from app.routes import window_clusters
 from app.services.activity_segment_builder import ActivitySegmentBuilder
@@ -23,6 +25,7 @@ from app.services.calendar_sync_job import CalendarSyncJob
 from app.services.liveness import get_last_heartbeat
 from app.services.liveness import reconcile_open_sessions
 from app.services.os_collector import OSCollector
+from app.services.recommendation_job import RecommendationJob
 from app.services.session_timeout_job import SessionTimeoutJob
 from app.services.work_period_scheduler import WorkPeriodScheduler
 
@@ -37,6 +40,7 @@ _activity_segment_builder = ActivitySegmentBuilder(
     user_id=settings.DEFAULT_USER_ID,
     device_id=settings.DEVICE_ID,
 )
+_recommendation_job = RecommendationJob(user_id=settings.DEFAULT_USER_ID)
 
 
 @asynccontextmanager
@@ -63,10 +67,12 @@ async def lifespan(app: FastAPI):
     _os_collector.start()
     _calendar_sync_job.start()
     _activity_segment_builder.start()
+    _recommendation_job.start()
 
     yield
 
     # Graceful shutdown
+    _recommendation_job.stop()
     _activity_segment_builder.stop()
     _calendar_sync_job.stop()
     _os_collector.stop()
@@ -109,6 +115,8 @@ app.include_router(calendar.router, prefix="/api/v1/calendar", tags=["Calendar"]
 app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
 app.include_router(segment_feedback.router, prefix="/api/v1/activity-segments", tags=["Segment Feedback"])
 app.include_router(window_clusters.router, prefix="/api/v1", tags=["Window Clusters"])
+app.include_router(recommendations.router, prefix="/api/v1", tags=["Recommendations"])
+app.include_router(reports.router, prefix="/api/v1", tags=["Reports"])
 
 
 @app.get("/")
@@ -124,6 +132,7 @@ def root():
             "os_collector",
             "calendar_sync_job",
             "activity_segment_builder",
+            "recommendation_job",
         ],
         "dashboard_ui": "/dashboard/ui",
     }

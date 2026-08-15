@@ -81,16 +81,32 @@ def compute_scope_runs(run_at: datetime) -> list[ScopeRun]:
 
 
 class ScopedWindowPatternAnalysisService:
-    FEATURE_COLUMNS = [
+    #: The clustering feature vector, named once. ``FEATURE_COLUMNS`` below
+    #: derives the SELECT list from this, so the two can no longer disagree --
+    #: they were previously two hand-maintained lists and a column added to one
+    #: would have been silently dropped from the other.
+    #:
+    #: ``documentation_ratio`` is deliberately absent. No segment can carry that
+    #: category (ck_activity_segments_category rejects it, and
+    #: Categorizer.CATEGORY_ALIASES rewrites it to "work" first), so the column
+    #: was constant zero across all 5,125 recorded windows. StandardScaler gives
+    #: a zero-variance column scale 1.0 and centres it to zero, so it survived
+    #: as a permanently-zero dimension diluting every distance KMeans measured.
+    FEATURE_NAMES = (
         "active_seconds", "idle_seconds",
         "active_ratio", "idle_ratio",
         "app_switches", "category_switches",
         "unique_apps",
         "work_ratio", "learn_ratio", "communication_ratio",
-        "entertainment_ratio", "documentation_ratio",
+        "entertainment_ratio",
         "system_ratio", "other_ratio",
         "longest_continuous_seconds",
-        f"{AVG_FOCUS_SCORE_SQL} AS avg_focus_score",
+        "avg_focus_score",
+    )
+
+    FEATURE_COLUMNS = [
+        f"{AVG_FOCUS_SCORE_SQL} AS avg_focus_score" if name == "avg_focus_score" else name
+        for name in FEATURE_NAMES
     ]
 
     def __init__(self, session_factory=SessionLocal) -> None:
@@ -137,14 +153,10 @@ class ScopedWindowPatternAnalysisService:
         return [dict(row) for row in rows]
 
     def _cluster(self, windows: list[dict]) -> tuple[np.ndarray, np.ndarray]:
-        feature_names = [
-            "active_seconds", "idle_seconds", "active_ratio", "idle_ratio",
-            "app_switches", "category_switches", "unique_apps",
-            "work_ratio", "learn_ratio", "communication_ratio",
-            "entertainment_ratio", "documentation_ratio", "system_ratio", "other_ratio",
-            "longest_continuous_seconds", "avg_focus_score",
-        ]
-        X = np.array([[float(window[name]) for name in feature_names] for window in windows], dtype=np.float32)
+        X = np.array(
+            [[float(window[name]) for name in self.FEATURE_NAMES] for window in windows],
+            dtype=np.float32,
+        )
         X_scaled = StandardScaler().fit_transform(X)
 
         kmeans = KMeans(

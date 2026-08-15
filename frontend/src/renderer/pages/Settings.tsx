@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { getRecommendations } from '../services/api';
 import './Settings.css';
 
 interface PrivacySettings {
@@ -14,6 +15,17 @@ interface Integration {
   color: string;
 }
 
+interface NotifySettings {
+  enabled: boolean;
+  quietFrom: number;
+  quietTo: number;
+  muted: string[];
+  shownToday: number;
+}
+
+/** Hours offered for the quiet-hours pickers. */
+const HOURS = Array.from({ length: 24 }, (_, h) => h);
+
 const Settings: React.FC = () => {
   const [privacy, setPrivacy] = useState<PrivacySettings>({
     webcamEmotion: true,
@@ -26,6 +38,42 @@ const Settings: React.FC = () => {
     { name: 'GitHub', status: 'Connected (read-only)', icon: '🐙', color: '#8B5CF6' },
     { name: 'Google Calendar', status: 'Connected (read-only)', icon: '📅', color: '#94A3B8' },
   ]);
+
+  /* Notification throttles live in the Electron main process, because it is
+     the thing that actually raises a toast and it keeps running when the
+     window is closed. This panel is a view onto that state, not a second copy
+     of it — every change round-trips through the bridge and the response is
+     what gets rendered. */
+  const [notify, setNotify] = useState<NotifySettings | null>(null);
+  const [mutable, setMutable] = useState<string[]>([]);
+
+  const pushNotify = useCallback(async (patch: Record<string, unknown>) => {
+    if (!window.electronAPI) return;
+    try {
+      setNotify(await window.electronAPI.notificationSettings(patch));
+    } catch {
+      /* The main process is the authority; a failed write leaves it unchanged. */
+    }
+  }, []);
+
+  useEffect(() => { void pushNotify({}); }, [pushNotify]);
+
+  /* Rule ids that have actually produced a card, so the mute list offers real
+     rules rather than all 72 of them. */
+  useEffect(() => {
+    let cancelled = false;
+    getRecommendations()
+      .then(res => {
+        if (cancelled) return;
+        const ids = new Set<string>();
+        Object.values(res.sections).flat().forEach(rec => {
+          if (rec.scope === 'live' && rec.severity === 'high') ids.add(rec.rule_id);
+        });
+        setMutable([...ids].sort());
+      })
+      .catch(() => setMutable([]));
+    return () => { cancelled = true; };
+  }, []);
 
   const togglePrivacy = (key: keyof PrivacySettings) => {
     setPrivacy(prev => {
@@ -99,6 +147,106 @@ const Settings: React.FC = () => {
             <span className="sd-toggle-slider" />
           </label>
         </div>
+      </div>
+
+
+      {/* Notifications */}
+      <div className="sd-card settings-section">
+        <div className="section-header">
+          <span className="section-icon">🔔</span>
+          <div>
+            <h2>Notifications</h2>
+            <p>
+              Only high-severity live findings can interrupt, at most one every 45
+              minutes and four a day. {notify ? `${notify.shownToday} shown today.` : ''}
+            </p>
+          </div>
+        </div>
+        <div className="settings-divider" />
+
+        {!window.electronAPI ? (
+          <p className="dash-empty">
+            Desktop notifications are available in the SmartDesk app. This is a
+            browser session, so nothing here would have anywhere to appear.
+          </p>
+        ) : !notify ? (
+          <p className="dash-empty">Reading notification settings…</p>
+        ) : (
+          <>
+            <div className="data-row">
+              <div>
+                <strong>Allow desktop notifications</strong>
+                <p>Turn this off to keep every finding inside the app.</p>
+              </div>
+              <label className="sd-toggle">
+                <input
+                  type="checkbox"
+                  checked={notify.enabled}
+                  onChange={() => void pushNotify({ enabled: !notify.enabled })}
+                />
+                <span className="sd-toggle-slider" />
+              </label>
+            </div>
+
+            <div className="data-row">
+              <div>
+                <strong>Quiet hours</strong>
+                <p>Nothing is raised between these times.</p>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <select
+                  className="sd-select"
+                  value={notify.quietFrom}
+                  onChange={e => void pushNotify({ quietFrom: Number(e.target.value) })}
+                >
+                  {HOURS.map(h => (
+                    <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>
+                  ))}
+                </select>
+                <span style={{ color: 'var(--color-text-secondary)' }}>to</span>
+                <select
+                  className="sd-select"
+                  value={notify.quietTo}
+                  onChange={e => void pushNotify({ quietTo: Number(e.target.value) })}
+                >
+                  {HOURS.map(h => (
+                    <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="data-row">
+              <div>
+                <strong>Muted rules</strong>
+                <p>
+                  {notify.muted.length > 0
+                    ? `${notify.muted.join(', ')} will not raise a toast.`
+                    : 'Nothing is muted. Rules you mute still appear on the Recommendations page.'}
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                {mutable.length === 0 && (
+                  <span className="metric-card-sub">No interrupting rules have fired yet</span>
+                )}
+                {mutable.map(ruleId => {
+                  const muted = notify.muted.includes(ruleId);
+                  return (
+                    <button
+                      key={ruleId}
+                      className="sd-btn"
+                      onClick={() =>
+                        void pushNotify(muted ? { unmuteRule: ruleId } : { muteRule: ruleId })
+                      }
+                    >
+                      {muted ? `Unmute ${ruleId}` : `Mute ${ruleId}`}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Data Control */}

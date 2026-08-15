@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     # similarity until something retrained it. It is persisted here instead.
     MODEL_STORE_DIR: str = "./model_store"
 
+    # Daily deep-work goal in minutes, for DY-16. Zero means "not set", which
+    # is the default on purpose: a target nobody chose is a stick to beat
+    # yourself with, and the rule stays silent until someone opts in.
+    DAILY_DEEP_WORK_TARGET_MIN: int = 0
+
     # ── Shared label sheet ─────────────────────────────────────────
     # Mirrors every typed label correction to a Google Sheet so a team can
     # pool training data. The database is always written first and remains
