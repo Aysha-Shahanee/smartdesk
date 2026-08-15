@@ -147,8 +147,11 @@ def main():
     # ------------------------------------------------------------------
     # 6️⃣  Iterate over windows and aggregate
     # ------------------------------------------------------------------
+    # Plain ASCII: this runs unattended from a Scheduled Task, where stdout is
+    # a cp1252 console. A non-breaking hyphen or an ellipsis here raises
+    # UnicodeEncodeError and kills the run before a single window is written.
     print(f"Processing windows from {window_start.isoformat()} "
-          f"to {window_end_exclusive.isoformat()} (10‑min steps)…")
+          f"to {window_end_exclusive.isoformat()} (10-min steps)...")
     total_windows = 0
 
     while window_start < window_end_exclusive:
@@ -291,7 +294,7 @@ def main():
         total_windows += 1
         window_start = win_end   # advance to next window
 
-    print(f"✅ Finished. {total_windows} windows written to table '{DST_TABLE}'.")
+    print(f"Finished. {total_windows} windows written to table '{DST_TABLE}'.")
     con.close()
 
 if __name__ == "__main__":

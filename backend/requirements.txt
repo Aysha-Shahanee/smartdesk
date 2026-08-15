@@ -2,6 +2,9 @@ fastapi
 uvicorn[standard]
 alembic
 pydantic>=2.9.0
+# tests/test_categorizer.py imports pytest; without it that module fails to
+# import and unittest discovery silently skips a quarter of the suite.
+pytest
 python-dotenv
 sqlalchemy
 tzdata

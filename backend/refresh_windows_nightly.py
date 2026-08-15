@@ -5,6 +5,7 @@ This script recreates the window table from scratch using the existing
 make_window_table.py logic to recover from any trigger failures or schema changes.
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +27,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+#: Columns run_pattern_analysis.py reads that make_window_table.py does not
+#: create. They were only ever added by create_window_triggers.sql, a loose
+#: file nothing runs, so a fresh install failed with
+#: "no such column: sum_focus_duration". Added here instead, idempotently,
+#: so the nightly job is self-sufficient.
+ADDITIVE_COLUMNS = [
+    ("sum_active_seconds", "REAL"), ("sum_idle_seconds", "REAL"),
+    ("sum_app_switches", "INTEGER"), ("sum_category_switches", "INTEGER"),
+    ("sum_unique_apps", "INTEGER"), ("sum_work_time", "REAL"),
+    ("sum_learn_time", "REAL"), ("sum_communication_time", "REAL"),
+    ("sum_entertainment_time", "REAL"), ("sum_documentation_time", "REAL"),
+    ("sum_system_time", "REAL"), ("sum_other_time", "REAL"),
+    ("sum_focus_weighted", "REAL"), ("sum_focus_duration", "REAL"),
+    ("seg_count", "INTEGER"),
+]
+
+
+def ensure_additive_columns(cur) -> int:
+    """Add any missing additive columns. SQLite has no ADD COLUMN IF NOT EXISTS."""
+    existing = {row[1] for row in cur.execute("PRAGMA table_info(activity_window_10m)")}
+    added = 0
+    for name, sql_type in ADDITIVE_COLUMNS:
+        if name not in existing:
+            cur.execute(f"ALTER TABLE activity_window_10m ADD COLUMN {name} {sql_type}")
+            added += 1
+    if added:
+        logger.info("Added %d missing additive column(s)", added)
+    return added
+
+
 def populate_additive_columns():
     """Populate the additive columns based on the freshly built window table."""
     logger.info("Populating additive columns after window table rebuild...")
@@ -33,6 +64,7 @@ def populate_additive_columns():
     try:
         con = sqlite3.connect(DB_PATH)
         cur = con.cursor()
+        ensure_additive_columns(cur)
 
         # Populate additive columns based on current window table values
         cur.execute("""
@@ -75,11 +107,18 @@ def main():
             raise FileNotFoundError(f"make_window_table.py not found at {script_path}")
 
         logger.info(f"Running {script_path}")
+        # Force UTF-8 on the child: this runs from a Scheduled Task where the
+        # console is cp1252, and text=True would otherwise decode with that
+        # codec and blow up on any non-ASCII the child prints.
+        child_env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
         result = subprocess.run(
             [sys.executable, str(script_path)],
             check=True,
             capture_output=True,
-            text=True
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=child_env,
         )
 
         logger.info("Window table rebuild completed successfully")

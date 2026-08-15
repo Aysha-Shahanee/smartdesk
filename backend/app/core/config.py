@@ -37,6 +37,20 @@ class Settings(BaseSettings):
     # Public URL of this backend, used to build the OAuth redirect URI.
     BACKEND_BASE_URL: str = "http://127.0.0.1:8000"
 
+    # ── Embedding model location ───────────────────────────────────
+    # Point EMBEDDING_MODEL_PATH at an unpacked model directory to load the
+    # encoder from disk instead of huggingface.co — required for a packaged
+    # build, which otherwise needs ~88 MB of network on first run and fails
+    # offline. EMBEDDING_CACHE_DIR only redirects where a hub download lands.
+    EMBEDDING_MODEL_PATH: str = ""
+    EMBEDDING_CACHE_DIR: str = ""
+
+    # ── Supervised model store ─────────────────────────────────────
+    # The trained classifier used to live only in process memory, so every
+    # restart silently reverted categorisation to rules + embedding
+    # similarity until something retrained it. It is persisted here instead.
+    MODEL_STORE_DIR: str = "./model_store"
+
     # ── Shared label sheet ─────────────────────────────────────────
     # Mirrors every typed label correction to a Google Sheet so a team can
     # pool training data. The database is always written first and remains
