@@ -14,6 +14,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.ensemble import IsolationForest
+from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
 from app.core.config import settings
@@ -128,7 +129,7 @@ class PatternAnalysisService:
         if self.cluster_labels is None or self.anomaly_scores is None:
             self.train_models()
 
-    def save_results(self, session: SessionLocal | None = None) -> None:
+    def save_results(self, session: Session | None = None) -> None:
         if self.segment_ids is None or self.cluster_labels is None or self.anomaly_scores is None:
             raise RuntimeError("Model not trained. Call run() or train_models() first.")
         close_after = False
