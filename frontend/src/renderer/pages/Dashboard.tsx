@@ -362,49 +362,6 @@ const Dashboard: React.FC = () => {
           )}
         </div>
 
-        {/* ---- Pattern snapshot → Insights ---- */}
-        <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
-          <div className="card-header">
-            <h3><span className="card-icon">🔍</span> Pattern Snapshot</h3>
-            <span className="sd-view-details" onClick={() => navigate('/insights')}>
-              Pattern Detection →
-            </span>
-          </div>
-          {patternSnapshot.day || patternSnapshot.week || patternSnapshot.month ? (
-            <div className="hub-rec-preview">
-              {patternSnapshot.day && (
-                <div className="rec-insight-row">
-                  <span className="rec-icon-small green">↗</span>
-                  <div>
-                    <strong>Yesterday's strongest hour was {patternSnapshot.day.strongest.label}</strong>
-                    <p>{patternSnapshot.day.strongest.rangeLabel} — {Math.round(patternSnapshot.day.strongest.avgFocusScore * 100)}% focus score</p>
-                  </div>
-                </div>
-              )}
-              {patternSnapshot.week && (
-                <div className="rec-insight-row">
-                  <span className="rec-icon-small red">!</span>
-                  <div>
-                    <strong>Last week's weakest day was {patternSnapshot.week.weakest.label}</strong>
-                    <p>{patternSnapshot.week.weakest.rangeLabel} — {Math.round(patternSnapshot.week.weakest.avgFocusScore * 100)}% focus score</p>
-                  </div>
-                </div>
-              )}
-              {patternSnapshot.month && (
-                <div className="rec-insight-row">
-                  <span className="rec-icon-small green">↗</span>
-                  <div>
-                    <strong>Last month's best week was {patternSnapshot.month.strongest.label}</strong>
-                    <p>{patternSnapshot.month.strongest.rangeLabel} — {Math.round(patternSnapshot.month.strongest.avgFocusScore * 100)}% focus score</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <p className="dash-empty">Pattern snapshots appear once clustering results are available.</p>
-          )}
-        </div>
-
         {/* ---- Daily Activity → Timeline / Usage Breakdown → Timeline OS tab ---- */}
         <div className="sd-grid-2">
           <div className="sd-card">
@@ -661,6 +618,49 @@ const Dashboard: React.FC = () => {
             Sample values — task detection is not implemented, so this panel does not change with
             the selected date.
           </p>
+        </div>
+
+        {/* ---- Pattern snapshot → Insights ---- */}
+        <div className="sd-card">
+          <div className="card-header">
+            <h3><span className="card-icon">🔍</span> Pattern Snapshot</h3>
+            <span className="sd-view-details" onClick={() => navigate('/insights')}>
+              Pattern Detection →
+            </span>
+          </div>
+          {patternSnapshot.day || patternSnapshot.week || patternSnapshot.month ? (
+            <div className="hub-rec-preview">
+              {patternSnapshot.day && (
+                <div className="rec-insight-row">
+                  <span className="rec-icon-small green">↗</span>
+                  <div>
+                    <strong>Yesterday's strongest hour was {patternSnapshot.day.strongest.label}</strong>
+                    <p>{patternSnapshot.day.strongest.rangeLabel} — {Math.round(patternSnapshot.day.strongest.avgFocusScore * 100)}% focus score</p>
+                  </div>
+                </div>
+              )}
+              {patternSnapshot.week && (
+                <div className="rec-insight-row">
+                  <span className="rec-icon-small red">!</span>
+                  <div>
+                    <strong>Last week's weakest day was {patternSnapshot.week.weakest.label}</strong>
+                    <p>{patternSnapshot.week.weakest.rangeLabel} — {Math.round(patternSnapshot.week.weakest.avgFocusScore * 100)}% focus score</p>
+                  </div>
+                </div>
+              )}
+              {patternSnapshot.month && (
+                <div className="rec-insight-row">
+                  <span className="rec-icon-small green">↗</span>
+                  <div>
+                    <strong>Last month's best week was {patternSnapshot.month.strongest.label}</strong>
+                    <p>{patternSnapshot.month.strongest.rangeLabel} — {Math.round(patternSnapshot.month.strongest.avgFocusScore * 100)}% focus score</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="dash-empty">Pattern snapshots appear once clustering results are available.</p>
+          )}
         </div>
 
         {/* ---- Reference figures. No redirects: these are endpoints, not
