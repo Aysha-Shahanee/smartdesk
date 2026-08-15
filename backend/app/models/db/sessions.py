@@ -58,6 +58,7 @@ class IDESessionRecord(Base):
     workspace_name = Column(String, nullable=True)
     project_path = Column(String, nullable=True)
     repo_id = Column(String, nullable=True)
+    repository = Column(String, nullable=True)
     git_branch = Column(String, nullable=True)
     active_file_path = Column(String, nullable=True)
     active_file_name = Column(String, nullable=True)

@@ -3,7 +3,7 @@
 // but the exposed functions are limited to what we attach to `window` or via
 // contextBridge.
 
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import { app } from 'electron'
 
 // Expose some helpful variables to the renderer process.
@@ -14,4 +14,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getEnv: () => ({
     backendUrl: import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000',
   }),
+  openGitHubExternal: (url: string) => ipcRenderer.invoke('open-github-external', url),
 })

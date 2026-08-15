@@ -12,11 +12,36 @@ logger = logging.getLogger("smartdesk.collector.github.metadata")
 
 class TaskMetadataService:
     def __init__(self, collected=None, active=None, fetcher=collect,
-                 on_lifecycle_started=None):
+                 on_lifecycle_started=None, connected_github_login=None):
         self.collected = collected or CollectedTaskRepository()
         self.active = active or ActiveTaskRepository()
         self.fetcher = fetcher
         self.on_lifecycle_started = on_lifecycle_started
+        self.connected_github_login = (
+            connected_github_login.strip().casefold()
+            if connected_github_login and connected_github_login.strip()
+            else None
+        )
+
+    def _is_owned(self, metadata: dict) -> bool:
+        """Require assignee membership when SmartDesk supplied a GitHub login."""
+        if self.connected_github_login is None:
+            return True
+        assignees = {
+            str(login).strip().casefold()
+            for login in metadata.get("assignees") or []
+            if str(login).strip()
+        }
+        project_item_id = metadata.get("project_item_id")
+        if not assignees:
+            logger.info("Skipped %s — unassigned", project_item_id)
+            return False
+        if self.connected_github_login not in assignees:
+            logger.info(
+                "Skipped %s — not assigned to connected user", project_item_id
+            )
+            return False
+        return True
 
     def _notify_started(self, metadata: dict, lifecycle_id: int) -> None:
         metadata["collector_lifecycle_id"] = lifecycle_id
@@ -45,6 +70,9 @@ class TaskMetadataService:
         metadata = self._fetch(project_item_id, token)
         lifecycle_id = self.collected.update_open(project_item_id, metadata)
         if lifecycle_id is None:
+            if not self._is_owned(metadata):
+                self.active.remove(project_item_id)
+                return metadata
             self._started(metadata)
         else:
             self.active.add(metadata)

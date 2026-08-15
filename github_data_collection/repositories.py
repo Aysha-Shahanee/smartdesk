@@ -102,6 +102,7 @@ class CollectedTaskRepository:
         return {
             "project_item_id": metadata.get("project_item_id"),
             "issue_id": metadata.get("issue_id"),
+            "issue_number": metadata.get("issue_number"),
             "title": metadata.get("title"),
             "description": metadata.get("description"),
             "status": metadata.get("status"),
@@ -126,6 +127,7 @@ class ActiveTaskRepository:
                 session.add(ActiveTask(
                     project_item_id=project_item_id,
                     issue_id=metadata["issue_id"],
+                    issue_number=metadata.get("issue_number"),
                     title=metadata.get("title") or "",
                     started_at=metadata["detected_start_time"],
                     smartdesk_user_id=metadata.get("smartdesk_user_id"),
@@ -134,6 +136,7 @@ class ActiveTaskRepository:
                 ))
             else:
                 row.issue_id = metadata["issue_id"]
+                row.issue_number = metadata.get("issue_number")
                 row.title = metadata.get("title") or ""
                 row.started_at = metadata["detected_start_time"]
                 row.smartdesk_user_id = metadata.get("smartdesk_user_id") or row.smartdesk_user_id
@@ -157,6 +160,7 @@ class ActiveTaskRepository:
                 result.append({
                     "project_item_id": row.project_item_id,
                     "issue_id": row.issue_id,
+                    "issue_number": lifecycle.issue_number,
                     "title": row.title,
                     "started_at": row.started_at,
                     "project_id": row.project_id,

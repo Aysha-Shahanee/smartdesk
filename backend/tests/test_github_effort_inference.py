@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import math
 from pathlib import Path
 
 from app.core.config import settings
@@ -28,6 +29,9 @@ class GitHubEffortInferenceTests(unittest.TestCase):
         return data
 
     def assert_prediction(self, result):
+        self.assertTrue(math.isfinite(result["low_hours"]))
+        self.assertTrue(math.isfinite(result["typical_hours"]))
+        self.assertTrue(math.isfinite(result["high_hours"]))
         self.assertGreaterEqual(result["low_hours"], 0)
         self.assertGreaterEqual(result["typical_hours"], 0)
         self.assertGreaterEqual(result["high_hours"], 0)

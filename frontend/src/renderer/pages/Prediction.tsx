@@ -4,6 +4,11 @@ import {
   getGitHubActiveTasks,
   GitHubActiveTask,
 } from '../services/api';
+import {
+  formatHoursAsDuration,
+  formatTimeSpent,
+  getRemainingEstimateStatus,
+} from '../utils/timeSpent.mjs';
 import './Prediction.css';
 
 const REFRESH_INTERVAL_MS = 15_000;
@@ -127,7 +132,7 @@ const Prediction: React.FC = () => {
               <div className="pred-detail-progress">
                 <div className="pred-detail-progress-label">
                   <span>Lifecycle progress</span>
-                  <span>Not calculated</span>
+                  <span>Not measured</span>
                 </div>
                 <div className="pred-progress-track large unavailable" />
               </div>
@@ -136,20 +141,46 @@ const Prediction: React.FC = () => {
             <div className="pred-stats-grid">
               <div className="sd-card pred-stat-card">
                 <span className="pred-stat-label">Time Spent</span>
-                <span className="pred-stat-value unavailable-value">—</span>
-                <span className="pred-stat-sub">Task-specific active time unavailable</span>
+                {formatTimeSpent(selectedTask.task_active_seconds) ? (
+                  <>
+                    <span className="pred-stat-value">{formatTimeSpent(selectedTask.task_active_seconds)}</span>
+                    <span className="pred-stat-sub">
+                      Active development time{selectedTask.data_status === 'partial' ? ' (partial data)' : ''}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="pred-stat-value unavailable-value">—</span>
+                    <span className="pred-stat-sub">Unable to determine task activity</span>
+                  </>
+                )}
               </div>
               <div className="sd-card pred-stat-card">
-                <span className="pred-stat-label">Initial Prediction</span>
+                <span className="pred-stat-label">Initial Estimate</span>
                 <span className="pred-stat-value">
                   {formatInitialPrediction(selectedTask.predicted_typical_hours)}
                 </span>
                 <span className="pred-stat-sub">Typical total effort at lifecycle start</span>
               </div>
               <div className="sd-card pred-stat-card">
-                <span className="pred-stat-label">Remaining Time</span>
-                <span className="pred-stat-value unavailable-value">—</span>
-                <span className="pred-stat-sub">Not yet calculated</span>
+                <span className="pred-stat-label">Remaining Estimate</span>
+                {formatHoursAsDuration(selectedTask.remaining_time_hours) ? (
+                  <>
+                    <span className="pred-stat-value">
+                      {formatHoursAsDuration(selectedTask.remaining_time_hours)}
+                    </span>
+                    <span className="pred-stat-sub">Baseline from the initial estimate</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="pred-stat-value unavailable-value">—</span>
+                    <span className="pred-stat-sub">
+                      {selectedTask.remaining_time_status === 'estimate_exceeded'
+                        ? getRemainingEstimateStatus(selectedTask)
+                        : 'Unable to calculate'}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
 
@@ -158,8 +189,11 @@ const Prediction: React.FC = () => {
               <div className="pred-trend-content">
                 <span className="trend-dash">—</span>
                 <div>
-                  <strong>Initial estimate available</strong>
-                  <p>Progress and remaining-time updates are not implemented yet.</p>
+                  <strong>{getRemainingEstimateStatus(selectedTask)}</strong>
+                  <p>
+                    Remaining Estimate is a baseline derived from the persisted initial estimate and
+                    authoritative active development time. It is not a completion percentage.
+                  </p>
                 </div>
               </div>
             </div>

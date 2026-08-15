@@ -17,6 +17,7 @@ def _build_query_for_item():
             __typename
             ... on Issue{
               id
+              number
               title
               body
               state
@@ -79,6 +80,7 @@ def collect(project_item_id: str, token: Optional[str] = None) -> Dict:
         )
     issue = content
     issue_id = issue.get("id")
+    issue_number = issue.get("number")
     title = issue.get("title")
     description = issue.get("body")
     status = None
@@ -115,6 +117,7 @@ def collect(project_item_id: str, token: Optional[str] = None) -> Dict:
     return {
         "project_item_id": project_item_id,
         "issue_id": issue_id,
+        "issue_number": issue_number,
         "title": title,
         "description": description,
         "status": status,

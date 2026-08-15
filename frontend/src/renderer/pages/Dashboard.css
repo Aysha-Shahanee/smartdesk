@@ -426,3 +426,18 @@
   font-size: var(--font-size-sm);
   font-weight: 600;
 }
+
+.pred-panel-message {
+  color: var(--color-text-secondary);
+}
+
+.pred-panel-message h4 {
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-xs);
+}
+
+.pred-task-count {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+}

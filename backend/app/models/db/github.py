@@ -39,6 +39,7 @@ class GitHubInitialPredictionRecord(Base):
     project_id = Column(String, index=True, nullable=False)
     project_item_id = Column(String, index=True, nullable=False)
     issue_id = Column(String, nullable=False)
+    issue_number = Column(Integer, nullable=True)
     title = Column(String, nullable=True)
     description = Column(String, nullable=True)
     labels_json = Column(String, nullable=True)

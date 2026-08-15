@@ -536,6 +536,7 @@ class SessionCoordinator:
         session.workspace_name = payload.workspace_name or session.workspace_name
         session.project_path = payload.project_path or session.project_path
         session.repo_id = payload.repo_id or session.repo_id
+        session.repository = payload.repository or session.repository
         session.git_branch = payload.git_branch or session.git_branch
         session.active_file_path = payload.active_file_path or session.active_file_path
         session.active_file_name = payload.active_file_name or session.active_file_name

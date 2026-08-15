@@ -26,11 +26,26 @@ export interface GitHubStatusOption { id: string; name: string }
 
 export interface GitHubActiveTask {
   project_item_id: string;
+  issue_number?: number | null;
   title: string;
   repository?: string;
   logical_status: 'ACTIVE';
   started_at: string;
   predicted_typical_hours?: number;
+  task_active_seconds?: number | null;
+  time_spent_hours?: number | null;
+  time_attribution_status?: 'repository_match' | 'branch_match' | 'no_match' | 'ambiguous';
+  calculated_through?: string;
+  data_status?: 'complete' | 'partial' | 'unavailable';
+  remaining_time_hours?: number | null;
+  remaining_time_status?:
+    | 'baseline_available'
+    | 'estimate_exceeded'
+    | 'completed'
+    | 'time_spent_unavailable'
+    | 'initial_prediction_unavailable';
+  overrun_hours?: number | null;
+  approaching_initial_estimate?: boolean;
 }
 
 const GITHUB_API = `${API_BASE}/api/v1/integrations/github`;

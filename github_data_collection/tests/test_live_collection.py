@@ -6,12 +6,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from github_data_collection.config import MODULE_DIR, Settings
-from github_data_collection.database import Base, CollectedTask
+from github_data_collection.database import ActiveTask, Base, CollectedTask
 from github_data_collection.collectors.status_monitor import fetch_all_project_items
-from github_data_collection.collectors.metadata_collector import UnsupportedProjectItemError
+from github_data_collection.collectors.metadata_collector import UnsupportedProjectItemError, collect
 from github_data_collection.initial_sync import initial_sync
 from github_data_collection.project_service import discover_projects
-from github_data_collection.repositories import CollectedTaskRepository
+from github_data_collection.repositories import ActiveTaskRepository, CollectedTaskRepository
 from github_data_collection.task_metadata_service import TaskMetadataService
 from github_data_collection.webhook_handler import handle_github_webhook_event
 
@@ -64,6 +64,17 @@ class LifecycleTimestampTests(unittest.TestCase):
         self.assertEqual(row.detected_start_time, "2026-01-01T10:00:00Z")
         self.assertEqual(row.completed_at, "2026-01-01T12:00:00Z")
 
+    def test_issue_number_is_nullable_and_persisted_without_changing_issue_id(self):
+        historical = self.metadata("2026-01-01T10:00:00Z")
+        self.repository.insert(historical)
+        current = {**self.metadata("2026-01-02T10:00:00Z"), "issue_number": 42}
+        current["project_item_id"] = "PVTI_2"
+        self.repository.insert(current)
+
+        historical_row, current_row = self.rows()
+        self.assertIsNone(historical_row.issue_number)
+        self.assertEqual(current_row.issue_id, "I_1")
+        self.assertEqual(current_row.issue_number, 42)
     def test_reopened_task_creates_a_new_lifecycle(self):
         self.repository.insert(self.metadata("2026-01-01T10:00:00Z"))
         self.repository.complete_open(
@@ -89,6 +100,236 @@ class LifecycleTimestampTests(unittest.TestCase):
         self.assertEqual(lifecycle_id, latest.id)
         self.assertIsNotNone(first.completed_at)
         self.assertIsNone(latest.completed_at)
+
+
+class MetadataCollectionTests(unittest.TestCase):
+    def test_existing_issue_query_fetches_numeric_number(self):
+        response = {"node": {
+            "content": {
+                "__typename": "Issue", "id": "I_kwDO_node", "number": 42,
+                "title": "Task", "body": "Body", "state": "OPEN",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "updatedAt": "2026-01-02T00:00:00Z",
+                "repository": {"nameWithOwner": "owner/repo"},
+                "comments": {"totalCount": 0}, "labels": {"nodes": []},
+                "assignees": {"nodes": []},
+            },
+            "fieldValues": {"nodes": []},
+        }}
+        with patch(
+            "github_data_collection.collectors.metadata_collector.execute_query",
+            return_value=response,
+        ) as execute:
+            metadata = collect("PVTI_1", token="installation-token")
+
+        self.assertIn("number", execute.call_args.args[0])
+        self.assertEqual(metadata["issue_id"], "I_kwDO_node")
+        self.assertEqual(metadata["issue_number"], 42)
+
+    def test_active_lifecycle_exposes_persisted_issue_number(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        sessions = sessionmaker(bind=engine)
+        metadata = {
+            "project_item_id": "PVTI_1", "issue_id": "I_node",
+            "issue_number": 42, "title": "Task",
+            "detected_start_time": "2026-01-01T10:00:00Z",
+            "smartdesk_user_id": "user-one", "project_id": "PVT_1",
+            "repository": "owner/repo",
+        }
+        CollectedTaskRepository(session_factory=sessions).insert(metadata)
+        with patch("github_data_collection.repositories.SessionLocal", sessions):
+            active = ActiveTaskRepository()
+            active.add(metadata)
+            lifecycle = active.list_for_user("user-one")[0]
+
+        with sessions() as session:
+            self.assertEqual(session.get(ActiveTask, "PVTI_1").issue_number, 42)
+        self.assertEqual(lifecycle["issue_number"], 42)
+
+
+class OwnershipActiveTasks:
+    def __init__(self):
+        self.rows = {}
+
+    def add(self, metadata):
+        self.rows[metadata["project_item_id"]] = dict(metadata)
+
+    def remove(self, project_item_id):
+        self.rows.pop(project_item_id, None)
+
+
+class TaskOwnershipTests(unittest.TestCase):
+    def setUp(self):
+        self.engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(self.engine)
+        self.sessions = sessionmaker(bind=self.engine, expire_on_commit=False)
+        self.collected = CollectedTaskRepository(session_factory=self.sessions)
+        self.active = OwnershipActiveTasks()
+        self.predicted = []
+        self.assignees = {}
+        self.service = TaskMetadataService(
+            collected=self.collected,
+            active=self.active,
+            fetcher=self.fetch,
+            on_lifecycle_started=lambda metadata: self.predicted.append(
+                metadata["project_item_id"]
+            ),
+            connected_github_login="Rashmi",
+        )
+
+    def fetch(self, item_id, token=None):
+        return {
+            "project_item_id": item_id,
+            "issue_id": f"I_{item_id}",
+            "issue_number": int(item_id.removeprefix("PVTI_")),
+            "title": f"Task {item_id}",
+            "assignees": self.assignees.get(item_id, []),
+            "detected_start_time": "2026-08-16T10:00:00Z",
+            "smartdesk_user_id": "user-one",
+            "project_id": "PVT_1",
+            "repository": "owner/repo",
+        }
+
+    def lifecycle_rows(self, item_id=None):
+        with self.sessions() as session:
+            query = session.query(CollectedTask)
+            if item_id:
+                query = query.filter(CollectedTask.project_item_id == item_id)
+            return query.order_by(CollectedTask.id).all()
+
+    def assert_rejected(self, assignees):
+        self.assignees["PVTI_1"] = assignees
+        self.service.task_started("PVTI_1")
+        self.assertEqual(self.lifecycle_rows(), [])
+        self.assertNotIn("PVTI_1", self.active.rows)
+        self.assertEqual(self.predicted, [])
+
+    def test_only_connected_user_is_owned_case_insensitively(self):
+        self.assignees["PVTI_1"] = ["rashmi"]
+        self.service.task_started("PVTI_1")
+        self.assertEqual(len(self.lifecycle_rows()), 1)
+        self.assertIn("PVTI_1", self.active.rows)
+        self.assertEqual(self.predicted, ["PVTI_1"])
+
+    def test_multiple_assignees_including_connected_user_is_owned(self):
+        self.assignees["PVTI_1"] = ["teammate123", "RASHMI"]
+        self.service.task_started("PVTI_1")
+        self.assertEqual(len(self.lifecycle_rows()), 1)
+
+    def test_only_other_user_is_rejected(self):
+        self.assert_rejected(["teammate123"])
+
+    def test_multiple_assignees_excluding_connected_user_are_rejected(self):
+        self.assert_rejected(["teammate123", "another-user"])
+
+    def test_unassigned_issue_is_rejected(self):
+        self.assert_rejected([])
+
+    def test_initial_sync_imports_owned_active_issue_only(self):
+        self.assignees.update({
+            "PVTI_1": ["rashmi"],
+            "PVTI_2": ["teammate123"],
+            "PVTI_3": [],
+        })
+        states = FakeStates()
+        initial_sync(
+            fetcher=lambda **kwargs: (
+                "PVT_1",
+                [
+                    {"project_item_id": "PVTI_1", "status": "Doing"},
+                    {"project_item_id": "PVTI_2", "status": "Doing"},
+                    {"project_item_id": "PVTI_3", "status": "Doing"},
+                ],
+            ),
+            metadata_service=self.service,
+            state_repository=states,
+            status_mapper=mapper({"Doing": "ACTIVE"}),
+        )
+        self.assertEqual([row.project_item_id for row in self.lifecycle_rows()], ["PVTI_1"])
+        self.assertEqual(set(self.active.rows), {"PVTI_1"})
+        self.assertEqual(self.predicted, ["PVTI_1"])
+
+    def test_tracked_lifecycle_closes_after_connected_user_is_unassigned(self):
+        self.assignees["PVTI_1"] = ["rashmi"]
+        self.service.task_started("PVTI_1")
+        self.assignees["PVTI_1"] = []
+        self.service.task_completed("PVTI_1")
+        row = self.lifecycle_rows()[0]
+        self.assertIsNotNone(row.completed_at)
+        self.assertNotIn("PVTI_1", self.active.rows)
+
+    def test_reopening_requires_current_ownership_and_preserves_history(self):
+        self.assignees["PVTI_1"] = ["rashmi"]
+        self.service.task_started("PVTI_1")
+        self.service.task_completed("PVTI_1")
+        self.assignees["PVTI_1"] = ["teammate123"]
+        self.service.task_started("PVTI_1")
+        self.assertEqual(len(self.lifecycle_rows()), 1)
+        self.assignees["PVTI_1"] = ["rashmi", "teammate123"]
+        self.service.task_started("PVTI_1")
+        rows = self.lifecycle_rows()
+        self.assertEqual(len(rows), 2)
+        self.assertIsNotNone(rows[0].completed_at)
+        self.assertIsNone(rows[1].completed_at)
+
+    def test_rejected_issue_does_not_affect_owned_active_issue(self):
+        self.assignees.update({"PVTI_1": ["rashmi"], "PVTI_2": ["teammate123"]})
+        self.service.task_started("PVTI_1")
+        self.service.task_started("PVTI_2")
+        self.assertEqual([row.project_item_id for row in self.lifecycle_rows()], ["PVTI_1"])
+        self.assertEqual(set(self.active.rows), {"PVTI_1"})
+        self.assertEqual(self.predicted, ["PVTI_1"])
+
+    def test_webhook_uses_authoritative_assignees_and_stays_idempotent(self):
+        states, deliveries = FakeStates(), FakeDeliveries()
+        states.upsert("PVTI_1", "PVT_1", "Todo", "NOT_STARTED")
+        self.assignees["PVTI_1"] = ["teammate123"]
+        headers = {
+            "X-GitHub-Event": "projects_v2_item",
+            "X-GitHub-Delivery": "ownership-1",
+        }
+        kwargs = {
+            "metadata_service": self.service,
+            "state_repository": states,
+            "delivery_repository": deliveries,
+            "status_mapper": mapper({"Todo": "NOT_STARTED", "Doing": "ACTIVE"}),
+        }
+
+        handle_github_webhook_event(event(new="Doing"), headers, **kwargs)
+        handle_github_webhook_event(event(new="Doing"), headers, **kwargs)
+
+        self.assertEqual(self.lifecycle_rows(), [])
+        self.assertEqual(self.predicted, [])
+        self.assertTrue(deliveries.is_processed("ownership-1"))
+        self.assertEqual(states.get("PVTI_1")["logical_status"], "ACTIVE")
+
+    def test_done_webhook_closes_owned_lifecycle_after_reassignment(self):
+        states, deliveries = FakeStates(), FakeDeliveries()
+        states.upsert("PVTI_1", "PVT_1", "Todo", "NOT_STARTED")
+        self.assignees["PVTI_1"] = ["rashmi"]
+        kwargs = {
+            "metadata_service": self.service,
+            "state_repository": states,
+            "delivery_repository": deliveries,
+            "status_mapper": mapper({
+                "Todo": "NOT_STARTED", "Doing": "ACTIVE", "Done": "DONE"
+            }),
+        }
+        handle_github_webhook_event(
+            event(new="Doing"),
+            {"X-GitHub-Event": "projects_v2_item", "X-GitHub-Delivery": "start-1"},
+            **kwargs,
+        )
+        self.assignees["PVTI_1"] = ["teammate123"]
+        handle_github_webhook_event(
+            event(old="Doing", new="Done"),
+            {"X-GitHub-Event": "projects_v2_item", "X-GitHub-Delivery": "done-1"},
+            **kwargs,
+        )
+
+        self.assertIsNotNone(self.lifecycle_rows()[0].completed_at)
+        self.assertNotIn("PVTI_1", self.active.rows)
 
 
 class FakeStates:
@@ -202,6 +443,25 @@ class WebhookTests(unittest.TestCase):
         handle_github_webhook_event(payload, headers, **kwargs)
         handle_github_webhook_event(payload, headers, **kwargs)
         self.assertEqual(service.started, ["PVTI_1"])
+
+    def test_temporary_status_fetch_failure_leaves_event_retryable(self):
+        service, states, deliveries = FakeMetadata(), FakeStates(), FakeDeliveries()
+        headers = {"X-GitHub-Delivery": "retry-1", "X-GitHub-Event": "projects_v2_item"}
+
+        with self.assertRaisesRegex(RuntimeError, "temporary failure"):
+            handle_github_webhook_event(
+                event(new="Doing"), headers, token="installation-token",
+                metadata_service=service, state_repository=states,
+                delivery_repository=deliveries,
+                status_mapper=mapper({"Doing": "ACTIVE"}),
+                status_fetcher=lambda item_id, token: (_ for _ in ()).throw(
+                    RuntimeError("temporary failure")
+                ),
+            )
+
+        self.assertFalse(deliveries.is_processed("retry-1"))
+        self.assertIsNone(states.get("PVTI_1"))
+        self.assertEqual(service.started, [])
 
     def test_authenticated_webhook_fetches_authoritative_status(self):
         service, states = FakeMetadata(), FakeStates()

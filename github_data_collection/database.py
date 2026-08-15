@@ -63,6 +63,7 @@ class ActiveTask(Base):
 
     project_item_id = Column(String(255), primary_key=True)
     issue_id = Column(String(255), nullable=False)
+    issue_number = Column(Integer, nullable=True)
     title = Column(Text, default="")
     started_at = Column(String(64), nullable=False)
     smartdesk_user_id = Column(String(255), nullable=True, index=True)
@@ -76,6 +77,7 @@ class CollectedTask(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     project_item_id = Column(String(255), nullable=False)
     issue_id = Column(String(255), nullable=False)
+    issue_number = Column(Integer, nullable=True)
     title = Column(Text)
     description = Column(Text)
     status = Column(String(128))
@@ -150,6 +152,8 @@ def init_db() -> None:
             connection.execute(text("ALTER TABLE collected_tasks ADD COLUMN project_id VARCHAR(255)"))
         if "repository" not in columns:
             connection.execute(text("ALTER TABLE collected_tasks ADD COLUMN repository VARCHAR(255)"))
+        if "issue_number" not in columns:
+            connection.execute(text("ALTER TABLE collected_tasks ADD COLUMN issue_number INTEGER"))
         connection.execute(text(
             "UPDATE collected_tasks SET started_at = detected_start_time "
             "WHERE started_at IS NULL"
@@ -161,6 +165,8 @@ def init_db() -> None:
             connection.execute(text("ALTER TABLE active_tasks ADD COLUMN project_id VARCHAR(255)"))
         if "repository" not in active_columns:
             connection.execute(text("ALTER TABLE active_tasks ADD COLUMN repository VARCHAR(255)"))
+        if "issue_number" not in active_columns:
+            connection.execute(text("ALTER TABLE active_tasks ADD COLUMN issue_number INTEGER"))
 
 
 init_db()

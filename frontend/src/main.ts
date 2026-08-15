@@ -1,4 +1,4 @@
-import { app, BrowserWindow, screen as electronScreen } from 'electron'
+import { app, BrowserWindow, ipcMain, screen as electronScreen, shell } from 'electron'
 import { join } from 'path'
 
 function createWindow() {
@@ -26,7 +26,16 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(createWindow)
+app.whenReady().then(() => {
+  ipcMain.handle('open-github-external', async (_event, rawUrl: string) => {
+    const url = new URL(rawUrl)
+    if (url.protocol !== 'https:' || url.hostname !== 'github.com') {
+      throw new Error('Only HTTPS GitHub links may be opened externally')
+    }
+    await shell.openExternal(url.toString())
+  })
+  createWindow()
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

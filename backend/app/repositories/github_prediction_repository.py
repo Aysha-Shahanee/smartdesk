@@ -29,6 +29,7 @@ class GitHubPredictionRepository:
             project_id=metadata["project_id"],
             project_item_id=metadata["project_item_id"],
             issue_id=metadata["issue_id"],
+            issue_number=metadata.get("issue_number"),
             title=metadata.get("title"),
             description=metadata.get("description"),
             labels_json=json.dumps(metadata.get("labels") or []),

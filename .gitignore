@@ -12,6 +12,7 @@ backend/.venv/
 # Project-local development tools and tunnel state
 .tools/
 .cloudflared/
+.smartdesk-dev/
 cloudflared.yml
 cloudflared.yaml
 

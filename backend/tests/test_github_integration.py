@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import unittest
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
 from sqlalchemy import create_engine
@@ -10,7 +11,7 @@ from app.core.config import settings
 from app.core.database import Base
 from app.models.db.github import GitHubConnectionRecord, GitHubOAuthStateRecord
 from app.models.github_integration import GitHubProjectSelection
-from app.routes.github_integration import setup_page
+from app.routes.github_integration import callback, setup_page
 from app.services.github_integration_service import GitHubIntegrationService
 
 
@@ -52,6 +53,35 @@ class GitHubIntegrationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Invalid or expired"):
                 self.service.complete_installation(123, "unknown")
 
+    def test_begin_installation_returns_app_url_with_single_use_state(self):
+        with patch.object(settings, "SMARTDESK_GITHUB_APP_ID", "1"), \
+             patch.object(settings, "SMARTDESK_GITHUB_APP_SLUG", "smartdesk-development"), \
+             patch.object(settings, "SMARTDESK_GITHUB_APP_PRIVATE_KEY", "private-key"):
+            installation_url = self.service.begin_installation("user-one")
+
+        parsed = urlparse(installation_url)
+        state = parse_qs(parsed.query).get("state", [""])[0]
+        self.assertEqual(parsed.scheme, "https")
+        self.assertEqual(parsed.netloc, "github.com")
+        self.assertEqual(parsed.path, "/apps/smartdesk-development/installations/new")
+        self.assertTrue(state)
+
+    def test_callback_redirects_to_hash_router_settings(self):
+        class Service:
+            def complete_installation(self, installation_id, state):
+                self.args = (installation_id, state)
+
+        service = Service()
+        with patch.object(settings, "SMARTDESK_FRONTEND_URL", "http://localhost:5173"):
+            response = callback(installation_id=123, state="valid-state", service=service)
+
+        self.assertEqual(service.args, (123, "valid-state"))
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(
+            response.headers["location"],
+            "http://localhost:5173/#/settings?github=connected",
+        )
+
     def test_project_selection_is_stored_for_correct_user(self):
         self.service.repository.connect("user-one", "octocat", 123)
         with patch.object(self.service, "_token", return_value="token"), \
@@ -78,6 +108,57 @@ class GitHubIntegrationTests(unittest.TestCase):
         self.service.disconnect("user-one")
         self.assertEqual(self.service.connection_status("user-one")["connection_status"], "disconnected")
         self.assertEqual(self.service.active_tasks("user-one"), [])
+
+    def test_disconnect_then_reconnect_reuses_local_row_and_restores_connection(self):
+        self.service.repository.connect("user-one", "octocat", 123)
+        self.service.repository.select_project(
+            "user-one", "octocat", 7, "PVT_7", "Roadmap"
+        )
+        original_row_id = self.service.repository.get_connection("user-one").id
+        self.service.disconnect("user-one")
+
+        disconnected = self.service.connection_status("user-one")
+        self.assertEqual(disconnected["connection_status"], "disconnected")
+        self.assertEqual(disconnected["installation_id"], 123)
+        self.assertEqual(disconnected["selected_project_id"], "PVT_7")
+
+        with patch.object(settings, "SMARTDESK_GITHUB_APP_ID", "1"), \
+             patch.object(settings, "SMARTDESK_GITHUB_APP_SLUG", "smartdesk-development"), \
+             patch.object(settings, "SMARTDESK_GITHUB_APP_PRIVATE_KEY", "private-key"), \
+             patch("app.services.github_integration_service.create_app_jwt", return_value="jwt"), \
+             patch("app.services.github_integration_service.get_installation", return_value={
+                 "account": {"login": "octocat"}
+             }):
+            installation_url = self.service.begin_installation("user-one")
+            state = parse_qs(urlparse(installation_url).query)["state"][0]
+            reconnected = self.service.complete_installation(456, state)
+
+        self.assertEqual(reconnected["connection_status"], "connected")
+        self.assertEqual(reconnected["installation_id"], 456)
+        self.assertEqual(reconnected["selected_project_id"], "PVT_7")
+        self.assertEqual(
+            self.service.repository.get_connection("user-one").id,
+            original_row_id,
+        )
+
+    def test_webhook_for_unselected_project_is_ignored_without_github_access(self):
+        payload = {
+            "projects_v2_item": {
+                "node_id": "PVTI_unknown",
+                "project_node_id": "PVT_unknown",
+            }
+        }
+        with patch.object(self.service, "_token") as token:
+            self.service.process_webhook(payload, {"X-GitHub-Event": "projects_v2_item"})
+
+        token.assert_not_called()
+
+    def test_metadata_service_uses_canonical_connected_github_login(self):
+        metadata_service = self.service._metadata_service(
+            "user-one", "PVT_1", "Rashmi"
+        )
+
+        self.assertEqual(metadata_service.connected_github_login, "rashmi")
 
     def test_setup_project_selector_uses_title_id_and_expected_payload(self):
         html = setup_page()

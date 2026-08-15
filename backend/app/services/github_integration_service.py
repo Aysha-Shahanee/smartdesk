@@ -132,7 +132,8 @@ class GitHubIntegrationService:
             return {}
         return get_status_mapping(row.selected_project_id)
 
-    def _metadata_service(self, user_id: str, project_id: str) -> TaskMetadataService:
+    def _metadata_service(self, user_id: str, project_id: str,
+                          github_login: str) -> TaskMetadataService:
         def fetcher(item_id: str, token: str | None = None):
             metadata = collect_metadata(item_id, token=token)
             metadata["smartdesk_user_id"] = user_id
@@ -142,6 +143,7 @@ class GitHubIntegrationService:
         return TaskMetadataService(
             fetcher=fetcher,
             on_lifecycle_started=prediction_service.predict_initial,
+            connected_github_login=github_login,
         )
 
     def active_tasks(self, user_id: str) -> list[dict]:
@@ -160,7 +162,9 @@ class GitHubIntegrationService:
             owner=row.selected_owner,
             project_number=row.selected_project_number,
             token=token,
-            metadata_service=self._metadata_service(user_id, row.selected_project_id),
+            metadata_service=self._metadata_service(
+                user_id, row.selected_project_id, row.github_login
+            ),
         )
 
     @staticmethod
@@ -183,7 +187,9 @@ class GitHubIntegrationService:
             payload,
             headers,
             token=token,
-            metadata_service=self._metadata_service(connection.user_id, project_id),
+            metadata_service=self._metadata_service(
+                connection.user_id, project_id, connection.github_login
+            ),
         )
 
     def disconnect(self, user_id: str) -> None:

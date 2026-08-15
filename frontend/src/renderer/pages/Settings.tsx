@@ -46,6 +46,7 @@ const Settings: React.FC = () => {
   const [statusMapping, setStatusMapping] = useState<Record<string, string>>({});
   const [githubBusy, setGithubBusy] = useState(true);
   const [githubMessage, setGithubMessage] = useState('');
+  const [githubStatusUnavailable, setGithubStatusUnavailable] = useState(false);
 
   const loadProjectConfiguration = async () => {
     const [optionsResponse, mappingResponse] = await Promise.all([
@@ -64,6 +65,7 @@ const Settings: React.FC = () => {
   const refreshGitHub = async () => {
     setGithubBusy(true);
     setGithubMessage('');
+    setGithubStatusUnavailable(false);
     try {
       const current = await getGitHubStatus();
       setGithub(current);
@@ -79,6 +81,7 @@ const Settings: React.FC = () => {
         setStatusMapping({});
       }
     } catch (error) {
+      setGithubStatusUnavailable(true);
       setGithubMessage(error instanceof Error ? error.message : 'Unable to load GitHub settings.');
     } finally {
       setGithubBusy(false);
@@ -90,7 +93,11 @@ const Settings: React.FC = () => {
   const connectGitHub = async () => {
     try {
       const { installation_url } = await beginGitHubConnection();
-      window.location.assign(installation_url);
+      if (window.electronAPI) {
+        await window.electronAPI.openGitHubExternal(installation_url);
+      } else {
+        window.location.assign(installation_url);
+      }
     } catch (error) {
       setGithubMessage(error instanceof Error ? error.message : 'Unable to connect GitHub.');
     }
@@ -266,9 +273,11 @@ const Settings: React.FC = () => {
               <span className={`integration-status ${github?.connection_status !== 'connected' ? 'integration-status--muted' : ''}`}>
                 {githubBusy && !github
                   ? 'Checking connection…'
-                  : github?.connection_status === 'connected'
-                    ? `Connected to ${github.github_login}`
-                    : 'Not connected'}
+                  : githubStatusUnavailable
+                    ? 'Connection unavailable'
+                    : github?.connection_status === 'connected'
+                      ? `Connected to ${github.github_login}`
+                      : 'Not connected'}
               </span>
               {github?.selected_project_title && (
                 <span className="integration-detail">Selected project: {github.selected_project_title}</span>

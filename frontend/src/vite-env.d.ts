@@ -4,3 +4,11 @@
 // the standard `ImportMeta` type rather than part of it. Without this
 // reference, every `import.meta.env.VITE_*` read is a TS2339 error even though
 // Vite substitutes the value at build time and the app runs correctly.
+
+interface Window {
+  electronAPI?: {
+    getAppVersion: () => string;
+    getEnv: () => { backendUrl: string };
+    openGitHubExternal: (url: string) => Promise<void>;
+  };
+}
