@@ -84,6 +84,7 @@ python -m venv venv                     # first time only
 That single command starts everything: the HTTP server on `http://127.0.0.1:8000`, the OS foreground monitor (1s polling), the session timeout job, the work period scheduler, and the calendar auto-sync job.
 
 Then open the **monitoring dashboard**: <http://127.0.0.1:8000/dashboard/ui> — it shows live health, totals, and recent rows for all four layers, with the calendar **Connect** / **Sync now** buttons. Auto-refreshes every 30s.
+```
 
 ### 2. IDE extension (VS Code, Antigravity, Cursor, …)
 
@@ -124,15 +125,121 @@ Tokens and sync state live in `backend/calendar_store/` (gitignored — never co
 
 **⚠ Token lifetime:** while your Google OAuth app is in *Testing* publishing status, Google expires the refresh token after **7 days**. For a permanent connection: Google Cloud Console → APIs & Services → **OAuth consent screen** → **Publish app**, then reconnect once. If a token ever dies, SmartDesk auto-disconnects and the dashboard shows it — just click Connect again.
 
+## Development Phase: Sharing Corrections via Google Sheets (Optional)
+
+During development, team members can share their activity-segment corrections (labels) via a shared Google Sheet to collaboratively improve the supervised learning model. This feature is **only for development** and can be completely removed after development by deleting a few lines of code and unsetting an environment variable.
+
+### How It Works
+
+1. When a user submits a correction via the `/activity-segments/{segment_id}/label` endpoint:
+   - The correction is saved to the local SQLite database (triggers personal auto-training after 10 labels)
+   - If `ENABLE_GSHEET_SYNC=true` is set, the same correction is appended to a shared Google Sheet
+2. The Google Sheet collects corrections from all team members in real-time
+3. Periodically, download the sheet as CSV and train a final supervised model (using your existing training logic)
+4. Bake the final model into the application
+
+### Setup Instructions
+
+#### 👤 One-Time Setup (Done Once by Anyone)
+Only needs to be done once for the entire team:
+
+1. **Create and share the Google Sheet**:
+   - Go to https://sheets.google.com → Blank spreadsheet
+   - Name it (e.g., "SmartDesk Dev Corrections")
+   - Share with all team members (give **Editor** access)
+   - Create a worksheet tab named exactly `Labels` (case-sensitive)
+   - In the first row, add these headers:
+     ```
+     timestamp,segment_id,user_id,label,embedding_json,device_id,app_name,title,detail
+     ```
+   - Copy the **Sheet ID** from the URL:
+     ```
+     https://docs.google.com/spreadsheets/d/1G_oudT83kv-JSugqzbVE-nbLyjmQ0c7YY5EGpbLUaG8/edit
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ THIS IS THE SHEET ID
+     ```
+
+2. **Configure the Sheet ID in code** (commit this change):
+   - Edit `backend/app/services/categorizer.py`
+   - Replace:
+     ```python
+     sh = gc.open_by_key("YOUR_SHEET_ID_HERE")
+     ```
+   - With your actual Sheet ID (keep the quotes):
+     ```python
+     sh = gc.open_by_key("1G_oudT83kv-JSugqzbVE-nbLyjmQ0c7YY5EGpbLUaG8")
+     ```
+   - Commit this change to the repository so all team members get it
+
+#### 👥 Per-Team-Member Setup (Each Person Does This)
+
+##### 1. One-Time Google Authentication (Per Machine)
+```powershell
+# Install/update dependencies
+pip install -r backend/requirements.txt
+
+# Run this ONCE to authenticate with Google (opens browser for login)
+python -c "import gspread; gc = gspread.oauth()"
+```
+This saves OAuth tokens locally:
+- Windows: `%APPDATA%\gspread\`
+- macOS/Linux: `~/.config/gspread/`
+
+**Important:** These token files are automatically ignored by Git (see `.gitignore`) - **no secrets are committed**.
+
+##### 2. Enable Sync During Development (Per Session)
+When running the backend, set the environment variable:
+```powershell
+# PowerShell
+$env:ENABLE_GSHEET_SYNC = "true"
+python -m uvicorn app.main:app
+
+# bash/zsh
+export ENABLE_GSHEET_SYNC=true
+python -m uvicorn app.main:app
+```
+
+To disable later (for production or after development):
+```powershell
+# PowerShell
+$env:ENABLE_GSHEET_SYNC = "false"
+# or simply remove the variable: Remove-Item Env:ENABLE_GSHEET_SYNC
+
+# bash/zsh
+export ENABLE_GSHEET_SYNC=false
+# or: unset ENABLE_GSHEET_SYNC
+```
+
+### 🔄 Development Workflow
+- Team members submit corrections via the API (as usual)
+- Corrections appear in **both**:
+  - Local SQLite database (triggers personal auto-training at 10 labels)
+  - **Shared Google Sheet** (visible to entire team in real-time)
+- Periodically (e.g., after 20-50 new corrections):
+  1. Open the Google Sheet → File → Download → Comma-separated values (.csv)
+  2. Train your final supervised model using that CSV (with your existing training logic)
+  3. Bake the model into the application
+- After development completes:
+  1. Set `$env:ENABLE_GSHEET_SYNC = "false"` or remove the variable
+  2. Delete the Google Sheets sync block from `categorizer.py` (≈10 lines)
+  3. Commit: "Remove dev-only Google Sheet correction sync"
+  4. System runs 100% locally with the final baked-in model
+
+### ⚠️ Important Notes
+- **Zero risk to core functionality**: If Google Sheets is unavailable, corrections still save locally with only a non-critical error printed.
+- **No secrets committed**: OAuth tokens stay on each developer's machine (automatically ignored by Git).
+- **Easy cleanup**: Controlled by a single environment variable + isolated code block (~10 lines).
+- **Real-time collaboration**: During development, everyone sees each other's corrections in the Sheet as they happen.
+- **Worksheet name must be exactly** `Labels` (case-sensitive) - not "label", "LABELS", or any other variation.
+
 ## API Reference
 
 ### Ingest
 
 ```text
 POST /api/v1/ingest/os/event        OS collector events
-POST /api/v1/ingest/ide/event       IDE extension events
-POST /api/v1/ingest/browser/event   browser extension events
-POST /api/v1/ingest/vscode/event    deprecated alias of /ide/event (old builds)
+POST /api/v1/ingest/ide.event       IDE extension events
+POST /api/v1/ingest/browser.event   browser extension events
+POST /api/v1/ingest/vscode.event    deprecated alias of /ide/event (old builds)
 ```
 
 ### Calendar
@@ -201,17 +308,9 @@ Set in `backend/.env` (see `backend/.env.example`):
 | `CALENDAR_SYNC_INTERVAL_MIN` | `15` | Auto-sync interval |
 | `CALENDAR_SYNC_PAST_DAYS` / `CALENDAR_SYNC_FUTURE_DAYS` | `30` / `60` | First-sync window |
 | `BACKEND_BASE_URL` | `http://127.0.0.1:8000` | Used to build the OAuth redirect URI |
+| `ENABLE_GSHEET_SYNC` | `false` | Set to `true` to enable Google Sheets sync for corrections (dev only) |
 | `SMARTDESK_POLL_INTERVAL` | `1.0` | OS collector poll interval (seconds) |
 | `SMARTDESK_IDLE_THRESHOLD` | `120` | Seconds of no input before idle_start |
-
-## Troubleshooting
-
-- **Port 8000 already in use** (`WinError 10013/10048`): another backend instance is running — `netstat -ano | findstr :8000`, then stop that PID.
-- **Can't delete smartdesk.db**: DB Browser for SQLite has it open — close the database there first. DB Browser also doesn't auto-refresh; press F5 to see new rows.
-- **Calendar shows "Access blocked"**: your Gmail must be in the OAuth consent screen's Test users (or publish the app), and the Google Calendar API must be enabled.
-- **Calendar stopped syncing after ~a week**: Testing-status refresh token expired — publish the app (see Setup §4) and reconnect.
-- **IDE rows missing `ide_name`**: an IDE window is still running an old extension build — restart all IDE windows after installing the vsix.
-- **Rejected payloads**: logged with full body at `WARNING` level in the backend console.
 
 ## Project Structure
 

@@ -207,10 +207,16 @@ def main() -> int:
                 s.category_method = "user"
                 s.category_confidence = 1.0
                 if s.focus_score is not None:
-                    s.focus_score = scorer.calculate_focus_score(
-                        scorer.create_signals_from_segment(s), s.duration_sec
-                    )
-                    focus_updated += 1
+                    # create_signals_from_segment/calculate_focus_score were
+                    # removed -- the former read the top level of a nested
+                    # document and always returned {}, so every rescore used
+                    # invented defaults. components_from_signals_json replaces
+                    # it; an empty dict means nothing usable is stored, so
+                    # leave the existing score rather than fabricate one.
+                    components = scorer.components_from_signals_json(s.signals_json)
+                    if components:
+                        s.focus_score = scorer.score_from_components(components, label)
+                        focus_updated += 1
                 text = categorizer.build_text(s)
                 if text:
                     db.add(

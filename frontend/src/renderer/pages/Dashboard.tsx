@@ -2,8 +2,15 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 import {
-  getSegmentsSummary, getAllSegments, getGitHubActiveTasks, getIDEDashboard,
-  type GitHubActiveTask, dayBounds,
+  getSegmentsSummary,
+  getAllSegments,
+  getGitHubActiveTasks,
+  getIDEDashboard,
+  getRecommendations,
+  getWindowClusters,
+  type GitHubActiveTask,
+  type Recommendation,
+  dayBounds,
 } from '../services/api';
 import { useDateContext } from '../contexts/DateContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -11,6 +18,11 @@ import { getCategoryColor, getChartChrome } from '../theme/chartTheme';
 import SampleBadge from '../components/SampleBadge';
 import { capitalize, formatDuration, parseSegmentTime } from '../utils/time';
 import { buildDashboardPredictionSummary } from '../utils/dashboardPrediction.mjs';
+import { focusOutOf100, summarizeFocus } from '../utils/focus';
+/* Shared with the Insights page so "deep work" cannot come to mean two
+   different things depending on which page you are looking at. */
+import { BLOCK_GAP_SEC, DEEP_WORK_MIN_SEC } from '../utils/blocks';
+import { bucketWindowsByScope, type PatternScope, type WindowCluster } from './patternDetection';
 import './Dashboard.css';
 
 const EMPTY_SUMMARY = {
@@ -20,25 +32,21 @@ const EMPTY_SUMMARY = {
   duration_by_category: {} as Record<string, number>,
 };
 
-/* Segments this close together are treated as one continuous stretch of work.
-   The builder emits a new segment on every window change, so without a merge
-   tolerance a day of normal alt-tabbing looks like hundreds of one-minute
-   "sessions" and no focus block ever exceeds a couple of minutes. */
-const BLOCK_GAP_SEC = 120;
-
-/* A merged block at least this long counts as deep work. 25 minutes is the
-   conventional threshold for an uninterrupted focus stretch. */
-const DEEP_WORK_MIN_SEC = 25 * 60;
-
 /* Switch-density thresholds, in app switches per hour of tracked activity. */
 const SWITCH_RATE_LOW = 6;
 const SWITCH_RATE_HIGH = 15;
 /* Full scale of the density meter — anything above reads as pinned. */
 const SWITCH_RATE_SCALE = 30;
 
-/* Focus and stress have no collector or endpoint behind them. They remain
-   explicitly marked as samples; GitHub task predictions below are real. */
-const SAMPLE_FOCUS_SCORE = 78;
+/* Stress has no collector or model behind it — there is no stress column, no
+   scorer and no endpoint — so it stays a placeholder, flagged in the UI with
+   <SampleBadge /> rather than presented as a measurement.
+
+   Focus is no longer among them. `activity_segments.focus_score` is written per
+   segment by the backend's FocusScorer and covers upwards of 97% of a day's
+   active time, so the Focus Score below is measured — see utils/focus.ts. */
+/* GitHub task predictions are provided separately by the real GitHub task
+   prediction integration. */
 const SAMPLE_STRESS_SCORE = 42;
 const PREDICTION_REFRESH_INTERVAL_MS = 15_000;
 
@@ -72,6 +80,13 @@ const Dashboard: React.FC = () => {
   const [activeTasks, setActiveTasks] = useState<GitHubActiveTask[]>([]);
   const [predictionLoading, setPredictionLoading] = useState(true);
   const [predictionError, setPredictionError] = useState('');
+  const [insights, setInsights] = useState<Recommendation[]>([]);
+  const [insightTotal, setInsightTotal] = useState(0);
+  const [patternRows, setPatternRows] = useState<Record<PatternScope, WindowCluster[]>>({
+    day: [],
+    week: [],
+    month: [],
+  });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -79,15 +94,35 @@ const Dashboard: React.FC = () => {
     const load = async () => {
       setLoading(true);
       const { from, to } = dayBounds(selectedDate);
-      const [sum, segs, ideSummary] = await Promise.all([
+      const [sum, segs, ideSummary, recs, dayRows, weekRows, monthRows] = await Promise.all([
         getSegmentsSummary(selectedDate).catch(() => null),
         getAllSegments(selectedDate).catch(() => []),
         getIDEDashboard(from, to).catch(() => null),
+        getRecommendations(selectedDate).catch(() => null),
+        getWindowClusters(undefined, 1000, 'day').catch(() => []),
+        getWindowClusters(undefined, 1000, 'week').catch(() => []),
+        getWindowClusters(undefined, 1000, 'month').catch(() => []),
       ]);
       if (cancelled) return;
       setSummary(sum || EMPTY_SUMMARY);
       setSegments(segs);
       setIde(ideSummary);
+      /* Highest-scoring findings across every section, capped at four. The
+         engine has already deduped them by concern, so two rules describing
+         the same problem cannot both land here. The total is kept so the panel
+         can say what fraction of the day's findings it is showing. */
+      const ranked: Recommendation[] = recs
+        ? (Object.values(recs.sections) as Recommendation[][])
+            .flat()
+            .sort((a, b) => b.score - a.score)
+        : [];
+      setInsights(ranked.slice(0, 4));
+      setInsightTotal(recs?.total ?? ranked.length);
+      setPatternRows({
+        day: dayRows as WindowCluster[],
+        week: weekRows as WindowCluster[],
+        month: monthRows as WindowCluster[],
+      });
       setLoading(false);
     };
     load();
@@ -264,6 +299,33 @@ const Dashboard: React.FC = () => {
     };
   }, [segments, total_duration_sec]);
 
+  /* The day's focus, from the per-segment scores the backend already writes.
+     Duration-weighted over active segments, which is the definition `day_focus`
+     uses server-side, so this card and the Recommendations page cannot report
+     different focus for the same day. See utils/focus.ts. */
+  const focus = useMemo(() => summarizeFocus(segments), [segments]);
+
+  /* Strongest and weakest bucket per scope, from the nightly clustering run.
+     Unlike the metrics above these are not scoped to the selected date — they
+     summarise the last completed day, week and month, so the card stays empty
+     until `run_pattern_analysis.py` has populated activity_window_patterns. */
+  const patternSnapshot = useMemo(() => {
+    const summarize = (scope: PatternScope) => {
+      const buckets = bucketWindowsByScope(patternRows[scope], scope);
+      if (buckets.length === 0) return null;
+      return {
+        strongest: [...buckets].sort((a, b) => b.avgFocusScore - a.avgFocusScore)[0],
+        weakest: [...buckets].sort((a, b) => a.avgFocusScore - b.avgFocusScore)[0],
+      };
+    };
+
+    return {
+      day: summarize('day'),
+      week: summarize('week'),
+      month: summarize('month'),
+    };
+  }, [patternRows]);
+
   if (loading) return <div className="sd-loader">Loading dashboard for {selectedDate}…</div>;
 
   const hasData = total_duration_sec > 0;
@@ -285,37 +347,13 @@ const Dashboard: React.FC = () => {
       ? `${clock(stats.firstSeen)} – ${clock(stats.lastSeen)}`
       : '—';
 
-  /* Observations, all computed above from recorded segments — nothing here is
-     a fixed string about a time of day the user may never have worked. */
-  const insights: { tone: 'positive' | 'warning'; title: string; detail: string }[] = [];
-  if (stats.peakHour !== null) {
-    insights.push({
-      tone: 'positive',
-      title: `Peak activity between ${hourLabel(stats.peakHour)}`,
-      detail: `${formatDuration(stats.peakSec)} of tracked activity in your busiest hour`,
-    });
-  }
-  if (stats.peakBlock && stats.peakBlock.seconds >= DEEP_WORK_MIN_SEC) {
-    insights.push({
-      tone: 'positive',
-      title: `Longest focus block ran ${formatDuration(stats.peakBlock.seconds)}`,
-      detail: `${clock(stats.peakBlock.start)} – ${clock(stats.peakBlock.end)}, with ${stats.peakBlock.switches} app switches`,
-    });
-  }
-  if (stats.switchPeakHour !== null && stats.switchPeakCount >= 5) {
-    insights.push({
-      tone: 'warning',
-      title: `Context switching peaked between ${hourLabel(stats.switchPeakHour)}`,
-      detail: `${stats.switchPeakCount} app switches in that hour — consider blocking it for focused work`,
-    });
-  }
-  if (stats.idleSec > 0) {
-    insights.push({
-      tone: 'warning',
-      title: `${formatDuration(stats.idleSec)} recorded as idle`,
-      detail: 'Time the machine was on but unattended — excluded from the active totals',
-    });
-  }
+  /* Observations come from the rule engine rather than being re-derived here.
+     This panel used to compute four of its own from the full segment list —
+     peak hour, longest block, switch peak, idle total — which meant the
+     Dashboard and the Recommendations page could describe the same day
+     differently, and every one of those four was an unconditional statement
+     with no comparison behind it. The engine's versions are ranked, deduped
+     against each other, and carry the evidence that justifies them. */
 
   return (
     <div className="dashboard sd-fade-in">
@@ -325,38 +363,6 @@ const Dashboard: React.FC = () => {
       </div>
 
       <div className="hub-layout">
-        {/* ---- Key insights → Recommendations ---- */}
-        <div className="insight-panel">
-          <div className="insight-panel-header">
-            <span className="insight-panel-icon">❗</span>
-            <div>
-              <h3>Key Insights for Today</h3>
-              <p>Derived from your recorded activity segments</p>
-            </div>
-            <span className="sd-view-details" onClick={() => navigate('/recommendations')}>
-              Recommendations →
-            </span>
-          </div>
-
-          {insights.length > 0 ? (
-            <div className="insight-rows">
-              {insights.map(item => (
-                <div className="insight-row" key={item.title}>
-                  <span className={`rec-icon-small ${item.tone === 'positive' ? 'green' : 'red'}`}>
-                    {item.tone === 'positive' ? '↗' : '!'}
-                  </span>
-                  <div>
-                    <strong>{item.title}</strong>
-                    <p>{item.detail}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="dash-empty">No activity recorded for {selectedDate}.</p>
-          )}
-        </div>
-
         {/* ---- Daily Activity → Timeline / Usage Breakdown → Timeline OS tab ---- */}
         <div className="sd-grid-2">
           <div className="sd-card">
@@ -473,20 +479,46 @@ const Dashboard: React.FC = () => {
             <div className="score-list">
               <div className="score-block">
                 <div className="score-head">
-                  <span className="metric-label">Focus Score</span>
-                  <span className="metric-value">{SAMPLE_FOCUS_SCORE}/100</span>
+                  <span
+                    className="metric-label"
+                    title="Duration-weighted mean of every scored segment: sustained presence on one thing, from the segment's active time, unbroken length and surrounding switch rate."
+                  >
+                    Focus Score
+                  </span>
+                  <span className="metric-value">
+                    {focus.score !== null ? `${focusOutOf100(focus.score)}/100` : '—'}
+                  </span>
                 </div>
                 <div className="sd-progress">
                   <div
                     className="sd-progress-fill"
-                    style={{ width: `${SAMPLE_FOCUS_SCORE}%`, background: 'var(--color-success)' }}
+                    style={{
+                      width: `${focus.score !== null ? focusOutOf100(focus.score) : 0}%`,
+                      background: 'var(--color-primary)',
+                    }}
                   />
+                </div>
+                <div className="split-bar-labels">
+                  {focus.score !== null ? (
+                    <>
+                      <span>{focus.segments} scored segments</span>
+                      {/* What the number rests on. A day whose segments are
+                          mostly unscored would otherwise quote a confident
+                          figure drawn from a sliver of it. */}
+                      <span>{Math.round(focus.coverage * 100)}% of active time scored</span>
+                    </>
+                  ) : (
+                    <span>No scored activity for {selectedDate}</span>
+                  )}
                 </div>
               </div>
 
               <div className="score-block">
                 <div className="score-head">
-                  <span className="metric-label">Stress Score</span>
+                  <span className="metric-label">
+                    Stress Score{' '}
+                    <SampleBadge title="Stress scoring is not implemented — no collector or model produces this number, so it is fixed and does not change with the selected date." />
+                  </span>
                   <span className="metric-value">{SAMPLE_STRESS_SCORE}/100</span>
                 </div>
                 <div className="sd-progress">
@@ -499,9 +531,9 @@ const Dashboard: React.FC = () => {
             </div>
 
             <p className="card-footnote">
-              <SampleBadge title="Focus and stress scoring are not implemented — no collector or model produces these numbers, so they are fixed and do not change with the selected date." />{' '}
-              Focus and stress scoring have no collector behind them yet — the figures above are
-              placeholders, not measurements.
+              Focus is measured per segment and weighted by duration. Stress has no collector or
+              model behind it — that figure is a placeholder and does not change with the selected
+              date.
             </p>
           </div>
 
@@ -621,6 +653,96 @@ const Dashboard: React.FC = () => {
               </div>
               {predictionError && <p className="card-footnote">Refresh failed: {predictionError}</p>}
             </>
+          )}
+        </div>
+
+        {/* ---- Key insights → Recommendations ----
+               Two per row rather than four stacked, and each row carries the
+               action as well as the finding: the same four items in roughly
+               half the height, and the half that tells you what to do about it
+               no longer requires opening the Recommendations page. ---- */}
+        <div className="insight-panel">
+          <div className="insight-panel-header">
+            <span className="insight-panel-icon">❗</span>
+            <div>
+              <h3>Key Insights for Today</h3>
+              <p>
+                {insightTotal > insights.length
+                  ? `Top ${insights.length} of ${insightTotal} findings ranked by the local rule engine`
+                  : 'Ranked by the local rule engine from your recorded activity'}
+              </p>
+            </div>
+            <span className="sd-view-details" onClick={() => navigate('/recommendations')}>
+              Recommendations →
+            </span>
+          </div>
+
+          {insights.length > 0 ? (
+            <div className="insight-rows">
+              {insights.map(item => (
+                <button
+                  type="button"
+                  className="insight-row"
+                  key={item.id}
+                  onClick={() => navigate('/recommendations')}
+                >
+                  <span
+                    className={`insight-severity ${item.severity}`}
+                    title={`${capitalize(item.severity)} severity`}
+                  />
+                  <span className="insight-row-body">
+                    <strong>{item.title}</strong>
+                    <span className="insight-row-why">{item.why}</span>
+                    <span className="insight-row-action">{item.action}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="dash-empty">No findings for {selectedDate} yet.</p>
+          )}
+        </div>
+
+        {/* ---- Pattern snapshot → Insights ---- */}
+        <div className="sd-card">
+          <div className="card-header">
+            <h3><span className="card-icon">🔍</span> Pattern Snapshot</h3>
+            <span className="sd-view-details" onClick={() => navigate('/insights')}>
+              Pattern Detection →
+            </span>
+          </div>
+          {patternSnapshot.day || patternSnapshot.week || patternSnapshot.month ? (
+            <div className="hub-rec-preview">
+              {patternSnapshot.day && (
+                <div className="rec-insight-row">
+                  <span className="rec-icon-small green">↗</span>
+                  <div>
+                    <strong>Yesterday's strongest hour was {patternSnapshot.day.strongest.label}</strong>
+                    <p>{patternSnapshot.day.strongest.rangeLabel} — {Math.round(patternSnapshot.day.strongest.avgFocusScore * 100)}% focus score</p>
+                  </div>
+                </div>
+              )}
+              {patternSnapshot.week && (
+                <div className="rec-insight-row">
+                  <span className="rec-icon-small red">!</span>
+                  <div>
+                    <strong>Last week's weakest day was {patternSnapshot.week.weakest.label}</strong>
+                    <p>{patternSnapshot.week.weakest.rangeLabel} — {Math.round(patternSnapshot.week.weakest.avgFocusScore * 100)}% focus score</p>
+                  </div>
+                </div>
+              )}
+              {patternSnapshot.month && (
+                <div className="rec-insight-row">
+                  <span className="rec-icon-small green">↗</span>
+                  <div>
+                    <strong>Last month's best week was {patternSnapshot.month.strongest.label}</strong>
+                    <p>{patternSnapshot.month.strongest.rangeLabel} — {Math.round(patternSnapshot.month.strongest.avgFocusScore * 100)}% focus score</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="dash-empty">Pattern snapshots appear once clustering results are available.</p>
           )}
         </div>
 

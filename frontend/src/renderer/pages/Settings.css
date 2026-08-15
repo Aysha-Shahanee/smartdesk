@@ -280,4 +280,24 @@
   .github-mapping-row {
     grid-template-columns: 1fr;
   }
+/* Compact select used by the quiet-hours pickers. Matches .sd-btn's metrics so
+   the two sit level when they share a row. */
+.sd-select {
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.sd-select:hover {
+  border-color: var(--color-primary);
+}
+
+.sd-select:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
 }

@@ -1,21 +1,16 @@
 {
   "compilerOptions": {
-    "composite": true,
-    "skipLibCheck": true,
-    "module": "commonjs",
-    "moduleResolution": "Node",
-    "allowSyntheticDefaultImports": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
     "strict": true,
-    "noEmit": true,
-    "jsx": "react-jsx"
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["vite/client"]
   },
   "include": [
-    "src/**/*.ts",
-    "src/**/*.tx"
-  ],
-  "references": [
-    {
-      "path": "./tsconfig.json"
-    }
+    "src/main.ts",
+    "src/preload.ts"
   ]
 }

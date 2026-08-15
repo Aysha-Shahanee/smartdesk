@@ -14,6 +14,18 @@ from app.models.db import ActivitySegmentRecord
 class ActivitySegmentRepository:
     """Read-only query helpers for ``activity_segments``."""
 
+    def get_by_id(self, db: Session, segment_id: str) -> ActivitySegmentRecord | None:
+        """Return one segment by primary key, or ``None`` if it does not exist.
+
+        Args:
+            db: Database session
+            segment_id: Primary key of the segment
+
+        Returns:
+            The matching segment, or ``None``
+        """
+        return db.get(ActivitySegmentRecord, segment_id)
+
     def get_segments_in_timerange(
         self,
         db: Session,

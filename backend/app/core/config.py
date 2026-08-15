@@ -1,6 +1,7 @@
 import socket
 from pathlib import Path
 from typing import List
+from pathlib import Path
 
 from pydantic_settings import BaseSettings
 
@@ -8,10 +9,11 @@ from pydantic_settings import BaseSettings
 # training/aggregation pipelines can tell schema generations apart.
 SCHEMA_VERSION = "3"
 BACKEND_DIR = Path(__file__).resolve().parents[2]
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = "sqlite:///./smartdesk.db"
+    DATABASE_URL: str = f"sqlite:///{(BACKEND_ROOT / 'smartdesk.db').as_posix()}"
     DEFAULT_USER_ID: str = "local_user"
     LOG_LEVEL: str = "INFO"
 
@@ -36,6 +38,34 @@ class Settings(BaseSettings):
     CALENDAR_SYNC_FUTURE_DAYS: int = 60
     # Public URL of this backend, used to build the OAuth redirect URI.
     BACKEND_BASE_URL: str = "http://127.0.0.1:8000"
+
+    # ── Embedding model location ───────────────────────────────────
+    # Point EMBEDDING_MODEL_PATH at an unpacked model directory to load the
+    # encoder from disk instead of huggingface.co — required for a packaged
+    # build, which otherwise needs ~88 MB of network on first run and fails
+    # offline. EMBEDDING_CACHE_DIR only redirects where a hub download lands.
+    EMBEDDING_MODEL_PATH: str = ""
+    EMBEDDING_CACHE_DIR: str = ""
+
+    # ── Supervised model store ─────────────────────────────────────
+    # The trained classifier used to live only in process memory, so every
+    # restart silently reverted categorisation to rules + embedding
+    # similarity until something retrained it. It is persisted here instead.
+    MODEL_STORE_DIR: str = "./model_store"
+
+    # Daily deep-work goal in minutes, for DY-16. Zero means "not set", which
+    # is the default on purpose: a target nobody chose is a stick to beat
+    # yourself with, and the rule stays silent until someone opts in.
+    DAILY_DEEP_WORK_TARGET_MIN: int = 0
+
+    # ── Shared label sheet ─────────────────────────────────────────
+    # Mirrors every typed label correction to a Google Sheet so a team can
+    # pool training data. The database is always written first and remains
+    # the source of truth; the sheet is best-effort. Requires a one-time
+    # `python -c "import gspread; gspread.oauth()"` to cache credentials.
+    ENABLE_GSHEET_SYNC: bool = False
+    GSHEET_KEY: str = "1G_oudT83kv-JSugqzbVE-nbLyjmQ0c7YY5EGpbLUaG8"
+    GSHEET_WORKSHEET: str = "Labels"
 
     # ── Embedding / Categorization Settings ────────────────────────
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
