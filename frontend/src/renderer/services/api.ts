@@ -227,6 +227,119 @@ export const getCurrentEmotionSession = async (): Promise<CurrentEmotionSession>
 };
 
 
+/* Recommendations — rule engine output                        */
+/* ---------------------------------------------------------- */
+
+export interface Recommendation {
+  id: string;
+  rule_id: string;
+  scope: 'live' | 'daily' | 'weekly' | 'monthly';
+  section: 'immediate' | 'insight' | 'planning' | 'behaviour';
+  severity: 'low' | 'medium' | 'high';
+  title: string;
+  why: string;
+  action: string;
+  action_label: string | null;
+  based_on: string | null;
+  score: number;
+  status: string;
+  generated_at: string;
+  facts: Record<string, unknown>;
+}
+
+export interface RecommendationResponse {
+  date: string;
+  daily_date: string;
+  generated_at: string;
+  total: number;
+  sections: Record<string, Recommendation[]>;
+}
+
+/**
+ * Recommendations for a date, grouped by page section.
+ *
+ * The endpoint generates on read when nothing is stored yet, so the page works
+ * whether or not the 60-second job has been running — which matters because
+ * the app is opened after the backend has been down as often as during it.
+ */
+export const getRecommendations = async (
+  date?: string,
+  refresh = false,
+): Promise<RecommendationResponse> => {
+  const queryParams = new URLSearchParams();
+  queryParams.append('user_id', 'local_user');
+  if (date) queryParams.append('date', date);
+  if (refresh) queryParams.append('refresh', 'true');
+  return fetchJson(`${API_BASE}/api/v1/recommendations?${queryParams.toString()}`);
+};
+
+/** Record Applied / Not relevant / Snoozed. This is the ranker's training set. */
+export const sendRecommendationFeedback = async (
+  recommendationId: string,
+  action: 'applied' | 'dismissed' | 'snoozed' | 'shown',
+) => {
+  return fetchJson(`${API_BASE}/api/v1/recommendations/${recommendationId}/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action }),
+  });
+};
+
+export interface ReportMetric {
+  key: string;
+  label: string;
+  value: number;
+  unit: 'min' | 'share' | 'score' | 'count';
+  baseline: number | null;
+  delta: number | null;
+  higher_is_better: boolean;
+}
+
+export interface ReportSection {
+  key: string;
+  heading: string;
+  body: string[];
+  items: Recommendation[] | null;
+}
+
+export interface NarrativeReport {
+  scope: 'daily' | 'weekly' | 'monthly';
+  period_label: string;
+  period_start: string;
+  period_end: string;
+  generated_at: string;
+  days_of_history: number;
+  has_activity: boolean;
+  metrics: ReportMetric[];
+  categories: { name: string; minutes: number; share: number }[];
+  days: { date: string; weekday: string; active_min: number; deep_min: number; focus: number }[];
+  sections: ReportSection[];
+}
+
+/** Narrative report for a period. Facts are computed server-side; this is prose. */
+export const getReport = async (
+  scope: 'daily' | 'weekly' | 'monthly',
+  date?: string,
+): Promise<NarrativeReport> => {
+  const queryParams = new URLSearchParams();
+  queryParams.append('user_id', 'local_user');
+  if (date) queryParams.append('date', date);
+  return fetchJson(`${API_BASE}/api/v1/reports/${scope}?${queryParams.toString()}`);
+};
+
+/** The same report as Markdown, for export. */
+export const getReportMarkdown = async (
+  scope: 'daily' | 'weekly' | 'monthly',
+  date?: string,
+): Promise<string> => {
+  const queryParams = new URLSearchParams();
+  queryParams.append('user_id', 'local_user');
+  if (date) queryParams.append('date', date);
+  const res = await fetch(`${API_BASE}/api/v1/reports/${scope}/markdown?${queryParams.toString()}`);
+  if (!res.ok) throw new Error(`Report export failed (${res.status})`);
+  return res.text();
+};
+
 export const getWindowClusters = async (
   date?: string,
   limit = 500,

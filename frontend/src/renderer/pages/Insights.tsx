@@ -11,13 +11,16 @@ import SampleDataBanner from '../components/SampleDataBanner';
 import {
   CurrentEmotionSession,
   EmotionStatus,
+  getAllSegments,
   getCurrentEmotionSession,
   getEmotionStatus,
   getWindowClusters,
   startEmotionDetection,
   stopEmotionDetection,
 } from '../services/api';
-import { formatSegmentTime } from '../utils/time';
+import { formatSegmentTime, shiftDate } from '../utils/time';
+import { focusByHour, focusOutOf100, summarizeFocus, HOUR_MIN_SCORED_SEC } from '../utils/focus';
+import { deepWorkSplit, DEEP_WORK_MIN_SEC } from '../utils/blocks';
 import {
   buildCategoryMix,
   buildPatternTimeline,
@@ -39,16 +42,8 @@ import './Insights.css';
 
 type InsightTab = 'Focus Insights' | 'Stress Insights' | 'Pattern Detection';
 
-const focusTrend = [
-  { day: 'Mon', score: 65 }, { day: 'Tue', score: 72 }, { day: 'Wed', score: 85 },
-  { day: 'Thu', score: 78 }, { day: 'Fri', score: 58 }, { day: 'Sat', score: 5 }, { day: 'Sun', score: 3 },
-];
-
-const deepVsShallow = [
-  { day: 'Mon', deep: 110, shallow: 170 }, { day: 'Tue', deep: 165, shallow: 140 },
-  { day: 'Wed', deep: 220, shallow: 110 }, { day: 'Thu', deep: 180, shallow: 120 },
-  { day: 'Fri', deep: 95, shallow: 215 }, { day: 'Sat', deep: 0, shallow: 0 }, { day: 'Sun', deep: 0, shallow: 0 },
-];
+/* Days behind the Focus Insights tab, ending on the selected date. */
+const FOCUS_TREND_DAYS = 7;
 
 const stressThroughDay = [
   { time: '09:00', level: 25 }, { time: '10:00', level: 30 }, { time: '11:00', level: 28 },
@@ -335,6 +330,91 @@ const Insights: React.FC = () => {
   const [patternError, setPatternError] = useState<string | null>(null);
   const [selectedBucketId, setSelectedBucketId] = useState<string | null>(null);
   const [selectedAnalysisDate, setSelectedAnalysisDate] = useState<string | null>(null);
+  const [focusDays, setFocusDays] = useState<{ date: string; segments: any[] }[]>([]);
+  const [focusLoading, setFocusLoading] = useState(false);
+
+  /* Segments for the trailing week, loaded only while the Focus tab is open.
+     This is seven paginated fetches and the other two tabs have no use for
+     them, so the tab pays for its own data the way Pattern Detection does. */
+  useEffect(() => {
+    if (activeTab !== 'Focus Insights') return;
+    let cancelled = false;
+
+    const load = async () => {
+      setFocusLoading(true);
+      const dates = Array.from(
+        { length: FOCUS_TREND_DAYS },
+        (_, i) => shiftDate(selectedDate, -(FOCUS_TREND_DAYS - 1 - i)),
+      );
+      const loaded = await Promise.all(
+        dates.map(date =>
+          getAllSegments(date)
+            .then(segments => ({ date, segments }))
+            .catch(() => ({ date, segments: [] as any[] })),
+        ),
+      );
+      if (cancelled) return;
+      setFocusDays(loaded);
+      setFocusLoading(false);
+    };
+
+    load();
+    return () => { cancelled = true; };
+  }, [activeTab, selectedDate, refreshCount]);
+
+  /* Focus per day, duration-weighted over that day's scored segments — the same
+     figure the Dashboard shows for a single date, laid out as a week. A day
+     with nothing scored yields null rather than 0: an unrecorded Sunday is
+     missing data, and plotting it as a zero drew a collapse in focus that never
+     happened. */
+  const focusTrend = useMemo(
+    () => focusDays.map(({ date, segments }) => {
+      const summary = summarizeFocus(segments);
+      return {
+        day: new Date(`${date}T00:00:00`).toLocaleDateString([], { weekday: 'short' }),
+        date,
+        score: summary.score === null ? null : focusOutOf100(summary.score),
+        activeMin: Math.round(summary.totalSec / 60),
+        coverage: summary.coverage,
+      };
+    }),
+    [focusDays],
+  );
+
+  /* Deep work is time inside an uninterrupted block of at least 25 minutes;
+     shallow is the active remainder, so the two always sum to the day's active
+     time. See utils/blocks.ts for why there is no focus gate on top. */
+  const deepVsShallow = useMemo(
+    () => focusDays.map(({ date, segments }) => {
+      const { deepSec, shallowSec } = deepWorkSplit(segments);
+      return {
+        day: new Date(`${date}T00:00:00`).toLocaleDateString([], { weekday: 'short' }),
+        date,
+        deep: Math.round(deepSec / 60),
+        shallow: Math.round(shallowSec / 60),
+      };
+    }),
+    [focusDays],
+  );
+
+  /* The week's best and worst hour of the day, pooled across every loaded day.
+     This replaces a hardcoded "your best window is 10:00–12:00, averaging
+     85/100" that no measurement stood behind. */
+  const focusHighlights = useMemo(() => {
+    const all = focusDays.flatMap(day => day.segments);
+    const week = summarizeFocus(all);
+    const hours = focusByHour(all)
+      .map((score, hour) => ({ hour, score }))
+      .filter((entry): entry is { hour: number; score: number } => entry.score !== null);
+
+    if (hours.length === 0) return { week, best: null, worst: null };
+    const ranked = [...hours].sort((a, b) => b.score - a.score);
+    return { week, best: ranked[0], worst: ranked[ranked.length - 1] };
+  }, [focusDays]);
+
+  const hourLabel = (hour: number) =>
+    `${String(hour).padStart(2, '0')}:00–${String((hour + 1) % 24).padStart(2, '0')}:00`;
+
   const latestAvailableAnalysisAnchor = useMemo(() => getLocalIsoDate(), []);
   const isHourAnalysis = patternScope === 'day';
   const isDayAnalysis = patternScope === 'week';
@@ -577,8 +657,11 @@ const Insights: React.FC = () => {
         <p className="subtitle">Focus, stress and pattern analysis</p>
       </div>
 
-      {activeTab !== 'Pattern Detection' && (
-        <SampleDataBanner what="Focus scoring, stress level and emotion detection" />
+      {/* Focus is measured — segment focus scores back both charts on that tab,
+          so the banner would now discredit real numbers. Stress and emotion
+          still have no collector behind them. */}
+      {activeTab === 'Stress Insights' && (
+        <SampleDataBanner what="Stress level and emotion detection" />
       )}
 
       <div className="sd-tabs">
@@ -594,28 +677,101 @@ const Insights: React.FC = () => {
       </div>
 
       {activeTab === 'Focus Insights' && (
+        focusLoading ? (
+          <div className="sd-loader">Loading the last {FOCUS_TREND_DAYS} days of focus…</div>
+        ) : (
         <div className="insights-content sd-fade-in">
-          <div className="sd-card">
-            <h3>Focus Score Trend (Last 7 Days)</h3>
+          <div className="sd-grid-4">
+            <div className="sd-card metric-card">
+              <span className="metric-card-label">Week Average</span>
+              <span className="metric-card-value">
+                {focusHighlights.week.score !== null
+                  ? `${focusOutOf100(focusHighlights.week.score)}/100`
+                  : '—'}
+              </span>
+              <span className="metric-card-sub">
+                Across {focusHighlights.week.segments} scored segments
+              </span>
+            </div>
+            <div className="sd-card metric-card">
+              <span className="metric-card-label">Best Hour</span>
+              <span className="metric-card-value" style={{ fontSize: 'var(--font-size-lg)' }}>
+                {focusHighlights.best ? hourLabel(focusHighlights.best.hour) : '—'}
+              </span>
+              <span className="metric-card-sub">
+                {focusHighlights.best
+                  ? `${focusOutOf100(focusHighlights.best.score)}/100 pooled across the week`
+                  : 'Not enough scored activity'}
+              </span>
+            </div>
+            <div className="sd-card metric-card">
+              <span className="metric-card-label">Weakest Hour</span>
+              <span className="metric-card-value" style={{ fontSize: 'var(--font-size-lg)' }}>
+                {focusHighlights.worst ? hourLabel(focusHighlights.worst.hour) : '—'}
+              </span>
+              <span className="metric-card-sub">
+                {focusHighlights.worst
+                  ? `${focusOutOf100(focusHighlights.worst.score)}/100 pooled across the week`
+                  : 'Not enough scored activity'}
+              </span>
+            </div>
+            <div className="sd-card metric-card">
+              <span className="metric-card-label">Deep Work</span>
+              <span className="metric-card-value">
+                {Math.round(deepVsShallow.reduce((acc, d) => acc + d.deep, 0) / 60)}h
+              </span>
+              <span className="metric-card-sub">
+                In blocks of {DEEP_WORK_MIN_SEC / 60} minutes or longer
+              </span>
+            </div>
+          </div>
+
+          <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
+            <h3>Focus Score Trend (Last {FOCUS_TREND_DAYS} Days)</h3>
+            <p className="pattern-description">
+              Each point is that day's focus, weighted by how long each segment ran. A day with
+              no scored activity has no point rather than a zero.
+            </p>
             <ResponsiveContainer width="100%" height={350}>
               <LineChart data={focusTrend}>
                 <CartesianGrid strokeDasharray="3 3" stroke={chrome.grid} />
                 <XAxis dataKey="day" tick={{ fontSize: 13, fill: chrome.axisText }} />
                 <YAxis domain={[0, 100]} tick={{ fontSize: 13, fill: chrome.axisText }} />
-                <Tooltip contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }} />
-                <Line type="monotone" dataKey="score" name="Focus score" stroke={getCategoryColor('work', theme)} strokeWidth={2.5} dot={{ r: 4, fill: getCategoryColor('work', theme) }} />
+                <Tooltip
+                  formatter={(value: number) => [`${value}/100`, 'Focus score']}
+                  labelFormatter={(_label, payload) => payload?.[0]?.payload?.date ?? ''}
+                  contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="score"
+                  name="Focus score"
+                  stroke={getCategoryColor('work', theme)}
+                  strokeWidth={2.5}
+                  dot={{ r: 4, fill: getCategoryColor('work', theme) }}
+                  connectNulls={false}
+                />
               </LineChart>
             </ResponsiveContainer>
           </div>
 
           <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
             <h3>Deep Work vs Shallow Work (Minutes)</h3>
+            <p className="pattern-description">
+              Deep work is time inside an uninterrupted stretch of {DEEP_WORK_MIN_SEC / 60} minutes
+              or more; shallow is the rest of the active time. The two sum to the day's tracked
+              activity.
+            </p>
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={deepVsShallow} barGap={4}>
                 <CartesianGrid strokeDasharray="3 3" stroke={chrome.grid} />
                 <XAxis dataKey="day" tick={{ fontSize: 13, fill: chrome.axisText }} />
-                <YAxis tick={{ fontSize: 13, fill: chrome.axisText }} />
-                <Tooltip contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }} />
+                <YAxis tick={{ fontSize: 13, fill: chrome.axisText }} unit="m" />
+                <Tooltip
+                  formatter={(value: number, name) => [`${value} min`, name]}
+                  labelFormatter={(_label, payload) => payload?.[0]?.payload?.date ?? ''}
+                  contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }}
+                />
                 <Legend wrapperStyle={{ fontSize: 12, color: 'var(--color-text-secondary)' }} />
                 <Bar dataKey="deep" fill={getCategoryColor('learn', theme)} radius={[4, 4, 0, 0]} name="Deep Work" />
                 <Bar dataKey="shallow" fill={getCategoryColor('communication', theme)} radius={[4, 4, 0, 0]} name="Shallow Work" />
@@ -623,14 +779,33 @@ const Insights: React.FC = () => {
             </ResponsiveContainer>
           </div>
 
-          <div className="sd-alert sd-alert--success" style={{ marginTop: 'var(--space-xl)' }}>
-            <span className="sd-alert-icon">↑</span>
-            <div className="sd-alert-content">
-              <h4>Key Finding</h4>
-              <p>Your best focus window is between <strong>10:00 AM - 12:00 PM</strong>. During this time, your focus score averages 85/100 with minimal context switching.</p>
+          {focusHighlights.best && focusHighlights.worst && focusHighlights.week.score !== null && (
+            <div className="sd-alert sd-alert--success" style={{ marginTop: 'var(--space-xl)' }}>
+              <span className="sd-alert-icon">↑</span>
+              <div className="sd-alert-content">
+                <h4>Key Finding</h4>
+                <p>
+                  Your strongest hour is <strong>{hourLabel(focusHighlights.best.hour)}</strong>,
+                  averaging {focusOutOf100(focusHighlights.best.score)}/100 across the last{' '}
+                  {FOCUS_TREND_DAYS} days — against {focusOutOf100(focusHighlights.week.score)}/100
+                  for the week overall, and {focusOutOf100(focusHighlights.worst.score)}/100 at your
+                  weakest hour, {hourLabel(focusHighlights.worst.hour)}. Hours with under{' '}
+                  {HOUR_MIN_SCORED_SEC / 60} minutes of scored activity are left out of this
+                  comparison.
+                </p>
+              </div>
             </div>
-          </div>
+          )}
+
+          {focusHighlights.week.score === null && (
+            <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
+              <p className="dash-empty">
+                No scored activity in the {FOCUS_TREND_DAYS} days ending {selectedDate}.
+              </p>
+            </div>
+          )}
         </div>
+        )
       )}
 
       {activeTab === 'Stress Insights' && (

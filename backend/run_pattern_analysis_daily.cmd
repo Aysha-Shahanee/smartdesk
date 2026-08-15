@@ -10,6 +10,7 @@ REM clustered whatever windows already existed and never rebuilt them --
 REM Insights kept re-analysing stale data as new activity arrived.
 REM   1. rebuild activity_window_10m from activity_segments (+ additive cols)
 REM   2. cluster those windows into activity_window_patterns
+REM   3. recompute personal baselines and run the period rule families
 ".\venv\Scripts\python.exe" refresh_windows_nightly.py
 if errorlevel 1 (
     echo [%date% %time%] window rebuild failed; skipping clustering to avoid

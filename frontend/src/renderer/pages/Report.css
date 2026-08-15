@@ -71,3 +71,173 @@
   flex-direction: column;
   gap: var(--space-md);
 }
+
+/* ============================================
+   Narrative report
+   ============================================ */
+
+/* The figures the prose quotes, lifted out of the sentences so the report can
+   be read at a glance before it is read as text. */
+.narrative-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--space-sm);
+  margin-bottom: var(--space-xl);
+}
+
+.narrative-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-md) var(--space-lg);
+  background: var(--color-bg);
+  border-radius: var(--radius-md);
+}
+
+.narrative-metric-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.narrative-metric-value {
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.narrative-metric-sub {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+/* Direction of travel, coloured by whether it is an improvement — which is not
+   the same as whether it went up. More distraction is a bigger number and a
+   worse day. */
+.narrative-delta {
+  font-weight: 600;
+}
+
+.narrative-delta.up { color: var(--color-success); }
+.narrative-delta.down { color: var(--color-danger); }
+
+.narrative-section {
+  padding-top: var(--space-lg);
+  margin-top: var(--space-lg);
+  border-top: 1px solid var(--color-border-light);
+}
+
+.narrative-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-md);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.narrative-section-icon {
+  font-size: var(--font-size-md);
+  line-height: 1;
+}
+
+/* One fact per line, at a measure short enough to read. These lines are
+   independent sentences, not a flowing argument, so running them together as
+   justified paragraphs across a 1400px window buried them. */
+.narrative-points {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  max-width: 78ch;
+}
+
+.narrative-points li {
+  position: relative;
+  padding-left: var(--space-lg);
+  font-size: var(--font-size-base);
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+
+.narrative-points li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.6em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-text-light);
+}
+
+/* Caveats about the report itself — present, but not competing with the day. */
+.narrative-section--meta .narrative-points li {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.narrative-findings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-md);
+}
+
+.narrative-finding {
+  padding: var(--space-md) var(--space-lg);
+  background: var(--color-bg);
+  border-radius: var(--radius-md);
+  /* Severity as a left rule rather than an icon glyph: it survives at a glance
+     down a column of cards, which a character in the text does not. */
+  border-left: 3px solid var(--color-text-light);
+}
+
+.narrative-finding.sev-high { border-left-color: var(--color-danger); }
+.narrative-finding.sev-medium { border-left-color: var(--color-warning); }
+.narrative-finding.sev-low { border-left-color: var(--color-success); }
+
+.narrative-finding h5 {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-xs);
+}
+
+.narrative-finding-why {
+  font-size: var(--font-size-sm);
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-sm);
+}
+
+.narrative-finding-action {
+  font-size: var(--font-size-sm);
+  line-height: 1.55;
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-sm);
+}
+
+.narrative-finding-tag {
+  display: inline-block;
+  margin-right: var(--space-sm);
+  padding: 1px var(--space-sm);
+  border-radius: var(--radius-full);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: 1px;
+}
+
+.narrative-finding-src {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono, Consolas, monospace);
+}

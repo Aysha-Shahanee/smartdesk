@@ -3,7 +3,13 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   Legend, Cell,
 } from 'recharts';
-import { getSegmentsSummary } from '../services/api';
+import {
+  getSegmentsSummary,
+  getReport,
+  getReportMarkdown,
+  type NarrativeReport,
+  type ReportMetric,
+} from '../services/api';
 import { useDateContext } from '../contexts/DateContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { getCategoryColor, getChartChrome } from '../theme/chartTheme';
@@ -40,6 +46,153 @@ const fetchRange = async (endDate: string, count: number): Promise<DaySummary[]>
   );
 };
 
+const TAB_SCOPE: Record<ReportTab, 'daily' | 'weekly' | 'monthly'> = {
+  'Daily Report': 'daily',
+  'Weekly Report': 'weekly',
+  'Monthly Report': 'monthly',
+};
+
+/* One marker per section key, so a reader can find "what went wrong" without
+   reading the heading. Keys come from `build_sections` in the report service. */
+const SECTION_ICON: Record<string, string> = {
+  headline: '📌',
+  where: '🗂️',
+  focus: '🎯',
+  broke: '⚠️',
+  wins: '✅',
+  watch: '💡',
+  plan: '📅',
+  quality: '🔍',
+};
+
+/** Sections that describe the report rather than the day. Rendered quieter. */
+const META_SECTIONS = new Set(['quality']);
+
+/** A metric in the same shape the prose uses, so the two never disagree. */
+const formatMetric = (value: number, unit: ReportMetric['unit']): string => {
+  if (unit === 'min') return formatDuration(value * 60);
+  if (unit === 'share') return `${Math.round(value * 100)}%`;
+  if (unit === 'score') return value.toFixed(2);
+  return String(Math.round(value));
+};
+
+/**
+ * One headline figure with its comparison against the user's own baseline.
+ *
+ * `baseline` is null whenever fewer than eight samples backed it, and in that
+ * case nothing is claimed — the backend suppresses the comparison in the prose
+ * for the same reason, so inventing one here would contradict the report.
+ */
+const MetricTile: React.FC<{ metric: ReportMetric }> = ({ metric }) => {
+  const { delta, baseline, unit, higher_is_better } = metric;
+  const better = delta === null || delta === 0 ? null : (delta > 0) === higher_is_better;
+
+  return (
+    <div className="narrative-metric">
+      <span className="narrative-metric-label">{metric.label}</span>
+      <span className="narrative-metric-value">{formatMetric(metric.value, unit)}</span>
+      {baseline === null ? (
+        <span className="narrative-metric-sub">Not enough history to compare</span>
+      ) : delta === null || delta === 0 ? (
+        <span className="narrative-metric-sub">Same as your usual</span>
+      ) : (
+        <span className="narrative-metric-sub">
+          <span className={`narrative-delta ${better ? 'up' : 'down'}`}>
+            {delta > 0 ? '▲' : '▼'} {formatMetric(Math.abs(delta), unit)}
+          </span>
+          {' '}vs usual {formatMetric(baseline, unit)}
+        </span>
+      )}
+    </div>
+  );
+};
+
+/**
+ * The narrative half of a report.
+ *
+ * Prose is assembled server-side from a fact base that is computed before any
+ * sentence exists, so nothing here can contain a number the data does not
+ * support. The charts below render the same period from the same segments.
+ *
+ * Presentation only, but deliberate: the previous version stacked every
+ * section's lines as full-width paragraphs, which turned a set of independent
+ * one-sentence facts into a wall of prose nobody reads. Each line is now its
+ * own bullet at a readable measure, the figures the sentences quote are lifted
+ * into a strip of tiles above them, and the caveats are demoted to a footer.
+ */
+const NarrativePanel: React.FC<{ report: NarrativeReport | null; loading: boolean }> = ({
+  report,
+  loading,
+}) => {
+  if (loading) return <div className="sd-card"><p className="dash-empty">Writing the report…</p></div>;
+  if (!report) return null;
+  if (!report.has_activity) {
+    return (
+      <div className="sd-card">
+        <p className="dash-empty">No activity was recorded for {report.period_label}.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="sd-card narrative" style={{ marginBottom: 'var(--space-xl)' }}>
+      <div className="card-header">
+        <h3><span className="card-icon">📝</span> {report.period_label}</h3>
+        <span className="metric-card-sub">
+          {report.days_of_history} days of history behind the comparisons
+        </span>
+      </div>
+
+      {report.metrics.length > 0 && (
+        <div className="narrative-metrics">
+          {report.metrics.map(metric => (
+            <MetricTile key={metric.key} metric={metric} />
+          ))}
+        </div>
+      )}
+
+      {report.sections.map(section => (
+        <section
+          key={section.key}
+          className={`narrative-section${META_SECTIONS.has(section.key) ? ' narrative-section--meta' : ''}`}
+        >
+          <h4 className="narrative-section-head">
+            <span className="narrative-section-icon">{SECTION_ICON[section.key] ?? '•'}</span>
+            {section.heading}
+          </h4>
+
+          {section.body.length > 0 && (
+            <ul className="narrative-points">
+              {section.body.map((line, i) => (
+                <li key={i}>{line}</li>
+              ))}
+            </ul>
+          )}
+
+          {(section.items ?? []).length > 0 && (
+            <div className="narrative-findings">
+              {(section.items ?? []).map(item => (
+                <article
+                  className={`narrative-finding sev-${item.severity}`}
+                  key={item.rule_id + item.title}
+                >
+                  <h5>{item.title}</h5>
+                  <p className="narrative-finding-why">{item.why}</p>
+                  <p className="narrative-finding-action">
+                    <span className="narrative-finding-tag">Do this</span>
+                    {item.action}
+                  </p>
+                  <p className="narrative-finding-src">{item.based_on} • {item.rule_id}</p>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      ))}
+    </div>
+  );
+};
+
 const Report: React.FC = () => {
   const { selectedDate, refreshCount } = useDateContext();
   const { theme } = useTheme();
@@ -47,6 +200,8 @@ const Report: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ReportTab>('Daily Report');
   const [days, setDays] = useState<DaySummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [report, setReport] = useState<NarrativeReport | null>(null);
+  const [reportLoading, setReportLoading] = useState(true);
 
   // 30 days covers all three tabs, so switching tabs needs no extra fetch.
   // The previous version passed an empty dependency array, so the report kept
@@ -59,6 +214,15 @@ const Report: React.FC = () => {
       .catch(() => { if (!cancelled) { setDays([]); setLoading(false); } });
     return () => { cancelled = true; };
   }, [selectedDate, refreshCount]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setReportLoading(true);
+    getReport(TAB_SCOPE[activeTab], selectedDate)
+      .then(r => { if (!cancelled) { setReport(r); setReportLoading(false); } })
+      .catch(() => { if (!cancelled) { setReport(null); setReportLoading(false); } });
+    return () => { cancelled = true; };
+  }, [activeTab, selectedDate, refreshCount]);
 
   const today = days[days.length - 1];
   const yesterday = days[days.length - 2];
@@ -183,6 +347,26 @@ const Report: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  const handleExportMarkdown = async () => {
+    try {
+      const markdown = await getReportMarkdown(TAB_SCOPE[activeTab], selectedDate);
+      const blob = new Blob([markdown], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `smartdesk_${TAB_SCOPE[activeTab]}_${selectedDate}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      /* Export is a convenience; the report itself is already on screen. */
+    }
+  };
+
+  const handleExportPdf = async () => {
+    if (!window.electronAPI) return;
+    await window.electronAPI.exportReportPdf(TAB_SCOPE[activeTab], selectedDate);
+  };
+
   if (loading) return <div className="sd-loader">Loading reports…</div>;
 
   const tooltipStyle = {
@@ -199,6 +383,16 @@ const Report: React.FC = () => {
           <h1>Reports</h1>
           <p className="subtitle">Generated from recorded activity • window ending {selectedDate}</p>
         </div>
+        {window.electronAPI && (
+          <button className="sd-btn" onClick={handleExportPdf} style={{ marginRight: 8 }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="8" /></svg>
+            Export PDF
+          </button>
+        )}
+        <button className="sd-btn" onClick={handleExportMarkdown} style={{ marginRight: 8 }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /></svg>
+          Export Report
+        </button>
         <button className="sd-btn" onClick={handleExport}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
           Export CSV
@@ -220,6 +414,7 @@ const Report: React.FC = () => {
       {/* ---- Daily ---- */}
       {activeTab === 'Daily Report' && (
         <div className="report-content sd-fade-in">
+          <NarrativePanel report={report} loading={reportLoading} />
           <div className="sd-grid-4">
             <div className="sd-card metric-card">
               <span className="metric-card-label">Tracked Active Time</span>
@@ -287,6 +482,7 @@ const Report: React.FC = () => {
       {/* ---- Weekly ---- */}
       {activeTab === 'Weekly Report' && (
         <div className="report-content sd-fade-in">
+          <NarrativePanel report={report} loading={reportLoading} />
           <div className="sd-grid-4">
             <div className="sd-card metric-card">
               <span className="metric-card-label">Total Tracked Time</span>
@@ -342,6 +538,7 @@ const Report: React.FC = () => {
       {/* ---- Monthly ---- */}
       {activeTab === 'Monthly Report' && (
         <div className="report-content sd-fade-in">
+          <NarrativePanel report={report} loading={reportLoading} />
           <div className="sd-grid-4">
             <div className="sd-card metric-card">
               <span className="metric-card-label">Total Tracked Time</span>
