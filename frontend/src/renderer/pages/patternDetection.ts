@@ -56,6 +56,12 @@ export interface PatternTimelinePoint {
   anomalyScore: number | null;
 }
 
+export interface WeeklyPatternSharePoint {
+  day: string;
+  highFocus: number;
+  moderateFocus: number;
+}
+
 const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -285,6 +291,37 @@ export const buildPatternTimeline = (
     communicationRatio: Number((row.communication_ratio * 100).toFixed(1)),
     anomalyScore: row.anomaly_score,
   }));
+};
+
+export const buildWeeklyPatternShare = (
+  rows: WindowCluster[],
+  bucket: PatternBucket | null,
+): WeeklyPatternSharePoint[] => {
+  const orderedDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const buckets = new Map<string, { total: number; highFocus: number; moderateFocus: number }>();
+
+  for (const day of orderedDays) {
+    buckets.set(day, { total: 0, highFocus: 0, moderateFocus: 0 });
+  }
+
+  for (const row of rowsForBucket(rows, bucket)) {
+    const day = weekdayNames[parseTimestamp(row.window_start).getDay()];
+    const current = buckets.get(day);
+    if (!current) continue;
+    current.total += 1;
+    if (row.focus_level === 'high_focus') current.highFocus += 1;
+    if (row.focus_level === 'distracted') current.moderateFocus += 1;
+  }
+
+  return orderedDays.map(day => {
+    const current = buckets.get(day)!;
+    const total = current.total || 1;
+    return {
+      day,
+      highFocus: Number(((current.highFocus / total) * 100).toFixed(1)),
+      moderateFocus: Number(((current.moderateFocus / total) * 100).toFixed(1)),
+    };
+  });
 };
 
 export const describeBucketUnit = (scope: PatternScope): string => {
