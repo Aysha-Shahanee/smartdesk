@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 
 PatternScope = Literal["day", "week", "month"]
 
+# Cut points on avg_focus_score (0..1), used only when clustering degenerates
+# into fewer than three clusters and there is no relative ranking to read.
+LOW_FOCUS_MAX = 0.25
+HIGH_FOCUS_MIN = 0.55
+
 
 @dataclass(frozen=True)
 class ScopeRun:
@@ -171,13 +176,28 @@ class ScopedWindowPatternAnalysisService:
             reverse=True,
         )
         if len(ranked) < 3:
-            return {cluster: "high_focus" for cluster, _ in ranked}
+            # The three levels are assigned by rank, which needs three clusters
+            # to rank. KMeans returns fewer whenever a range's windows are
+            # near-identical — an untouched machine produces a day of 144
+            # all-zero rows that collapse to one cluster — and calling every
+            # one of those "high_focus" reported dead days as the user's best.
+            # With nothing to rank against, score each surviving cluster on its
+            # own average, which is what the level names claim to describe.
+            return {cluster: self._absolute_focus_level(score) for cluster, score in ranked}
 
         return {
             ranked[0][0]: "high_focus",
             ranked[-1][0]: "low_focus",
             ranked[1][0]: "distracted",
         }
+
+    @staticmethod
+    def _absolute_focus_level(score: float) -> str:
+        if score < LOW_FOCUS_MAX:
+            return "low_focus"
+        if score >= HIGH_FOCUS_MIN:
+            return "high_focus"
+        return "distracted"
 
     def _upsert_results(
         self,
