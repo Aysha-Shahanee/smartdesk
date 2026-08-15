@@ -1,13 +1,16 @@
 """Segment feedback routes for user correction submissions."""
 
-from fastapi import APIRouter, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
-from app.models.db import ActivitySegmentRecord
+from app.core.database import get_db
 from app.repositories.activity_segment_repository import ActivitySegmentRepository
 from app.services.categorizer import categorizer
 
 router = APIRouter(tags=["Segment Feedback"])
+
+segment_repository = ActivitySegmentRepository()
 
 
 class SegmentLabelRequest(BaseModel):
@@ -20,6 +23,7 @@ class SegmentLabelRequest(BaseModel):
 async def label_segment(
     segment_id: str = Path(..., description="The ID of the segment to label"),
     request: SegmentLabelRequest = None,
+    db: Session = Depends(get_db),
 ):
     """
     Submit a user correction for an activity segment.
@@ -41,7 +45,7 @@ async def label_segment(
         )
 
     # Get the segment from the database
-    segment = ActivitySegmentRepository.get_by_id(segment_id)
+    segment = segment_repository.get_by_id(db, segment_id)
     if not segment:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

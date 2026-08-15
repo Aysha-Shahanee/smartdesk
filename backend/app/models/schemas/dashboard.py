@@ -37,6 +37,10 @@ class IDEDashboardResponse(DashboardSchema):
     saves: int = Field(default=0, ge=0)
     lines_added: int = Field(default=0, ge=0)
     lines_deleted: int = Field(default=0, ge=0)
+    # Distinct files touched in the window. The IDE collector already records
+    # the per-file detail; only the aggregate was missing, so the Dashboard had
+    # no data-backed source for its "Files Modified" tile.
+    files_modified: int = Field(default=0, ge=0)
     top_languages: list[NamedDuration] = Field(default_factory=list)
     top_projects: list[NamedDuration] = Field(default_factory=list)
 

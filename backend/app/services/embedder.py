@@ -5,7 +5,9 @@ Provides real embeddings for activity segments and label texts.
 
 from __future__ import annotations
 
+import logging
 import threading
+from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
@@ -13,6 +15,8 @@ from sentence_transformers import SentenceTransformer
 
 from app.core.config import settings
 from app.models.db import ActivitySegmentRecord
+
+logger = logging.getLogger("smartdesk.embedder")
 
 
 class Embedder:
@@ -34,16 +38,66 @@ class Embedder:
         self.model_name: str = settings.EMBEDDING_MODEL
         self.model_version: str = settings.EMBEDDING_VERSION
         self.dimensions: int = settings.EMBEDDING_DIM
+        self.model_source: str = "hub"
 
-        # Load model; sentence-transformers will download if not cached.
-        self.model: SentenceTransformer = SentenceTransformer(self.model_name)
-        # Ensure the model's output dimension matches expectation (some models may differ).
-        # If mismatch, we could project or warn; for all-MiniLM-L6-v2 it's 384.
-        if self.model.get_sentence_embedding_dimension() != self.dimensions:
+        self.model: SentenceTransformer = self._load_model()
+
+        # Ensure the model's output dimension matches expectation (some models
+        # may differ). For all-MiniLM-L6-v2 it's 384.
+        actual = self._embedding_dimension()
+        if actual != self.dimensions:
             raise ValueError(
                 f"Model {self.model_name} outputs dimension "
-                f"{self.model.get_sentence_embedding_dimension()} but expected {self.dimensions}"
+                f"{actual} but expected {self.dimensions}"
             )
+
+    def _load_model(self) -> SentenceTransformer:
+        """Load the encoder, preferring a bundled copy over a hub download.
+
+        Plain ``SentenceTransformer(name)`` reaches out to huggingface.co on
+        every cold start: ~88 MB on a machine with no cache, and an outright
+        failure with no network. That is fine on a dev box and wrong for a
+        packaged desktop app, so a local directory wins when one is
+        configured.
+
+        ``EMBEDDING_MODEL_PATH`` points at an unpacked model directory (the
+        one containing ``config.json`` / ``modules.json``); ship that with the
+        app. Otherwise the hub copy is used but pinned to
+        ``EMBEDDING_CACHE_DIR`` when set, so the download lands somewhere you
+        control and can bundle later.
+        """
+        local_path = (settings.EMBEDDING_MODEL_PATH or "").strip()
+        if local_path:
+            path = Path(local_path).expanduser()
+            if path.is_dir():
+                logger.info("loading embedding model from %s", path)
+                self.model_source = "local"
+                return SentenceTransformer(str(path), local_files_only=True)
+            logger.warning(
+                "EMBEDDING_MODEL_PATH=%s is not a directory; falling back to "
+                "the hub, which needs network access on first run.", path,
+            )
+
+        cache_dir = (settings.EMBEDDING_CACHE_DIR or "").strip() or None
+        if cache_dir:
+            Path(cache_dir).expanduser().mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "loading embedding model %s from the hub%s",
+            self.model_name, f" (cache: {cache_dir})" if cache_dir else "",
+        )
+        return SentenceTransformer(self.model_name, cache_folder=cache_dir)
+
+    def _embedding_dimension(self) -> int:
+        """Output dimension, across sentence-transformers versions.
+
+        ``get_sentence_embedding_dimension`` was renamed to
+        ``get_embedding_dimension`` in 5.x and now emits a FutureWarning on
+        every startup; prefer the new name when it exists.
+        """
+        getter = getattr(self.model, "get_embedding_dimension", None)
+        if callable(getter):
+            return getter()
+        return self.model.get_sentence_embedding_dimension()
 
     def generate_embedding(self, text: str) -> List[float]:
         """Return a normalized embedding vector for the given text.

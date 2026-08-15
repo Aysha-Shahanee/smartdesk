@@ -105,9 +105,11 @@ class ActivitySegmentRecord(Base):
             "category IS NULL OR category IN ('work', 'learn', 'communication', 'entertainment', 'social_media', 'system', 'meetings', 'other')",
             name='ck_activity_segments_category'
         ),
-        # Category method validation
+        # Category method validation. 'user' marks a category assigned by hand;
+        # ActivitySegmentBuilder._upsert_segments will not overwrite one.
         CheckConstraint(
-            "category_method IS NULL OR category_method IN ('rule', 'embedding')",
+            "category_method IS NULL OR "
+            "category_method IN ('rule', 'embedding', 'supervised', 'user')",
             name='ck_activity_segments_category_method'
         ),
         # Embedding status validation

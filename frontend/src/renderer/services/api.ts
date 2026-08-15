@@ -225,3 +225,16 @@ export const getEmotionStatus = async (): Promise<EmotionStatus> => {
 export const getCurrentEmotionSession = async (): Promise<CurrentEmotionSession> => {
   return fetchJson(`${API_BASE}/api/v1/emotion/sessions/current`);
 };
+
+
+export const getWindowClusters = async (
+  date?: string,
+  limit = 500,
+  scope: 'day' | 'week' | 'month' = 'day',
+) => {
+  const queryParams = new URLSearchParams();
+  queryParams.append('limit', String(limit));
+  queryParams.append('scope', scope);
+  if (date) queryParams.append('date', date);
+  return fetchJson(`${API_BASE}/api/v1/window-clusters?${queryParams.toString()}`);
+};

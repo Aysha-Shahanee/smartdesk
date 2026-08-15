@@ -1,8 +1,10 @@
 fastapi
 uvicorn[standard]
 alembic
-pydantic==2.7.0
-pydantic-core==2.18.1  # This matches what pydantic 2.7.0 expects
+pydantic>=2.9.0
+# tests/test_categorizer.py imports pytest; without it that module fails to
+# import and unittest discovery silently skips a quarter of the suite.
+pytest
 python-dotenv
 sqlalchemy
 tzdata
@@ -11,6 +13,7 @@ requests
 google-api-python-client
 google-auth
 google-auth-oauthlib
+gspread>=5.0.0
 sentence-transformers>=2.2.2
 torch>=2.0.0
 torchvision

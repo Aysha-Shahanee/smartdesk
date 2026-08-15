@@ -97,6 +97,14 @@
   color: var(--color-text-primary);
 }
 
+/* Says what a figure measures, for the tiles whose definition differs from the
+   one a neighbouring tab uses for the same-sounding number. */
+.summary-stat-sub {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  line-height: 1.35;
+}
+
 /* Donut / Chart helpers */
 .donut-container {
   display: flex;
@@ -147,73 +155,81 @@
   font-weight: 600;
 }
 
-/* Flame Chart */
-.flame-chart-container {
+/* ============================================
+   Timeline View — one 24-hour track
+   ============================================ */
+
+/* The side padding is what the 00:00 and 24:00 axis labels hang into: both the
+   track and the axis are laid out inside it, so a percentage means the same
+   position in each. */
+.day-timeline {
   margin-top: var(--space-lg);
-  padding: 10px 0;
+  padding: 4px 26px 0;
 }
 
-.flame-tracks {
-  display: flex;
-  flex-direction: column;
-  /* Lanes are stacked overlap rows, not separate tracks — keep them tight so
-     they read as one timeline rather than several unrelated charts. */
-  gap: 3px;
+.day-timeline-track {
   position: relative;
-  padding-bottom: 20px; /* space for axis */
-}
-
-.flame-track-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-md);
-}
-
-.flame-track-label {
-  width: 120px;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-primary);
-  font-weight: 500;
-  text-overflow: ellipsis;
-  overflow: hidden;
-  white-space: nowrap;
-  flex-shrink: 0;
-  text-align: right;
-}
-
-.flame-track-area {
-  flex: 1;
-  position: relative;
-  height: 24px;
+  height: 44px;
   background: var(--color-bg);
-  border-radius: var(--radius-sm);
   border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
 }
 
-.flame-segment {
+.day-timeline-gridline {
   position: absolute;
   top: 0;
   bottom: 0;
-  border-radius: var(--radius-sm);
+  width: 1px;
+  background: var(--color-border-light);
+  opacity: 0.7;
+}
+
+.day-timeline-gridline.major {
+  background: var(--color-border);
+  opacity: 1;
+}
+
+.day-timeline-segment {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  border-radius: 2px;
+  /* A one-minute segment is a sixth of a pixel wide at this scale. Give every
+     segment a hit target rather than letting short ones vanish. */
   min-width: 2px;
   cursor: pointer;
-  opacity: 0.9;
-  transition: opacity 0.2s ease, transform 0.1s ease;
+  transition: filter 0.15s ease;
 }
 
-.flame-segment:hover {
-  opacity: 1;
-  transform: scaleY(1.1);
+.day-timeline-segment:hover {
+  filter: brightness(1.25);
   z-index: 10;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
-.flame-axis {
+.day-timeline-now {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--color-danger);
+  z-index: 11;
+  pointer-events: none;
+}
+
+.day-timeline-axis {
   position: relative;
-  height: 20px;
-  margin-top: 10px;
+  height: 18px;
+  margin-top: 6px;
   color: var(--color-text-muted);
   font-size: var(--font-size-xs);
+}
+
+.day-timeline-axis span {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
 
 /* Idle-inclusion toggle in the Timeline header */

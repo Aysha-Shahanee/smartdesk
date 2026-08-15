@@ -302,10 +302,10 @@ async function refresh() {
       loadCategoryData(dateStr);
     }
 
-    // Fetch recent activity segments for today (limit to 5)
+    // Fetch recent activity segments for today (limit to 10)
     const todayStr = new Date().toISOString().split('T')[0];
     console.log('Fetching segments for date:', todayStr);
-    const segRes = await fetch(`/dashboard/segments?date=${todayStr}&limit=5`);
+    const segRes = await fetch(`/dashboard/segments?date=${todayStr}&limit=10`);
     console.log('Segments response status:', segRes.status);
     const segData = await segRes.json();
     console.log('Segments data:', segData);
@@ -545,6 +545,7 @@ async function populateRecentSegmentsTable(segments) {
         "<th>Time</th>" +
         "<th>App</th>" +
         "<th>Title</th>" +
+        "<th>Focus Score</th>" +
         "<th>Predicted Category</th>" +
         "<th>Corrected Category</th>" +
         "<th>Actions</th>" +
@@ -556,12 +557,14 @@ async function populateRecentSegmentsTable(segments) {
         const title = seg.title || '—';
         const predictedCategory = seg.predicted_category || 'unknown';
         const correctionLabel = seg.correction_label || '';
+        const focusScore = typeof seg.focus_score === 'number' ? `${Math.round(seg.focus_score * 100)}%` : '–';
         const segmentId = seg.id;
 
         html += "<tr>";
         html += `<td>${startTime}</td>`;
         html += `<td>${appName}</td>`;
         html += `<td>${title}</td>`;
+        html += `<td>${focusScore}</td>`;
         html += `<td>${predictedCategory}</td>`;
 
         // Corrected category cell with edit functionality
