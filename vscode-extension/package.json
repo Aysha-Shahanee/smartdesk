@@ -8,6 +8,7 @@
   "categories": ["Other"],
   "activationEvents": ["onStartupFinished"],
   "main": "./extension.js",
+  "scripts": { "test": "node --test repository.test.js" },
   "contributes": {
     "configuration": {
       "title": "SmartDesk",

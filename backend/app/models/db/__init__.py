@@ -4,6 +4,9 @@ from app.models.db.activity_segment_label import ActivitySegmentLabelRecord
 from app.models.db.activity_segment_pattern import ActivitySegmentPattern
 from app.models.db.activity_window_pattern import ActivityWindowPatternRecord
 from app.models.db.calendar_event import CalendarEventRecord
+from app.models.db.github import GitHubConnectionRecord
+from app.models.db.github import GitHubInitialPredictionRecord
+from app.models.db.github import GitHubOAuthStateRecord
 from app.models.db.recommendation import RecommendationEventRecord
 from app.models.db.recommendation import RecommendationRecord
 from app.models.db.service_heartbeat import ServiceHeartbeatRecord
@@ -22,6 +25,9 @@ __all__ = [
     "ActivityWindowPatternRecord",
     "BrowserSessionRecord",
     "CalendarEventRecord",
+    "GitHubConnectionRecord",
+    "GitHubInitialPredictionRecord",
+    "GitHubOAuthStateRecord",
     "IDESessionRecord",
     "OSSessionRecord",
     "OSBrowserSummaryRecord",

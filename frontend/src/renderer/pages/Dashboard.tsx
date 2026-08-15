@@ -1,18 +1,28 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
-import { getSegmentsSummary, getAllSegments, getIDEDashboard, getWindowClusters, dayBounds } from '../services/api';
+import {
+  getSegmentsSummary,
+  getAllSegments,
+  getGitHubActiveTasks,
+  getIDEDashboard,
+  getRecommendations,
+  getWindowClusters,
+  type GitHubActiveTask,
+  type Recommendation,
+  dayBounds,
+} from '../services/api';
 import { useDateContext } from '../contexts/DateContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { getCategoryColor, getChartChrome } from '../theme/chartTheme';
 import SampleBadge from '../components/SampleBadge';
 import { capitalize, formatDuration, parseSegmentTime } from '../utils/time';
+import { buildDashboardPredictionSummary } from '../utils/dashboardPrediction.mjs';
 import { focusOutOf100, summarizeFocus } from '../utils/focus';
 /* Shared with the Insights page so "deep work" cannot come to mean two
    different things depending on which page you are looking at. */
 import { BLOCK_GAP_SEC, DEEP_WORK_MIN_SEC } from '../utils/blocks';
 import { bucketWindowsByScope, type PatternScope, type WindowCluster } from './patternDetection';
-import { getRecommendations, type Recommendation } from '../services/api';
 import './Dashboard.css';
 
 const EMPTY_SUMMARY = {
@@ -30,24 +40,15 @@ const SWITCH_RATE_SCALE = 30;
 
 /* Stress has no collector or model behind it — there is no stress column, no
    scorer and no endpoint — so it stays a placeholder, flagged in the UI with
-   <SampleBadge /> rather than presented as a measurement. Task detection is the
-   same story, which is why the whole Prediction page is sample data; the
-   figures below mirror the first mock task on that page so the preview and the
-   page agree.
+   <SampleBadge /> rather than presented as a measurement.
 
    Focus is no longer among them. `activity_segments.focus_score` is written per
    segment by the backend's FocusScorer and covers upwards of 97% of a day's
    active time, so the Focus Score below is measured — see utils/focus.ts. */
+/* GitHub task predictions are provided separately by the real GitHub task
+   prediction integration. */
 const SAMPLE_STRESS_SCORE = 42;
-const SAMPLE_PREDICTION = {
-  title: 'User Authentication Module',
-  context: 'VS Code • auth-service.ts',
-  status: 'ongoing',
-  progress: 53,
-  timeSpent: '2h 7m',
-  predictedTotal: '4h 0m',
-  remaining: '1h 53m',
-};
+const PREDICTION_REFRESH_INTERVAL_MS = 15_000;
 
 interface ActiveSegment {
   start: Date;
@@ -76,6 +77,9 @@ const Dashboard: React.FC = () => {
   const [summary, setSummary] = useState<any>(null);
   const [segments, setSegments] = useState<any[]>([]);
   const [ide, setIde] = useState<any>(null);
+  const [activeTasks, setActiveTasks] = useState<GitHubActiveTask[]>([]);
+  const [predictionLoading, setPredictionLoading] = useState(true);
+  const [predictionError, setPredictionError] = useState('');
   const [insights, setInsights] = useState<Recommendation[]>([]);
   const [insightTotal, setInsightTotal] = useState(0);
   const [patternRows, setPatternRows] = useState<Record<PatternScope, WindowCluster[]>>({
@@ -107,8 +111,10 @@ const Dashboard: React.FC = () => {
          engine has already deduped them by concern, so two rules describing
          the same problem cannot both land here. The total is kept so the panel
          can say what fraction of the day's findings it is showing. */
-      const ranked = recs
-        ? Object.values(recs.sections).flat().sort((a, b) => b.score - a.score)
+      const ranked: Recommendation[] = recs
+        ? (Object.values(recs.sections) as Recommendation[][])
+            .flat()
+            .sort((a, b) => b.score - a.score)
         : [];
       setInsights(ranked.slice(0, 4));
       setInsightTotal(recs?.total ?? ranked.length);
@@ -123,7 +129,43 @@ const Dashboard: React.FC = () => {
     return () => { cancelled = true; };
   }, [selectedDate, refreshCount]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadActiveTasks = async (showLoading = false) => {
+      if (showLoading) setPredictionLoading(true);
+      try {
+        const response = await getGitHubActiveTasks();
+        if (!cancelled) {
+          setActiveTasks(response.tasks || []);
+          setPredictionError('');
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setPredictionError(
+            error instanceof Error ? error.message : 'Unable to load active GitHub tasks'
+          );
+        }
+      } finally {
+        if (!cancelled && showLoading) setPredictionLoading(false);
+      }
+    };
+
+    loadActiveTasks(true);
+    const interval = window.setInterval(
+      () => loadActiveTasks(false),
+      PREDICTION_REFRESH_INTERVAL_MS
+    );
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [refreshCount]);
+
   const { total_duration_sec = 0, duration_by_category = {} } = summary || {};
+  const predictionSummary = useMemo(
+    () => buildDashboardPredictionSummary(activeTasks),
+    [activeTasks]
+  );
 
   /* Category breakdown feeding the Usage Breakdown donut. Sorted largest
      first so the legend doubles as a ranking — with up to nine categories the
@@ -558,51 +600,60 @@ const Dashboard: React.FC = () => {
         >
           <div className="card-header">
             <h3><span className="card-icon">🎯</span> Prediction</h3>
-            <div className="card-header-actions">
-              <SampleBadge title="Task detection and completion forecasting are not implemented — every figure in this panel is a fixed placeholder." />
-              <span className="card-goto" aria-label="Open Prediction">→</span>
-            </div>
+            <span className="card-goto" aria-label="Open Prediction">→</span>
           </div>
-          <p className="card-subtitle">Task-level time forecasting and progress tracking</p>
+          <p className="card-subtitle">Active GitHub task estimates</p>
 
-          <div className="pred-panel-task">
-            <div className="pred-task-card-header">
-              <h4>{SAMPLE_PREDICTION.title}</h4>
-              <span className={`pred-status-badge ${SAMPLE_PREDICTION.status}`}>
-                {SAMPLE_PREDICTION.status}
-              </span>
+          {predictionLoading ? (
+            <div className="pred-panel-task pred-panel-message">Loading active GitHub tasks…</div>
+          ) : predictionError && !predictionSummary ? (
+            <div className="pred-panel-task pred-panel-message">{predictionError}</div>
+          ) : !predictionSummary ? (
+            <div className="pred-panel-task pred-panel-message">
+              <h4>No active GitHub tasks</h4>
+              <span>Move an issue into the mapped ACTIVE status to see its estimate.</span>
             </div>
-            <div className="pred-task-context">{SAMPLE_PREDICTION.context}</div>
-            <div className="pred-task-progress-row">
-              <div className="pred-progress-track">
-                <div
-                  className="pred-progress-fill"
-                  style={{ width: `${SAMPLE_PREDICTION.progress}%` }}
-                />
+          ) : (
+            <>
+              <div className="pred-panel-task">
+                <div className="pred-task-card-header">
+                  <h4>{predictionSummary.task.title}</h4>
+                  <span className="pred-status-badge ongoing">Active</span>
+                </div>
+                <div className="pred-task-context">
+                  {predictionSummary.task.repository || 'GitHub'}
+                  {predictionSummary.task.issue_number
+                    ? ` • Issue #${predictionSummary.task.issue_number}`
+                    : ''}
+                </div>
+                <div className="pred-task-count">
+                  Active Tasks: {predictionSummary.activeTaskCount}
+                  {predictionSummary.moreTaskCount > 0
+                    ? ` • +${predictionSummary.moreTaskCount} more active task${predictionSummary.moreTaskCount === 1 ? '' : 's'}`
+                    : ''}
+                </div>
               </div>
-              <span className="pred-progress-pct">{SAMPLE_PREDICTION.progress}%</span>
-            </div>
-          </div>
 
-          <div className="pred-panel-stats">
-            <div>
-              <span className="metric-card-label">Time Spent</span>
-              <span className="metric-card-value">{SAMPLE_PREDICTION.timeSpent}</span>
-            </div>
-            <div>
-              <span className="metric-card-label">Predicted Total</span>
-              <span className="metric-card-value">{SAMPLE_PREDICTION.predictedTotal}</span>
-            </div>
-            <div>
-              <span className="metric-card-label">Remaining</span>
-              <span className="metric-card-value">{SAMPLE_PREDICTION.remaining}</span>
-            </div>
-          </div>
-
-          <p className="card-footnote">
-            Sample values — task detection is not implemented, so this panel does not change with
-            the selected date.
-          </p>
+              <div className="pred-panel-stats">
+                <div>
+                  <span className="metric-card-label">Initial Estimate</span>
+                  <span className="metric-card-value">{predictionSummary.initialEstimate}</span>
+                  <span className="pred-subtext">{predictionSummary.initialEstimateDetail}</span>
+                </div>
+                <div>
+                  <span className="metric-card-label">Time Spent</span>
+                  <span className="metric-card-value">{predictionSummary.timeSpent}</span>
+                  <span className="pred-subtext">{predictionSummary.timeSpentDetail}</span>
+                </div>
+                <div>
+                  <span className="metric-card-label">Remaining Estimate</span>
+                  <span className="metric-card-value">{predictionSummary.remainingEstimate}</span>
+                  <span className="pred-subtext">{predictionSummary.remainingEstimateDetail}</span>
+                </div>
+              </div>
+              {predictionError && <p className="card-footnote">Refresh failed: {predictionError}</p>}
+            </>
+          )}
         </div>
 
         {/* ---- Key insights → Recommendations ----

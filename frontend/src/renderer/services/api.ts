@@ -1,6 +1,94 @@
 import { fetchJson } from './fetchUtils';
 
-const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
+const API_BASE = import.meta.env.VITE_BACKEND_URL;
+
+if (!API_BASE) {
+  throw new Error('VITE_BACKEND_URL must be configured for the SmartDesk frontend');
+}
+
+export interface GitHubConnectionStatus {
+  user_id: string;
+  connection_status: 'connected' | 'disconnected';
+  github_login?: string;
+  selected_project_id?: string;
+  selected_project_number?: number;
+  selected_project_title?: string;
+}
+
+export interface GitHubProject {
+  project_id: string;
+  number: number;
+  title: string;
+  owner: string;
+}
+
+export interface GitHubStatusOption { id: string; name: string }
+
+export interface GitHubActiveTask {
+  project_item_id: string;
+  issue_number?: number | null;
+  title: string;
+  repository?: string;
+  logical_status: 'ACTIVE';
+  started_at: string;
+  predicted_typical_hours?: number;
+  task_active_seconds?: number | null;
+  time_spent_hours?: number | null;
+  time_attribution_status?: 'repository_match' | 'branch_match' | 'no_match' | 'ambiguous';
+  calculated_through?: string;
+  data_status?: 'complete' | 'partial' | 'unavailable';
+  remaining_time_hours?: number | null;
+  remaining_time_status?:
+    | 'baseline_available'
+    | 'estimate_exceeded'
+    | 'completed'
+    | 'time_spent_unavailable'
+    | 'initial_prediction_unavailable';
+  overrun_hours?: number | null;
+  approaching_initial_estimate?: boolean;
+}
+
+const GITHUB_API = `${API_BASE}/api/v1/integrations/github`;
+
+export const getGitHubStatus = (): Promise<GitHubConnectionStatus> =>
+  fetchJson(`${GITHUB_API}/status`);
+
+export const beginGitHubConnection = (): Promise<{ installation_url: string }> =>
+  fetchJson(`${GITHUB_API}/connect`);
+
+export const getGitHubProjects = (): Promise<{ projects: GitHubProject[] }> =>
+  fetchJson(`${GITHUB_API}/projects`);
+
+export const selectGitHubProject = (project: GitHubProject) =>
+  fetchJson(`${GITHUB_API}/project`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      owner: project.owner,
+      project_number: project.number,
+      project_id: project.project_id,
+      title: project.title,
+    }),
+  });
+
+export const getGitHubStatusOptions = (): Promise<{ options: GitHubStatusOption[] }> =>
+  fetchJson(`${GITHUB_API}/status-options`);
+
+export const getGitHubStatusMapping = (): Promise<{ mapping: Record<string, string> }> =>
+  fetchJson(`${GITHUB_API}/status-mapping`);
+
+export const saveGitHubStatusMapping = (mapping: Record<string, string>) =>
+  fetchJson(`${GITHUB_API}/status-mapping`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mapping }),
+  });
+
+export const disconnectGitHub = () =>
+  fetchJson(`${GITHUB_API}/connection`, { method: 'DELETE' });
+
+export const getGitHubActiveTasks = (): Promise<{ tasks: GitHubActiveTask[] }> =>
+  fetchJson(`${GITHUB_API}/active-tasks`);
 
 /* ---------------------------------------------------------- */
 /* Date-window helpers                                         */

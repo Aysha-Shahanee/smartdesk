@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smartdesk-github-data-collection"
+version = "0.1.0"
+description = "Independent GitHub Projects v2 collector for SmartDesk"
+requires-python = ">=3.10"
+dependencies = [
+  "requests",
+  "python-dotenv",
+  "SQLAlchemy>=2.0,<3.0",
+  "pydantic-settings>=2.0,<3.0",
+  "PyJWT[crypto]>=2.8,<3.0",
+]
+
+[project.scripts]
+github-data-collector = "github_data_collection.main:run_cli"
+
+[tool.setuptools]
+packages = ["github_data_collection", "github_data_collection.collectors"]
+package-dir = {github_data_collection = "."}

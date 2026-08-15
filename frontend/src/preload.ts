@@ -4,11 +4,13 @@
 // contextBridge.
 
 import { contextBridge, ipcRenderer } from 'electron'
+import { app } from 'electron'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   getEnv: () => ({
     backendUrl: import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000',
   }),
+  openGitHubExternal: (url: string) => ipcRenderer.invoke('open-github-external', url),
 
   /**
    * Open the break countdown overlay.

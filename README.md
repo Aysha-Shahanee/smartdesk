@@ -27,6 +27,51 @@ Sessions split at every focus boundary, so one row never mixes foreground and ba
 
 ## Setup
 
+### One-command local development
+
+From the repository root, run:
+
+```powershell
+.\start-smartdesk-dev.ps1
+```
+
+If Windows blocks local PowerShell scripts under the current execution policy,
+use the process-scoped form (it does not change the machine policy):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start-smartdesk-dev.ps1
+```
+
+The development-only launcher runs `alembic upgrade head`, starts the FastAPI
+backend, starts the existing Electron/Vite `npm run dev` workflow, creates a
+Cloudflare Quick Tunnel to port 8000, and updates only the current GitHub App
+webhook URL. It then verifies the local backend, public tunnel, frontend, and
+the webhook's unsigned-request `401` response. Runtime PIDs and logs are kept
+under the gitignored `.smartdesk-dev/` directory. Secrets and App JWTs are never
+printed or written there.
+
+The launcher reads `SMARTDESK_GITHUB_APP_ID`,
+`SMARTDESK_GITHUB_APP_PRIVATE_KEY`, and `SMARTDESK_GITHUB_WEBHOOK_SECRET` from
+the process environment or existing `backend/.env`. It stops before startup if
+they are unavailable. The GitHub update uses the App-authenticated webhook
+configuration endpoint and PATCHes only `url`; it does not modify the webhook
+secret, permissions, subscribed events, callback URL, setup URL, or other App
+configuration.
+
+To stop only process trees recorded by this launcher:
+
+```powershell
+.\stop-smartdesk-dev.ps1
+```
+
+Stopping a Quick Tunnel makes its URL unreachable. The GitHub App retains that
+last development webhook URL until the next successful launcher run replaces
+it; webhook deliveries are therefore expected to fail while the local stack is
+stopped.
+
+For local diagnostics without changing GitHub, use
+`.\start-smartdesk-dev.ps1 -SkipGitHubWebhookUpdate`.
+
 ### 1. Backend
 
 ```powershell

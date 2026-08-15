@@ -95,6 +95,7 @@ class IDEEventPayload(StrictSchema):
     workspace_name: str | None = None
     project_path: str | None = None
     repo_id: str | None = None
+    repository: str | None = None
     git_branch: str | None = None
     active_file_path: str | None = None
     active_file_name: str | None = None

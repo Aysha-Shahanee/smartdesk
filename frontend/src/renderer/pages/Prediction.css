@@ -31,12 +31,21 @@
 }
 
 .pred-task-card {
+  width: 100%;
+  text-align: left;
+  font: inherit;
   background-color: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   padding: var(--space-lg);
   cursor: pointer;
   transition: all var(--transition-fast);
+}
+
+.pred-task-initial {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-primary);
 }
 
 .pred-task-card:hover {
@@ -115,6 +124,16 @@
   border-radius: var(--radius-full);
 }
 
+.pred-progress-track.unavailable {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--color-border),
+    var(--color-border) 8px,
+    transparent 8px,
+    transparent 16px
+  );
+}
+
 .pred-progress-pct {
   font-size: 11px;
   font-weight: 500;
@@ -188,6 +207,30 @@
   font-size: var(--font-size-2xl);
   font-weight: 600;
   color: var(--color-text-primary);
+}
+
+.pred-stat-value.unavailable-value {
+  color: var(--color-text-muted);
+}
+
+.pred-message,
+.pred-empty-state {
+  margin-top: var(--space-xl);
+}
+
+.pred-message.error {
+  padding: var(--space-md);
+  border: 1px solid var(--color-danger, #dc2626);
+  border-radius: var(--radius-md);
+  color: var(--color-danger, #dc2626);
+}
+
+.pred-empty-state h2 {
+  margin-bottom: var(--space-sm);
+}
+
+.pred-empty-state p {
+  color: var(--color-text-secondary);
 }
 
 .pred-stat-sub {

@@ -196,6 +196,90 @@
 .privacy-footer {
   margin-top: var(--space-xl);
 }
+
+.integration-status--muted,
+.integration-detail {
+  color: var(--color-text-muted);
+}
+
+.integration-detail {
+  display: block;
+  margin-top: 3px;
+  font-size: var(--font-size-xs);
+}
+
+.github-integration {
+  border-bottom: 1px solid var(--color-border-light);
+  padding-bottom: var(--space-xl);
+}
+
+.github-integration-header {
+  border-bottom: none;
+}
+
+.github-configuration {
+  margin-left: 68px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xl);
+}
+
+.github-field,
+.github-mapping {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.github-field-row {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.github-field-row select,
+.github-mapping-row select {
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+}
+
+.github-field-row select {
+  flex: 1;
+}
+
+.github-mapping > p,
+.github-message {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.github-mapping-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(140px, 220px);
+  align-items: center;
+  gap: var(--space-lg);
+}
+
+.github-mapping .sd-btn {
+  align-self: flex-start;
+  margin-top: var(--space-sm);
+}
+
+.github-message {
+  margin: var(--space-md) 0 0 68px;
+}
+
+@media (max-width: 720px) {
+  .github-configuration,
+  .github-message {
+    margin-left: 0;
+  }
+
+  .github-mapping-row {
+    grid-template-columns: 1fr;
+  }
 /* Compact select used by the quiet-hours pickers. Matches .sd-btn's metrics so
    the two sit level when they share a row. */
 .sd-select {
