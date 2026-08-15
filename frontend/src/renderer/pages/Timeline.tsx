@@ -2,19 +2,20 @@ import { useEffect, useState, useMemo } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend, LabelList,
+  PieChart, Pie, Cell, Legend, LabelList, ComposedChart, Line,
 } from 'recharts';
 import {
   getAllSegments, getCalendarEvents, getIDEDashboard, getOSDashboard, dayBounds,
 } from '../services/api';
 import { useDateContext } from '../contexts/DateContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { getCategoryColor, getChartChrome } from '../theme/chartTheme';
+import { getCategoryColor, getChartChrome, getEmotionColor } from '../theme/chartTheme';
 import { ChangeLabelTable } from '../components/ChangeLabelTable';
 import {
   capitalize, formatDuration, formatSegmentTime, formatEventTime, parseSegmentTime,
   todayString,
 } from '../utils/time';
+import { focusByHour, focusOutOf100, summarizeFocus, HOUR_MIN_SCORED_SEC } from '../utils/focus';
 import './Timeline.css';
 
 const SUB_TABS = ['IDE', 'Browser', 'OS / Apps', 'Calendar'] as const;
@@ -169,6 +170,11 @@ const Timeline: React.FC = () => {
       else if (seg.state === 'idle') accumulate(seg, idle);
     });
 
+    /* Focus rides the same hour buckets as the bars, so a dip in the line can
+       be read against the activity underneath it. Hours with too little scored
+       time come back null and simply have no point. */
+    const focus = focusByHour(scoped);
+
     const touched = active.map((v, i) => v > 0 || idle[i] > 0 ? i : -1).filter(i => i >= 0);
     if (touched.length === 0) return [];
     const first = Math.min(...touched);
@@ -180,10 +186,17 @@ const Timeline: React.FC = () => {
         hour: `${String(h).padStart(2, '0')}:00`,
         Active: Math.round(active[h]),
         Idle: Math.round(idle[h]),
+        Focus: focus[h] === null ? null : focusOutOf100(focus[h] as number),
       });
     }
     return rows;
   }, [allSegments, activeTab]);
+
+  /* Focus over whatever the tab is currently showing. Per-tab rather than
+     per-day on purpose: "how focused am I in the editor versus in the browser"
+     is the question this page is placed to answer, and the Dashboard already
+     carries the whole-day figure. */
+  const focusSummary = useMemo(() => summarizeFocus(visibleSegments), [visibleSegments]);
 
   /* Distribution is weighted by time, not by segment count. Counting segments
      made a 5-second window-focus blip rank equal to an hour of work. */
@@ -266,6 +279,14 @@ const Timeline: React.FC = () => {
   const summaryTiles = useMemo<SummaryTile[]>(() => {
     const totalSec = visibleSegments.reduce((acc, s) => acc + segDuration(s), 0);
 
+    const focusTile: SummaryTile = {
+      label: 'Avg Focus',
+      value: focusSummary.score !== null ? `${focusOutOf100(focusSummary.score)}/100` : '—',
+      sub: focusSummary.score !== null
+        ? `Weighted by time • ${Math.round(focusSummary.coverage * 100)}% of it scored`
+        : 'No scored segments here',
+    };
+
     if (activeTab === 'IDE') {
       const langs = idePanel?.top_languages || [];
       const projects = idePanel?.top_projects || [];
@@ -283,6 +304,7 @@ const Timeline: React.FC = () => {
         { label: 'Top Language', value: langs[0]?.name ? capitalize(langs[0].name) : '—' },
         { label: 'Top Project', value: projects[0]?.name ?? '—' },
         { label: 'Edits / Saves', value: `${idePanel?.edits ?? 0} / ${idePanel?.saves ?? 0}` },
+        focusTile,
       ];
     }
 
@@ -292,6 +314,7 @@ const Timeline: React.FC = () => {
         { label: 'Top Domain', value: domainBreakdown[0]?.name ?? '—' },
         { label: 'Domains Visited', value: String(domainBreakdown.length) },
         { label: 'Segments', value: String(visibleSegments.length) },
+        focusTile,
       ];
     }
 
@@ -301,8 +324,9 @@ const Timeline: React.FC = () => {
       { label: 'Idle Time', value: formatDuration(osPanel?.idle_time_sec ?? 0) },
       { label: 'Apps Used', value: String(apps.size) },
       { label: 'Segments', value: String(visibleSegments.length) },
+      focusTile,
     ];
-  }, [activeTab, visibleSegments, idePanel, osPanel, domainBreakdown]);
+  }, [activeTab, visibleSegments, idePanel, osPanel, domainBreakdown, focusSummary]);
 
   const distTitle: Record<Exclude<SubTab, 'Calendar'>, string> = {
     IDE: 'Category Distribution (IDE time)',
@@ -591,16 +615,42 @@ const Timeline: React.FC = () => {
               <div className="sd-grid-2" style={{ marginTop: 'var(--space-xl)' }}>
                 <div className="sd-card">
                   <h3>Activity by Hour</h3>
+                  <p className="chart-note">
+                    Bars are minutes on the left axis; the line is that hour's focus score on
+                    the right. Hours with under {HOUR_MIN_SCORED_SEC / 60} minutes of scored
+                    activity carry no point rather than a reading drawn from a glance.
+                  </p>
                   <ResponsiveContainer width="100%" height={250}>
-                    <BarChart data={hourlyData} barGap={2}>
+                    <ComposedChart data={hourlyData} barGap={2}>
                       <CartesianGrid strokeDasharray="3 3" stroke={chrome.grid} />
                       <XAxis dataKey="hour" tick={{ fontSize: 12, fill: chrome.axisText }} />
-                      <YAxis tick={{ fontSize: 12, fill: chrome.axisText }} unit="m" />
-                      <Tooltip formatter={(v: number, n) => [`${v} min`, n]} contentStyle={tooltipStyle} />
+                      <YAxis yAxisId="minutes" tick={{ fontSize: 12, fill: chrome.axisText }} unit="m" />
+                      <YAxis
+                        yAxisId="focus"
+                        orientation="right"
+                        domain={[0, 100]}
+                        tick={{ fontSize: 12, fill: chrome.axisText }}
+                      />
+                      <Tooltip
+                        formatter={(v: number, n) => (n === 'Focus' ? [`${v}/100`, 'Focus'] : [`${v} min`, n])}
+                        contentStyle={tooltipStyle}
+                      />
                       <Legend wrapperStyle={{ fontSize: 12 }} />
-                      <Bar dataKey="Active" fill={getCategoryColor('learn', theme)} radius={[3, 3, 0, 0]} />
-                      {showIdle && <Bar dataKey="Idle" fill={chrome.grid} radius={[3, 3, 0, 0]} />}
-                    </BarChart>
+                      <Bar yAxisId="minutes" dataKey="Active" fill={getCategoryColor('learn', theme)} radius={[3, 3, 0, 0]} />
+                      {showIdle && <Bar yAxisId="minutes" dataKey="Idle" fill={chrome.grid} radius={[3, 3, 0, 0]} />}
+                      <Line
+                        yAxisId="focus"
+                        type="monotone"
+                        dataKey="Focus"
+                        stroke={getEmotionColor('focused', theme)}
+                        strokeWidth={2}
+                        dot={{ r: 3 }}
+                        /* An unscored hour is a hole in the data, not a dip to
+                           zero — bridging it would draw a slump that never
+                           happened. */
+                        connectNulls={false}
+                      />
+                    </ComposedChart>
                   </ResponsiveContainer>
                 </div>
 
@@ -718,6 +768,9 @@ const Timeline: React.FC = () => {
                             `${formatSegmentTime(seg.start_time_utc)} – ${formatSegmentTime(seg.end_time_utc)}`,
                             durMin >= 1 ? `${durMin}m` : `${Math.round((end - start) / 1000)}s`,
                             capitalize(cat),
+                            typeof seg.focus_score === 'number'
+                              ? `Focus ${focusOutOf100(seg.focus_score)}/100`
+                              : '',
                             seg.state === 'idle' ? '(idle)' : '',
                           ].filter(Boolean).join('\n')}
                         />

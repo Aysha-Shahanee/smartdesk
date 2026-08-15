@@ -65,10 +65,20 @@
   font-size: var(--font-size-base);
 }
 
+/* Two findings per row. Four full-width rows of prose was most of a screen for
+   four sentences; paired columns fit the same four in about half the height,
+   and every row is the same height whatever the wording, so the panel reads as
+   a list instead of a ragged column. */
 .insight-rows {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-sm);
+}
+
+@media (max-width: 1100px) {
+  .insight-rows {
+    grid-template-columns: 1fr;
+  }
 }
 
 .insight-row {
@@ -78,18 +88,66 @@
   background: var(--color-surface);
   padding: var(--space-md) var(--space-lg);
   border-radius: var(--radius-md);
+  /* The row is a link into Recommendations; a button keeps it keyboard
+     reachable without the styling a button brings with it. */
+  border: 1px solid transparent;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.insight-row:hover,
+.insight-row:focus-visible {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-sm);
+  outline: none;
+}
+
+.insight-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .insight-row strong {
-  display: block;
   font-size: var(--font-size-base);
   color: var(--color-text-primary);
 }
 
-.insight-row p {
+/* Clamped so one long finding cannot set the height of every row beside it.
+   The full text is on the Recommendations page, one click away. */
+.insight-row-why,
+.insight-row-action {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
+
+.insight-row-action {
+  color: var(--color-primary);
+  -webkit-line-clamp: 1;
+}
+
+/* Three severities, three colours — the old marker only distinguished "low"
+   from "everything else", so medium and high read identically. */
+.insight-severity {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+}
+
+.insight-severity.high { background: var(--color-danger); }
+.insight-severity.medium { background: var(--color-warning); }
+.insight-severity.low { background: var(--color-success); }
 
 /* Active/idle and switch-density meters under a card's metric list */
 .split-bar {

@@ -73,10 +73,13 @@
   margin-bottom: var(--space-xl);
 }
 
+/* Auto-fit rather than a fixed four: the tab summaries carry five tiles now
+   that focus is among them, and a hard four-column track pushed the fifth onto
+   a row of its own. */
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--space-3xl);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-xl) var(--space-3xl);
 }
 
 .summary-stat {
