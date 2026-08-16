@@ -4,22 +4,14 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
 
-# engine manages the connection to the database
-# check_same_thread=False is important for SQLite in a multithreaded fastAPI/background task environment
-engine = create_engine(
-    settings.DATABASE_URL, connect_args={"check_same_thread": False}
-)
-
-# A sessionmaker builds a new Session object when called.
+engine = create_engine(settings.DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
-# FastAPI dependency for session scope
+
 def get_db():
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
-
-# All standard SQLAlchemy models will inherit from this Base class
-Base = declarative_base()

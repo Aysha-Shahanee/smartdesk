@@ -1,0 +1,34 @@
+{
+  "name": "smartdesk-ide",
+  "displayName": "SmartDesk",
+  "description": "SmartDesk session tracker — sends IDE events to the local SmartDesk backend. Works in VS Code, Antigravity, Cursor, and other VS Code-based IDEs.",
+  "version": "3.1.2",
+  "publisher": "smartdesk",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "scripts": { "test": "node --test repository.test.js" },
+  "contributes": {
+    "configuration": {
+      "title": "SmartDesk",
+      "properties": {
+        "smartdesk.backendUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8000",
+          "description": "SmartDesk backend URL"
+        },
+        "smartdesk.userId": {
+          "type": "string",
+          "default": "local_user",
+          "description": "User ID sent with every event"
+        },
+        "smartdesk.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable SmartDesk session tracking"
+        }
+      }
+    }
+  }
+}

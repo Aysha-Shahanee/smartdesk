@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartDesk — Collection Health</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #181b22; --border: #2a2f3a;
+    --text: #e8eaf0; --muted: #8b93a3;
+    --ok: #2ecc71; --stale: #f1c40f; --bad: #e74c3c;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.5 "Segoe UI", system-ui, sans-serif; padding: 24px; }
+  header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  h1 { font-size: 20px; font-weight: 600; }
+  #meta { color: var(--muted); font-size: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }
+  .card h2 { font-size: 15px; display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); flex-shrink: 0; }
+  .dot.ok { background: var(--ok); } .dot.stale { background: var(--stale); }
+  .stats { display: flex; gap: 18px; margin-bottom: 10px; flex-wrap: wrap; }
+  .stat .num { font-size: 20px; font-weight: 600; }
+  .stat .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .tbl { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 4px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
+  .t { font-variant-numeric: tabular-nums; max-width: none; }
+  .muted { color: var(--muted); }
+  .btns { display: flex; gap: 8px; margin: 4px 0 10px; }
+  button { background: #2563eb; color: #fff; border: 0; border-radius: 6px; padding: 6px 14px; font-size: 13px; cursor: pointer; }
+  button.secondary { background: #374151; }
+  button:disabled { opacity: .5; cursor: wait; }
+  #cal-msg { font-size: 12px; color: var(--mzed); min-height: 16px; }
+  .badge { font-size: 11px; padding: 1px 8px; border-radius: 10px; background: #374151; color: var(--text); }
+  .select-wrapper { position: relative; display: inline-block; min-width: 120px; }
+  select { width: 100%; padding: 2px 4px; font-size: 12px; border: 1px solid #555; border-radius: 4px; background: #2a2f3a; color: #eee; }
+  .save-btn { background: #28a745; margin-left: 6px; padding: 2px 8px; font-size: 12px; }
+  .save-btn:disabled { opacity: .5; cursor: not-allowed; }
+  .empty-cell { min-height: 200px; } /* Matches approximate card height */
+  .chart-container, .placeholder-container {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .chart-container {
+    height: 200px;
+  }
+  .chart-container h2, .placeholder-container h2 {
+    font-size: 15px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  #category-donut-chart {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  .placeholder-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--muted);
+    font-style: italic;
+  }
+.btn-edit {
+    background: #374151;
+    margin-right: 4px;
+    padding: 2px 6px;
+    font-size: 12px;
+}
+.btn-edit:hover {
+    background: #4b5563;
+}
+.btn-cancel {
+    background: #6b7280;
+    margin-right: 4px;
+    padding: 2px 6px;
+    font-size: 12px;
+}
+.btn-cancel:hover {
+    background: #7f8c8d;
+}
+.category-cell {
+    position: relative;
+    min-width: 80px;
+}
+.category-value {
+    display: block;
+    padding: 2px 4px;
+    border-radius: 3px;
+    background-color: #374151;
+}
+.category-edit {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 2px 4px;
+    font-size: 12px;
+    border: 1px solid #555;
+    border-radius: 3px;
+    background: #2a2f3a;
+    color: #eee;
+}
+.category-edit option.predicted {
+    font-style: italic;
+    color: #3498db;
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>SmartDesk — Data Collection Health</h1>
+  <span id="meta">loading…</span>
+</header>
+
+<div class="grid">
+  <div class="card" id="card-os">
+    <h2><span class="dot" id="dot-os"></span>OS Layer <span class="badge" id="badge-os"></span></h2>
+    <div class="stats">
+      <div class="stat"><div class="num" id="os-total">–</div><div class="lbl">total sessions</div></div>
+      <div class="stat"><div class="num" id="os-open">–</div><div class="lbl">open</div></div>
+      <div class="stat"><div class="num" id="os-last">–</div><div class="lbl">last event</div></div>
+    </div>
+    <div class="tbl"><table id="os-table"></table></div>
+  </div>
+
+  <div class="card" id="card-ide">
+    <h2><span class="dot" id="dot-ide"></span>IDE Layer <span class="badge" id="badge-ide"></span></h2>
+    <div class="stats">
+      <div class="stat"><div class="num" id="ide-total">–</div><div class="lbl">total sessions</div></div>
+      <div class="stat"><div class="num" id="ide-open">–</div><div class="lbl">open</div></div>
+      <div class="stat"><div class="num" id="ide-last">–</div><div class="lbl">last event</div></div>
+    </div>
+    <div class="tbl"><table id="ide-table"></table></div>
+  </div>
+
+  <div class="card" id="card-browser">
+    <h2><span class="dot" id="dot-browser"></span>Browser Layer <span class="badge" id="badge-browser"></span></h2>
+    <div class="stats">
+      <div class="stat"><div class="num" id="browser-total">–</div><div class="lbl">total sessions</div></div>
+      <div class="stat"><div class="num" id="browser-open">–</div><div class="lbl">open</div></div>
+      <div class="stat"><div class="num" id="browser-last">–</div><div class="lbl">last event</div></div>
+    </div>
+    <div class="tbl"><table id="browser-table"></table></div>
+  </div>
+
+  <div class="card" id="card-calendar">
+    <h2><span class="dot" id="dot-calendar"></span>Calendar Layer <span class="badge" id="badge-calendar"></span></h2>
+    <div class="btns">
+      <button type="button" id="btn-connect" class="secondary">Connect Google Calendar</button>
+      <button type="button" id="btn-sync">Sync now</button>
+    </div>
+    <div id="cal-msg"></div>
+    <div class="stats">
+      <div class="stat"><div class="num" id="cal-total">–</div><div class="lbl">total events</div></div>
+      <div class="stat"><div class="num" id="cal-last">–</div><div class="lbl">last sync</div></div>
+    </div>
+    <div class="tbl"><table id="cal-table"></table></div>
+  </div>
+
+  <!-- Activity Segments Table (positioned to appear under IDE layer) -->
+  <div class="card" id="card-recent-segments">
+    <h2><span class="dot" id="dot-recent-segments"></span>Recent Activity Segments <span class="badge" id="badge-recent-segments"></span></h2>
+    <div class="tbl"><table id="recent-segments-table"></table></div>
+  </div>
+
+  <!-- Donut chart visualization (positioned to appear under browser box) -->
+  <div class="chart-container">
+    <h2>Category Distribution</h2>
+    <canvas id="category-donut-chart"></canvas>
+  </div>
+</div>
+
+<script src="/static/chart.js"></script>
+<script>
+const REFRESH_MS = 30000;
+
+const TZ = "Asia/Colombo";
+
+// Compact: "12:44:11" for today, "08/10 08:00" for other days.
+function fmtTime(iso) {
+  if (!iso) return "–";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const day = d.toLocaleDateString("en-GB", { timeZone: TZ, day: "2-digit", month: "2-digit" });
+  const today = new Date().toLocaleDateString("en-GB", { timeZone: TZ, day: "2-digit", month: "2-digit" });
+  const time = d.toLocaleTimeString("en-GB", { timeZone: TZ, hour12: false });
+  return day === today ? time : `${day} ${time.slice(0, 5)}`;
+}
+// Full timestamp for tooltips.
+function fmtFull(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  return d.toLocaleString("en-GB", { timeZone: TZ, hour12: false }).replace(",", "");
+}
+function ago(iso) {
+  if (!iso) return "–";
+  const sec = Math.max(0, Math.floor((Date.now() - new Date(iso)) / 1000));
+  if (sec < 60) return sec + "s ago";
+  if (sec < 3600) return Math.floor(sec / 60) + "m ago";
+  if (sec < 86400) return Math.floor(sec / 3600) + "h ago";
+  return Math.floor(sec / 86400) + "d ago";
+}
+function setDot(layer, status) {
+  const dot = document.getElementById("dot-" + layer);
+  dot.className = "dot" + (status === "ok" ? " ok" : status === "stale" ? " stale" : "");
+  document.getElementById("badge-" + layer).textContent = status;
+}
+function renderTable(el, rows, cols) {
+  if (!rows.length) { el.innerHTML = "<tr><td class='muted'>no rows yet</td></tr>"; return; }
+  let html = "<tr>" + cols.map(c => "<th>" + c.label + "</th>").join("") + "</tr>";
+  for (const r of rows) {
+    html += "<tr>" + cols.map(c => {
+      const v = c.fn(r);
+      const cls = c.time ? " class='t'" : "";
+      const title = c.time ? fmtFull(c.raw ? c.raw(r) : null) : (v ?? "");
+      return `<td${cls} title="${title}">` + (v ?? "<span class='muted'>–</span>") + "</td>";
+    }).join("") + "</tr>";
+  }
+  el.innerHTML = html;
+}
+
+async function refresh() {
+  try {
+    const res = await fetch("/dashboard/overview");
+    const data = await res.json();
+    document.getElementById("meta").textContent =
+      "device " + data.device_id + " · timezone " + data.timezone +
+      " · updated " + fmtTime(data.generated_at);
+
+    const os = data.layers.os;
+    setDot("os", os.status);
+    document.getElementById("os-total").textContent = os.total;
+    document.getElementById("os-open").textContent = os.open;
+    document.getElementById("os-last").textContent = ago(os.last_event_at);
+    renderTable(document.getElementById("os-table"), os.recent, [
+      { label: "app", fn: r => r.app_name },
+      { label: "category", fn: r => r.app_category },
+      { label: "state", fn: r => r.state },
+      { label: "start", fn: r => fmtTime(r.session_start), time: true, raw: r => r.session_start },
+      { label: "dur(s)", fn: r => r.duration_sec },
+    ]);
+
+    const ide = data.layers.ide;
+    console.log('IDE layer data:', ide);
+    setDot("ide", ide.status);
+    document.getElementById("ide-total").textContent = ide.total;
+    document.getElementById("ide-open").textContent = ide.open;
+    document.getElementById("ide-last").textContent = ago(ide.last_event_at);
+    renderTable(document.getElementById("ide-table"), ide.recent, [
+      { label: "ide", fn: r => r.ide_name },
+      { label: "workspace", fn: r => r.workspace_name },
+      { label: "file", fn: r => r.active_file_name },
+      { label: "fg", fn: r => r.is_foreground ? "1" : "0" + (r.collection_reason || "bg") },
+      { label: "edits", fn: r => r.edit_count },
+      { label: "start", fn: r => fmtTime(r.session_start), time: true, raw: r => r.session_start },
+      { label: "end", fn: r => r.session_end ? fmtTime(r.session_end) : "open", time: true, raw: r => r.session_end },
+    ]);
+
+    const br = data.layers.browser;
+    setDot("browser", br.status);
+    document.getElementById("browser-total").textContent = br.total;
+    document.getElementById("browser-open").textContent = br.open;
+    document.getElementById("browser-last").textContent = ago(br.last_event_at);
+    renderTable(document.getElementById("browser-table"), br.recent, [
+      { label: "browser", fn: r => r.browser_name },
+      { label: "domain", fn: r => r.domain },
+      { label: "category", fn: r => r.category },
+      { label: "fg", fn: r => r.is_foreground ? "1" : "0" },
+      { label: "start", fn: r => fmtTime(r.session_start), time: true, raw: r => r.session_start },
+      { label: "dur(s)", fn: r => r.duration_sec },
+    ]);
+
+    const cal = data.layers.calendar;
+    setDot("calendar", cal.status === "ok" ? "ok" : cal.status);
+    document.getElementById("cal-total").textContent = cal.total;
+    document.getElementById("cal-last").textContent = ago(cal.last_sync);
+    document.getElementById("btn-connect").textContent =
+      cal.connected ? "Reconnect Google Calendar" : "Connect Google Calendar";
+    if (!cal.configured) {
+      document.getElementById("cal-msg").textContent =
+        "Not configured: set GOOGLE_CLIENT_ID/SECRET in .env or add calendar_store/credentials.json";
+    }
+    renderTable(document.getElementById("cal-table"), cal.recent, [
+      { label: "title", fn: r => r.title },
+      { label: "start", fn: r => fmtTime(r.start_time), time: true, raw: r => r.start_time },
+      { label: "end", fn: r => fmtTime(r.end_time), time: true, raw: r => r.end_time },
+      { label: "status", fn: r => r.status },
+    ]);
+
+    // Update category distribution data using the date from the overview's generated_at
+    if (data.generated_at) {
+      const dateStr = data.generated_at.split('T')[0]; // YYYY-MM-DD
+      loadCategoryData(dateStr);
+    }
+
+    // Fetch recent activity segments for today (limit to 10)
+    const todayStr = new Date().toISOString().split('T')[0];
+    console.log('Fetching segments for date:', todayStr);
+    const segRes = await fetch(`/dashboard/segments?date=${todayStr}&limit=10`);
+    console.log('Segments response status:', segRes.status);
+    const segData = await segRes.json();
+    console.log('Segments data:', segData);
+    // Populate recent activity segments table (under IDE column)
+    await populateRecentSegmentsTable(segData.segments);
+  } catch (e) {
+    document.getElementById("meta").textContent = "backend unreachable — " + e.message;
+  }
+}
+
+// Corrections functionality has been removed as requested per user instructions
+// The corrections card is no longer present in the DOM
+
+// Category Distribution Donut Chart (NEW - Visualization Only)
+let categoryDonutChart = null;
+
+async function loadCategoryData(dateStr) {
+  try {
+    // Load category distribution data for visualization
+    const distRes = await fetch(`/dashboard/segments/summary?date=${dateStr}`);
+    console.log("Fetching from:", `/dashboard/segments/summary?date=${dateStr}`);
+
+    if (!distRes.ok) {
+      throw new Error(`HTTP error! status: ${distRes.status}`);
+    }
+
+    const distData = await distRes.json();
+    console.log("Received data:", distData);
+
+    // Transform count_by_category to {category: {count}}
+    const distribution = {};
+    const countByCategory = distData.count_by_category || {};
+    console.log("Raw count_by_category:", countByCategory);
+
+    for (const [cat, count] of Object.entries(countByCategory)) {
+      distribution[cat] = { count };
+    }
+
+    console.log("Transformation result:", distribution);
+
+    if (Object.keys(distribution).length === 0) {
+      console.warn("No category data received");
+    }
+
+    renderCategoryChart(distribution);
+  } catch (e) {
+    console.error("Failed to load category data", e);
+    // Show empty chart state
+    renderCategoryChart({});
+  }
+}
+
+function renderCategoryChart(distribution) {
+  const ctx = document.getElementById('category-donut-chart').getContext('2d');
+  if (categoryDonutChart) {
+    categoryDonutChart.destroy();
+  }
+
+  // Handle empty data case
+  if (!distribution || Object.keys(distribution).length === 0) {
+    // Show a message or empty state
+    console.log("No distribution data, showing empty state");
+    categoryDonutChart = new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels: ['No Data'],
+        datasets: [{
+          data: [1],
+          backgroundColor: ['#374151'],
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { enabled: false }
+        }
+      }
+    });
+    return;
+  }
+
+  const labels = Object.keys(distribution);
+  console.log("Categories to display:", labels);
+
+  const data = labels.map(c => {
+    const count = distribution[c]?.count || 0;
+    console.log(`Category ${c}: count = ${count}`);
+    return count;
+  });
+
+  console.log("Data values:", data);
+
+  // Define color mapping - green for work, other colors for different categories
+  // Using lowercase keys for case-insensitive matching
+  const colorMap = {
+    'work': '#2ecc71',           // Green
+    'learn': '#3498db',          // Blue
+    'communication': '#f1c40f',  // Yellow
+    'entertainment': '#e74c3c',  // Red
+    'social_media': '#9b59b6',   // Purple
+    'system': '#95a5a6',         // Gray
+    'meetings': '#e67e22',       // Orange
+    'other': '#bdc3c7'           // Light gray
+  };
+
+  const bgColors = labels.map(label => {
+    // Try to find a case-insensitive match in our color map
+    const lowerLabel = label.toLowerCase();
+    let color = colorMap[lowerLabel];
+
+    // If not found exactly, try to match by checking if the label contains known category names
+    if (!color) {
+      if (lowerLabel.includes('work')) color = '#2ecc71';
+      else if (lowerLabel.includes('learn') || lowerLabel.includes('study')) color = '#3498db';
+      else if (lowerLabel.includes('commun')) color = '#f1c40f';
+      else if (lowerLabel.includes('entertain')) color = '#e74c3c';
+      else if (lowerLabel.includes('social') || lowerLabel.includes('media')) color = '#9b59b6';
+      else if (lowerLabel.includes('system')) color = '#95a5a6';
+      else if (lowerLabel.includes('meet')) color = '#e67e22';
+      else if (lowerLabel.includes('other')) color = '#bdc3c7';
+    }
+
+    // Default to gray if no match found
+    if (!color) color = '#95a5a6';
+
+    console.log(`Assigning color ${color} to category ${label} (matched as ${lowerLabel})`);
+    return color;
+  });
+
+  console.log("Final background colors:", bgColors);
+
+  categoryDonutChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: labels,
+      datasets: [{
+        data: data,
+        backgroundColor: bgColors,
+        borderWidth: 1
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: {
+            usePointStyle: true,
+            padding: 20
+          }
+        },
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.label}: ${ctx.raw} (${((ctx.raw / data.reduce((a,b)=>a+b,0))*100).toFixed(1)}%)`
+          }
+        }
+      }
+    }
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Load initial category data for today (using default date since picker removed)
+  const today = new Date().toISOString().split('T')[0];
+  console.log("Loading category data for date:", today);
+  loadCategoryData(today);
+
+  // Connect Google Calendar button
+  const btnConnect = document.getElementById('btn-connect');
+  if (btnConnect) {
+    btnConnect.addEventListener('click', () => {
+      window.location.href = '/api/v1/calendar/connect';
+    });
+  }
+
+  // Sync now button
+  const btnSync = document.getElementById('btn-sync');
+  if (btnSync) {
+    btnSync.addEventListener('click', async () => {
+      btnSync.disabled = true;
+      btnSync.textContent = 'Syncing...';
+      try {
+        const res = await fetch('/api/v1/calendar/sync', { method: 'POST' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        // Optionally fetch updated calendar status to refresh UI
+        const overview = await fetch('/dashboard/overview').then(r => r.json());
+        // Trigger a refresh of the dashboard data via existing refresh mechanism
+        // We'll just call refresh() after a short delay to let backend process
+        setTimeout(() => {
+          refresh();
+        }, 1000);
+        btnSync.textContent = 'Sync now';
+        btnSync.disabled = false;
+        // Show temporary success feedback
+        const tmp = btnSync.textContent;
+        btnSync.textContent = 'Synced!';
+        setTimeout(() => { btnSync.textContent = tmp; }, 1500);
+      } catch (e) {
+        console.error('Sync failed:', e);
+        btnSync.textContent = 'Sync now';
+        btnSync.disabled = false;
+        alert('Calendar sync failed: ' + e.message);
+      }
+    });
+  }
+});
+
+// Periodic refresh for category data (every 30s)
+setInterval(() => {
+  // Refresh with today's date
+  const today = new Date().toISOString().split('T')[0];
+  console.log("Refreshing category data for date:", today);
+  loadCategoryData(today);
+}, REFRESH_MS);
+
+// Populate recent activity segments table with editing capability
+async function populateRecentSegmentsTable(segments) {
+    console.log('populateRecentSegmentsTable received segments:', segments);
+    const table = document.getElementById('recent-segments-table');
+
+    if (!segments || segments.length === 0) {
+        table.innerHTML = "<tr><td class='muted'>No recent segments</td></tr>";
+        return;
+    }
+
+    // Define common categories for the dropdown
+    const categoryOptions = [
+        'work', 'learn', 'communication', 'entertainment',
+        'social_media', 'system', 'meetings', 'other'
+    ];
+
+    let html = "<tr>" +
+        "<th>Time</th>" +
+        "<th>App</th>" +
+        "<th>Title</th>" +
+        "<th>Focus Score</th>" +
+        "<th>Predicted Category</th>" +
+        "<th>Corrected Category</th>" +
+        "<th>Actions</th>" +
+        "</tr>";
+
+    for (const seg of segments) {
+        const startTime = fmtTime(seg.start_time_utc);
+        const appName = seg.app_name || 'Unknown';
+        const title = seg.title || '—';
+        const predictedCategory = seg.predicted_category || 'unknown';
+        const correctionLabel = seg.correction_label || '';
+        const focusScore = typeof seg.focus_score === 'number' ? `${Math.round(seg.focus_score * 100)}%` : '–';
+        const segmentId = seg.id;
+
+        html += "<tr>";
+        html += `<td>${startTime}</td>`;
+        html += `<td>${appName}</td>`;
+        html += `<td>${title}</td>`;
+        html += `<td>${focusScore}</td>`;
+        html += `<td>${predictedCategory}</td>`;
+
+        // Corrected category cell with edit functionality
+        html += `<td id="corrected-category-${segmentId}" class="category-cell">`;
+        if (correctionLabel) {
+            html += `<span class="category-value">${correctionLabel}</span>`;
+        } else {
+            html += `<span class="category-value">—</span>`;
+        }
+        html += `</td>`;
+
+        // Actions cell
+        html += `<td>`;
+        html += `<button class="secondary btn-edit" data-segment-id="${segmentId}" data-predicted="${predictedCategory}" data-corrected="${correctionLabel || ''}">Edit</button>`;
+        html += `<button class="save-btn btn-save" data-segment-id="${segmentId}" style="display: none;">Save</button>`;
+        html += `<button class="secondary btn-cancel" data-segment-id="${segmentId}" style="display: none;">Cancel</button>`;
+        html += `</td>`;
+
+        html += "</tr>";
+    }
+
+    table.innerHTML = html;
+
+    // Add event listeners to edit buttons
+    const editButtons = table.querySelectorAll('.btn-edit');
+    editButtons.forEach(button => {
+        button.addEventListener('click', async (e) => {
+            const segmentId = e.target.dataset.segmentId;
+            const predictedCategory = e.target.dataset.predicted;
+            const correctedCategory = e.target.dataset.corrected;
+
+            // Hide edit button, show save/cancel buttons
+            e.target.style.display = 'none';
+            const saveBtn = e.target.parentElement.querySelector('.btn-save');
+            const cancelBtn = e.target.parentElement.querySelector('.btn-cancel');
+            saveBtn.style.display = 'inline-block';
+            cancelBtn.style.display = 'inline-block';
+
+            // Replace category value with dropdown
+            const categoryCell = document.getElementById(`corrected-category-${segmentId}`);
+            const currentValue = categoryCell.querySelector('.category-value')?.textContent || '—';
+
+            // Create dropdown
+            const select = document.createElement('select');
+            select.className = 'category-edit';
+
+            // Add default option
+            const defaultOption = document.createElement('option');
+            defaultOption.value = '';
+            defaultOption.textContent = 'Select category...';
+            select.appendChild(defaultOption);
+
+            // Add category options
+            categoryOptions.forEach(category => {
+                const option = document.createElement('option');
+                option.value = category;
+                option.textContent = category;
+                if (category === predictedCategory) {
+                    option.className = 'predicted';
+                }
+                if (category === correctedCategory) {
+                    option.selected = true;
+                }
+                select.appendChild(option);
+            });
+
+            // Clear cell and add dropdown
+            categoryCell.innerHTML = '';
+            categoryCell.appendChild(select);
+
+            // Focus the dropdown
+            select.focus();
+        });
+    });
+
+    // Add event listeners to save buttons
+    const saveButtons = table.querySelectorAll('.btn-save');
+    saveButtons.forEach(button => {
+        button.addEventListener('click', async (e) => {
+            const segmentId = e.target.dataset.segmentId;
+            const row = e.target.closest('tr');
+            const select = row.querySelector('.category-edit');
+            const newCategory = select.value;
+
+            if (!newCategory) {
+                alert('Please select a category');
+                return;
+            }
+
+            try {
+                // Show loading state
+                e.target.disabled = true;
+                e.target.textContent = 'Saving...';
+
+                // Send correction to API
+                const response = await fetch('/dashboard/corrections', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        segment_id: segmentId,
+                        correct_label: newCategory
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const result = await response.json();
+
+                // Update UI
+                const categoryCell = document.getElementById(`corrected-category-${segmentId}`);
+                categoryCell.innerHTML = `<span class="category-value">${newCategory}</span>`;
+
+                // Reset buttons
+                const editBtn = row.querySelector('.btn-edit');
+                const saveBtn = row.querySelector('.btn-save');
+                const cancelBtn = row.querySelector('.btn-cancel');
+                editBtn.style.display = 'inline-block';
+                saveBtn.style.display = 'none';
+                cancelBtn.style.display = 'none';
+
+                // Update button data attributes
+                editBtn.dataset.corrected = newCategory;
+
+                // Show success feedback
+                e.target.textContent = 'Saved';
+                setTimeout(() => {
+                    e.target.disabled = false;
+                    e.target.textContent = 'Save';
+                }, 1500);
+
+            } catch (error) {
+                console.error('Error saving correction:', error);
+                alert('Failed to save correction. Please try again.');
+                e.target.disabled = false;
+                e.target.textContent = 'Save';
+            }
+        });
+    });
+
+    // Add event listeners to cancel buttons
+    const cancelButtons = table.querySelectorAll('.btn-cancel');
+    cancelButtons.forEach(button => {
+        button.addEventListener('click', (e) => {
+            const segmentId = e.target.dataset.segmentId;
+            const row = e.target.closest('tr');
+
+            // Reset buttons
+            const editBtn = row.querySelector('.btn-edit');
+            const saveBtn = row.querySelector('.btn-save');
+            const cancelBtn = row.querySelector('.btn-cancel');
+            editBtn.style.display = 'inline-block';
+            saveBtn.style.display = 'none';
+            cancelBtn.style.display = 'none';
+
+            // Restore original category value
+            const categoryCell = document.getElementById(`corrected-category-${segmentId}`);
+            const originalCorrected = editBtn.dataset.corrected || '';
+            if (originalCorrected) {
+                categoryCell.innerHTML = `<span class="category-value">${originalCorrected}</span>`;
+            } else {
+                categoryCell.innerHTML = `<span class="category-value">—</span>`;
+            }
+        });
+    });
+}
+
+// Also refresh the main dashboard data
+setInterval(refresh, REFRESH_MS);
+refresh();
+</script>
+</body>
+</html>

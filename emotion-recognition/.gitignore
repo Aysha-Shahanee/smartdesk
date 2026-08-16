@@ -3,6 +3,8 @@ venv/
 *.pth
 *.pt
 *.download
+pending_emotion_blocks.jsonl
+pending_emotion_sessions.jsonl
 
 FER2013/
 emotion_model.pth

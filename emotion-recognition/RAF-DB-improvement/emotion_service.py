@@ -2,22 +2,16 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from dotenv import load_dotenv
 
 from emotion_block_aggregator import EmotionBlockAggregator
 from emotion_detector import WebcamEmotionDetector
-from storage.pending_queue import PendingQueue
-from storage.session_sync import SupabaseSessionSync
+from storage.local_database import LocalEmotionDatabase
 from storage.session_manager import SessionManager
-from storage.supabase_sync import SupabaseEmotionSync
-
-
-SYNC_RETRY_SECONDS = 300
 
 
 class EmotionRecognitionService:
@@ -31,12 +25,8 @@ class EmotionRecognitionService:
         load_dotenv(self.project_dir.parent / ".env")
 
         self.user_id = user_id
-        self.output_path = Path(output_path or self.project_dir / "pending_emotion_blocks.jsonl")
-        self.session_queue = PendingQueue(self.project_dir / "pending_emotion_sessions.jsonl")
-        self.block_queue = PendingQueue(self.output_path)
-        self.session_sync = SupabaseSessionSync(self.session_queue)
-        self.sync_client = SupabaseEmotionSync(self.block_queue)
-        self.completed_blocks_memory: list[dict[str, Any]] = []
+        self.output_path = Path(output_path or self.project_dir / "local_emotion_blocks.jsonl")
+        self.local_storage = LocalEmotionDatabase()
         self.current_session_record: dict[str, Any] | None = None
 
         self.session_manager: SessionManager | None = None
@@ -55,12 +45,9 @@ class EmotionRecognitionService:
             "processed_frame_count": 0,
             "model_ready": False,
             "camera_ready": False,
-            "supabase_configured": self.sync_client.is_configured,
             "last_error": None,
             "last_error_stage": None,
-            "last_upload_error": None,
             "last_saved_block_time": None,
-            "last_synced_block_time": None,
         }
 
     def start(self, show_window: bool = False) -> dict[str, Any]:
@@ -73,9 +60,8 @@ class EmotionRecognitionService:
                 output_path=self.output_path,
                 session_manager=self.session_manager,
             )
-            self.completed_blocks_memory = []
             self.current_session_record = self._build_session_record(status="running")
-            self.session_sync.queue_session(self.current_session_record)
+            self.local_storage.upsert_session(self.current_session_record)
             self._stop_event.clear()
             self._status.update(
                 {
@@ -87,22 +73,36 @@ class EmotionRecognitionService:
                     "processed_frame_count": 0,
                     "model_ready": False,
                     "camera_ready": False,
-                    "supabase_configured": self.sync_client.is_configured,
                     "last_error": None,
                     "last_error_stage": None,
-                    "last_upload_error": None,
                 }
             )
 
-        self._retry_pending_sync()
         self._thread = threading.Thread(target=self._run_loop, args=(show_window,), daemon=True)
         self._thread.start()
         return {"ok": True, "message": "Emotion recognition started.", "status": self.get_status()}
 
-    def stop(self, wait: bool = True) -> dict[str, Any]:
+    def stop(self, wait: bool = True, timeout_seconds: float = 10.0) -> dict[str, Any]:
+        """Ask the capture loop to stop, waiting a bounded time for it to finish.
+
+        The loop can be parked inside a blocking `cap.read()` when the webcam is
+        unplugged or its driver stalls, and an unbounded join there would hang
+        both this request and the shutdown hook that shares this call. Time the
+        join out instead and report the thread as still running, so the caller
+        sees a stuck camera rather than a request that never returns.
+        """
         self._stop_event.set()
+
         if wait and self._thread and self._thread.is_alive():
-            self._thread.join()
+            self._thread.join(timeout_seconds)
+            if self._thread.is_alive():
+                message = (
+                    f"Emotion recognition did not stop within {timeout_seconds:.0f}s; "
+                    "the webcam capture thread is still running."
+                )
+                self._set_error("stop_timeout", message)
+                return {"ok": False, "message": message, "status": self.get_status()}
+
         return {"ok": True, "message": "Emotion recognition stopped.", "status": self.get_status()}
 
     def get_status(self) -> dict[str, Any]:
@@ -117,27 +117,30 @@ class EmotionRecognitionService:
 
     def get_session_history(self) -> dict[str, Any]:
         status = self.get_status()
+        session = self.current_session_record
         session_id = status.get("session_id")
+        if session_id:
+            session = self.local_storage.get_session(session_id) or session
+        elif session is None:
+            session = self.local_storage.get_latest_session(self.user_id)
+            session_id = session.get("id") if session else None
+
         completed_blocks = []
-        if session_id and self.sync_client.is_configured:
-            completed_blocks = self.sync_client.query_session_records(session_id, user_id=self.user_id)
-            if self.sync_client.last_error:
-                self._set_error("supabase_query", self.sync_client.last_error)
-        if not completed_blocks:
-            completed_blocks = [block for block in self.completed_blocks_memory if block.get("session_id") == session_id]
+        if session_id:
+            completed_blocks = self.local_storage.get_session_blocks(session_id, user_id=self.user_id)
 
         current_block = None
         if self.aggregator:
             current_block = {
                 "block_start_time": self.aggregator.block_start.isoformat() if self.aggregator.block_start else None,
-                "emotion_scores": dict(self.aggregator.emotion_scores),
+                "emotion_scores": self.aggregator.mean_scores(),
                 "processed_frame_count": self.aggregator.processed_frame_count,
             }
 
         return {
             "ok": True,
             "status": status,
-            "session": self.current_session_record,
+            "session": session,
             "current_block": current_block,
             "completed_blocks": completed_blocks,
         }
@@ -156,7 +159,6 @@ class EmotionRecognitionService:
             frame_count = 0
             face_box = None
             last_processed_at = 0.0
-            last_sync_retry_at = time.monotonic()
 
             while not self._stop_event.is_set():
                 ret, frame = detector.read_frame()
@@ -165,13 +167,9 @@ class EmotionRecognitionService:
                     break
 
                 frame_count += 1
-                self._save_and_sync_blocks(self.aggregator.complete_expired_blocks())
+                self._save_blocks(self.aggregator.complete_expired_blocks())
 
                 now_monotonic = time.monotonic()
-                if now_monotonic - last_sync_retry_at >= SYNC_RETRY_SECONDS:
-                    last_sync_retry_at = now_monotonic
-                    self._retry_pending_sync()
-
                 try:
                     face_box = detector.update_face_box(frame, frame_count, face_box)
                 except Exception as exc:
@@ -191,6 +189,13 @@ class EmotionRecognitionService:
                 if show_window:
                     if detector.show_frame("Emotion Detector (Stable)", frame):
                         self._stop_event.set()
+        except Exception as exc:
+            # Without this the exception would leave the thread with last_error
+            # unset, and /start reports `ok` off exactly that field — a failed
+            # model download or a missing dependency would read as a clean start.
+            with self._lock:
+                stage = self._status.get("last_error_stage") or "startup"
+            self._set_error(stage, str(exc))
         finally:
             self._finish_run(show_window)
 
@@ -218,7 +223,7 @@ class EmotionRecognitionService:
         latest_emotion = max(emotion_probabilities, key=emotion_probabilities.get)
         completed_blocks = self.aggregator.add_frame(emotion_probabilities)
         self._set_status(latest_emotion=latest_emotion)
-        self._save_and_sync_blocks(completed_blocks)
+        self._save_blocks(completed_blocks)
 
     def _finish_run(self, show_window: bool) -> None:
         final_block = None
@@ -230,7 +235,7 @@ class EmotionRecognitionService:
                 self._set_error("stop_flush", str(exc))
 
         if final_block is not None:
-            self._save_and_sync_blocks([final_block])
+            self._save_blocks([final_block])
 
         if self._detector is not None:
             self._detector.release()
@@ -249,44 +254,24 @@ class EmotionRecognitionService:
                 "status": "stopped" if not self._status.get("last_error") else "failed",
                 "updated_at": datetime.now().astimezone().isoformat(),
             }
-            self.session_sync.queue_session(self.current_session_record)
-        self._retry_pending_sync()
+            try:
+                self.local_storage.upsert_session(self.current_session_record)
+            except Exception as exc:
+                self._set_error("local_session_update", str(exc))
         self._set_status(running=False, camera_ready=False)
 
-    def _save_and_sync_blocks(self, blocks: list[dict]) -> None:
+    def _save_blocks(self, blocks: list[dict]) -> None:
         if not blocks:
             return
 
         self._set_stage("local_storage")
         for block in blocks:
-            self.sync_client.queue_block(block)
-            self.completed_blocks_memory.append(block)
+            try:
+                self.local_storage.upsert_block(block)
+            except Exception as exc:
+                self._set_error("local_block_save", str(exc))
+                continue
             self._set_status(last_saved_block_time=block.get("block_end_time"))
-
-        self._retry_pending_sync()
-
-    def _retry_pending_sync(self) -> None:
-        if self.session_sync.is_configured:
-            self._set_stage("supabase_upload")
-            self.session_sync.retry_pending_sessions()
-            if self.session_sync.last_error:
-                self._set_status(last_upload_error=self.session_sync.last_error)
-                self._set_error("supabase_upload", self.session_sync.last_error)
-        elif self.session_sync.disabled_reason:
-            self._set_status(last_upload_error=self.session_sync.disabled_reason)
-
-        if not self.sync_client.is_configured:
-            if self.sync_client.disabled_reason:
-                self._set_status(last_upload_error=self.sync_client.disabled_reason)
-            return
-
-        self._set_stage("supabase_upload")
-        uploaded_count = self.sync_client.retry_pending_blocks()
-        if uploaded_count:
-            self._set_status(last_upload_error=None)
-        elif self.sync_client.last_error:
-            self._set_status(last_upload_error=self.sync_client.last_error)
-            self._set_error("supabase_upload", self.sync_client.last_error)
 
     def _build_session_record(self, status: str) -> dict[str, Any]:
         if not self.session_manager:
@@ -305,6 +290,15 @@ class EmotionRecognitionService:
         }
 
     def _set_stage(self, stage: str) -> None:
+        """Record the stage in progress, unless a failure already claimed it.
+
+        Teardown runs its own stages after a failure, so without this guard the
+        reported stage would always be the last shutdown step rather than the
+        one that actually broke.
+        """
+        with self._lock:
+            if self._status.get("last_error"):
+                return
         self._set_status(last_error_stage=stage)
 
     def _set_error(self, stage: str, message: str) -> None:

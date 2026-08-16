@@ -31,7 +31,11 @@ class WebcamEmotionDetector:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model = models.mobilenet_v3_small(weights=None)
         model.classifier[3] = nn.Linear(model.classifier[3].in_features, 4)
-        model.load_state_dict(torch.load(model_path, map_location=device))
+        # weights_only=True keeps torch.load from unpickling arbitrary objects.
+        # It became the default in torch 2.6, but requirements allow 2.0+, so
+        # pass it explicitly rather than depending on which version resolved.
+        state_dict = torch.load(model_path, map_location=device, weights_only=True)
+        model.load_state_dict(state_dict)
         model.to(device)
         model.eval()
 

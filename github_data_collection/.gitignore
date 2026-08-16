@@ -1,0 +1,10 @@
+.env
+__pycache__/
+collectors/__pycache__/
+tests/__pycache__/
+*.py[cod]
+storage/*.db-shm
+storage/*.db-wal
+storage/*.db
+storage/*.json
+output/
