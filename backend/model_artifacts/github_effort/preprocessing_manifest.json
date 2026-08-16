@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "model_version": "github-effort-2026-08-10",
+  "target": "elapsed development duration from first_commit_at to pr_merged_at in hours",
+  "runtime_start_timestamp": "SmartDesk lifecycle started_at",
+  "text": {
+    "combine": "lowercase(title + space + description)",
+    "vectorizer": "tfidf_vectorizer.pkl",
+    "reducer": "svd_reducer.pkl"
+  },
+  "label_rules": {
+    "bug": ["\\bbug\\b", "\\bfix", "\\bregression\\b", "\\bcrash\\b"],
+    "feature": ["feature", "enhancement", "\\bfeat\\b", "proposal"],
+    "docs": ["doc", "documentation"],
+    "performance": ["perf", "performance", "optimi[sz]"],
+    "test": ["\\btest", "\\bci\\b", "flaky"],
+    "chore": ["chore", "refactor", "cleanup", "maintenance"],
+    "question": ["question", "discussion", "support"]
+  },
+  "unseen_repository": {
+    "categorical_value": "missing",
+    "repo_history": "global_median_hours",
+    "repo_label_history": "label_median_hours_then_global"
+  },
+  "unseen_label": "normalize to other; empty labels normalize to unlabeled",
+  "required_artifacts": {
+    "manifest.json": "2c573306433a944542c49f8e60194c584fb86899dac5867628637e9d6c69dad5",
+    "model_low.txt": "416125a994c27c586c49c5aac9337f11ef59bc8a2cec5605360f84e4ca6fc063",
+    "model_typical.txt": "2e53932323de359b382d38e34d401bfe4af5a9114115c74b9cdaf9292fce2216",
+    "model_high.txt": "ffbd17cc4c43941913b1f22ff1b184940abb0dd06e49958578f6cb1b9a0247b3",
+    "tfidf_vectorizer.pkl": "92dbb8f8349900440a1b543cb6b9952209a1df75caa6e155caa4c8fb97d871d7",
+    "svd_reducer.pkl": "9e651b5759972b019c0779918d7c655bd867ea52a21463727acd9e49905d551f",
+    "repo_stats.json": "01251cd7451853b1af1cea3249b52e04718cc656ebfd0e227593e66176f0e82b",
+    "repo_label_stats.json": "d11f893807cdceba33d3c9376337a77bb6e5d557d4c146ff224dd9aaa1ea8c9a",
+    "label_categories.json": "da0d7a4377ddad6f081a0b93e19c4e80b8be48a45498bf08b70c10f8a7727da0"
+  }
+}

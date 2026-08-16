@@ -6,6 +6,10 @@ from app.models.db.activity_window_pattern import ActivityWindowPatternRecord
 from app.models.db.calendar_event import CalendarEventRecord
 from app.models.db.emotion import EmotionBlockRecord
 from app.models.db.emotion import EmotionSessionRecord
+from app.models.db.github import GitHubConnectionRecord
+from app.models.db.github import GitHubInitialPredictionRecord
+from app.models.db.github import GitHubOAuthStateRecord
+from app.models.db.preference import UserPreferenceRecord
 from app.models.db.recommendation import RecommendationEventRecord
 from app.models.db.recommendation import RecommendationRecord
 from app.models.db.service_heartbeat import ServiceHeartbeatRecord
@@ -26,6 +30,9 @@ __all__ = [
     "CalendarEventRecord",
     "EmotionBlockRecord",
     "EmotionSessionRecord",
+    "GitHubConnectionRecord",
+    "GitHubInitialPredictionRecord",
+    "GitHubOAuthStateRecord",
     "IDESessionRecord",
     "OSSessionRecord",
     "OSBrowserSummaryRecord",
@@ -33,5 +40,6 @@ __all__ = [
     "RecommendationRecord",
     "ServiceHeartbeatRecord",
     "UserBaselineRecord",
+    "UserPreferenceRecord",
     "WorkPeriodRecord",
 ]

@@ -348,6 +348,13 @@ ipcMain.handle('smartdesk:export-pdf', async (_event, scope: string, date?: stri
 )
 
 app.whenReady().then(() => {
+  ipcMain.handle('open-github-external', async (_event, rawUrl: string) => {
+    const url = new URL(rawUrl)
+    if (url.protocol !== 'https:' || url.hostname !== 'github.com') {
+      throw new Error('Only HTTPS GitHub links may be opened externally')
+    }
+    await shell.openExternal(url.toString())
+  })
   createWindow()
   if (Notification.isSupported()) {
     setInterval(() => { void pollRecommendations() }, POLL_MS)

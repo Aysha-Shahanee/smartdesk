@@ -262,23 +262,6 @@
   font-weight: 400;
 }
 
-/* Per-card placeholder marker. Deliberately loud enough to be noticed next to
-   a data-backed card, quiet enough not to dominate the tile it sits in. */
-.sd-sample-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-xs);
-  padding: 2px var(--space-sm);
-  border-radius: var(--radius-full);
-  background: var(--color-warning-light);
-  color: var(--color-warning);
-  border: 1px solid var(--color-warning);
-  font-size: 10px;
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: help;
-}
-
 /* Recommendations Preview */
 .hub-rec-preview {
   display: flex;
@@ -482,5 +465,20 @@
 
 .legend-value {
   font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.pred-panel-message {
+  color: var(--color-text-secondary);
+}
+
+.pred-panel-message h4 {
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-xs);
+}
+
+.pred-task-count {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
   font-weight: 600;
 }

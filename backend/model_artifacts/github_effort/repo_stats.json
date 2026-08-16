@@ -1,0 +1,19 @@
+{
+  "electron/electron": 74.38402777777779,
+  "facebook/react": 29.505833333333335,
+  "flutter/flutter": 33.571666666666665,
+  "kubernetes/kubernetes": 29.241666666666667,
+  "laravel/framework": 21.476111111111113,
+  "microsoft/TypeScript": 26.61861111111111,
+  "microsoft/vscode": 4.220555555555555,
+  "numpy/numpy": 24.569444444444443,
+  "pandas-dev/pandas": 50.41666666666667,
+  "prometheus/prometheus": 39.88027777777778,
+  "pytorch/pytorch": 17.545555555555556,
+  "rails/rails": 22.525694444444444,
+  "redis/redis": 155.37708333333333,
+  "rust-lang/rust": 41.70569444444445,
+  "scikit-learn/scikit-learn": 41.42388888888889,
+  "tensorflow/tensorflow": 131.41,
+  "vuejs/core": 37.55916666666667
+}

@@ -30,6 +30,22 @@ class EmotionBlockAggregator:
     def block_duration(self) -> timedelta:
         return timedelta(minutes=self.block_minutes)
 
+    def mean_scores(self) -> dict[str, float]:
+        """Per-emotion mean probability over the frames seen in this block.
+
+        `emotion_scores` accumulates raw softmax totals, so its magnitude tracks
+        how many frames were processed rather than how the person felt. Blocks
+        are only comparable to each other once that is divided back out, so the
+        mean is what gets stored and rendered; `processed_frame_count` travels
+        alongside it for anyone who needs to re-weight.
+        """
+        if self.processed_frame_count == 0:
+            return {emotion: 0.0 for emotion in EMOTIONS}
+        return {
+            emotion: self.emotion_scores[emotion] / self.processed_frame_count
+            for emotion in EMOTIONS
+        }
+
     def add_frame(self, probabilities: dict[str, float], timestamp: datetime | None = None) -> list[dict]:
         timestamp = timestamp or datetime.now().astimezone()
         completed_blocks = self.complete_expired_blocks(timestamp)
@@ -84,7 +100,7 @@ class EmotionBlockAggregator:
             "block_type": block_type,
             "duration_minutes": duration_minutes,
             "dominant_emotion": dominant_emotion,
-            "emotion_scores": dict(self.emotion_scores),
+            "emotion_scores": self.mean_scores(),
             "processed_frame_count": self.processed_frame_count,
             "id": str(uuid4()),
             "created_at": datetime.now().astimezone().isoformat(),

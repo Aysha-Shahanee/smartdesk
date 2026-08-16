@@ -17,6 +17,7 @@ from app.routes import dashboard
 from app.routes import emotion
 from app.routes import health
 from app.routes import ingest
+from app.routes import github_integration
 from app.routes import recommendations
 from app.routes import reports
 from app.routes import segment_feedback
@@ -115,6 +116,11 @@ app.include_router(health.router, prefix="/health", tags=["Health"])
 app.include_router(ingest.router, prefix="/api/v1/ingest", tags=["Ingest"])
 app.include_router(calendar.router, prefix="/api/v1/calendar", tags=["Calendar"])
 app.include_router(emotion.router, prefix="/api/v1/emotion", tags=["Emotion"])
+app.include_router(
+    github_integration.router,
+    prefix="/api/v1/integrations/github",
+    tags=["GitHub Integration"],
+)
 app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
 app.include_router(segment_feedback.router, prefix="/api/v1/activity-segments", tags=["Segment Feedback"])
 app.include_router(window_clusters.router, prefix="/api/v1", tags=["Window Clusters"])

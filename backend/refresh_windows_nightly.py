@@ -28,10 +28,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 #: Columns run_pattern_analysis.py reads that make_window_table.py does not
-#: create. They were only ever added by create_window_triggers.sql, a loose
-#: file nothing runs, so a fresh install failed with
-#: "no such column: sum_focus_duration". Added here instead, idempotently,
-#: so the nightly job is self-sufficient.
+#: create. They used to be added only by a loose SQL script nothing ran, so a
+#: fresh install failed with "no such column: sum_focus_duration". Added here
+#: instead, idempotently, so the nightly job is self-sufficient.
 ADDITIVE_COLUMNS = [
     ("sum_active_seconds", "REAL"), ("sum_idle_seconds", "REAL"),
     ("sum_app_switches", "INTEGER"), ("sum_category_switches", "INTEGER"),

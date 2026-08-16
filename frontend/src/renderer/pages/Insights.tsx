@@ -7,14 +7,16 @@ import {
 import { useTheme } from '../contexts/ThemeContext';
 import { useDateContext } from '../contexts/DateContext';
 import { getCategoryColor, getEmotionColor, getChartChrome } from '../theme/chartTheme';
-import SampleDataBanner from '../components/SampleDataBanner';
 import {
   CurrentEmotionSession,
   EmotionStatus,
   getAllSegments,
   getCurrentEmotionSession,
+  getEmotionConsent,
   getEmotionStatus,
+  getStress,
   getWindowClusters,
+  type StressResponse,
   startEmotionDetection,
   stopEmotionDetection,
 } from '../services/api';
@@ -257,7 +259,11 @@ const sumWorkStateScores = (session: CurrentEmotionSession | null) => {
   return totals;
 };
 
-const buildWorkStateDaySlots = (session: CurrentEmotionSession | null, selectedDate: string) => {
+const buildWorkStateDaySlots = (
+  session: CurrentEmotionSession | null,
+  selectedDate: string,
+  stressPoints: StressResponse['points'] = [],
+) => {
   const dayStart = new Date(`${selectedDate}T00:00:00`);
   const slotMs = 15 * 60 * 1000;
   const slots = Array.from({ length: 96 }, (_, index) => {
@@ -271,6 +277,14 @@ const buildWorkStateDaySlots = (session: CurrentEmotionSession | null, selectedD
   });
 
   const blocks = [...(session?.completed_blocks || session?.blocks || [])];
+  stressPoints.forEach(point => {
+    blocks.push({
+      block_start_time: point.block_start_time,
+      block_end_time: point.block_end_time,
+      emotion_scores: { [point.dominant_emotion]: 1 },
+      processed_frame_count: 1,
+    });
+  });
   if (session?.current_block?.processed_frame_count && session.current_block.processed_frame_count > 0) {
     blocks.push({
       block_start_time: session.current_block.block_start_time,
@@ -309,24 +323,30 @@ const Insights: React.FC = () => {
   const [isEmotionLoading, setIsEmotionLoading] = useState(false);
   const [isStartingEmotion, setIsStartingEmotion] = useState(false);
   const [isStoppingEmotion, setIsStoppingEmotion] = useState(false);
+  const [webcamConsent, setWebcamConsent] = useState<boolean | null>(null);
+  const [stress, setStress] = useState<StressResponse | null>(null);
 
   const refreshEmotionData = useCallback(async () => {
     setIsEmotionLoading(true);
     setEmotionError(null);
     try {
-      const [status, session] = await Promise.all([
+      const [status, session, consent, stressResponse] = await Promise.all([
         getEmotionStatus(),
         getCurrentEmotionSession(),
+        getEmotionConsent(),
+        getStress(selectedDate),
       ]);
       setEmotionStatus(status);
       setCurrentEmotionSession(session);
+      setWebcamConsent(consent.webcam_enabled);
+      setStress(stressResponse);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Emotion backend is unavailable.';
       setEmotionError(message);
     } finally {
       setIsEmotionLoading(false);
     }
-  }, []);
+  }, [selectedDate]);
 
   useEffect(() => {
     if (activeTab === 'Stress Insights') {
@@ -387,8 +407,8 @@ const Insights: React.FC = () => {
     };
   });
   const workStateDaySlots = useMemo(
-    () => buildWorkStateDaySlots(currentEmotionSession, selectedDate),
-    [currentEmotionSession, selectedDate],
+    () => buildWorkStateDaySlots(currentEmotionSession, selectedDate, stress?.points || []),
+    [currentEmotionSession, selectedDate, stress],
   );
   const workStateHours = useMemo(
     () => Array.from({ length: 24 }, (_, hour) => workStateDaySlots.slice(hour * 4, hour * 4 + 4)),
@@ -741,12 +761,10 @@ const Insights: React.FC = () => {
         <p className="subtitle">Focus, stress and pattern analysis</p>
       </div>
 
-      {/* Focus is measured — segment focus scores back both charts on that tab,
-          so the banner would now discredit real numbers. Stress and emotion
-          still have no collector behind them. */}
-      {activeTab === 'Stress Insights' && (
-        <SampleDataBanner what="Stress level and emotion detection" />
-      )}
+      {/* Nothing on this page is placeholder any more: focus comes from segment
+          focus scores, and stress is derived from recorded emotion blocks. Days
+          without a detection session show an empty state rather than a made-up
+          curve, so the banner has no remaining subject. */}
 
       <div className="sd-tabs">
         {(['Focus Insights', 'Stress Insights', 'Pattern Detection'] as InsightTab[]).map(tab => (
@@ -901,7 +919,16 @@ const Insights: React.FC = () => {
                 <button
                   className="sd-btn sd-btn--primary"
                   onClick={handleStartEmotion}
-                  disabled={Boolean(emotionStatus?.running) || isStartingEmotion}
+                  disabled={
+                    Boolean(emotionStatus?.running) ||
+                    isStartingEmotion ||
+                    webcamConsent !== true
+                  }
+                  title={
+                    webcamConsent === false
+                      ? 'Turn on Webcam Emotion Detection in Settings first'
+                      : undefined
+                  }
                 >
                   {isStartingEmotion ? 'Starting...' : 'Start Webcam Detection'}
                 </button>
@@ -943,6 +970,16 @@ const Insights: React.FC = () => {
                 <span className="legend-name">No data</span>
               </div>
             </div>
+            {workStateDaySlots.every(slot => slot.state === null) && (
+              <div className="stress-empty work-state-empty-message">
+                <h4>No work state data for {selectedDate}</h4>
+                <p>
+                  {webcamConsent === false
+                    ? 'Webcam detection is turned off. Enable it under Settings > Privacy Controls, then start a session to record work states for this day.'
+                    : 'Start webcam detection above and leave it running. Live predictions fill the current slot, and completed blocks fill the day history.'}
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="sd-grid-2" style={{ marginTop: 'var(--space-xl)' }}>
@@ -970,6 +1007,19 @@ const Insights: React.FC = () => {
                   <strong>{emotionStatus?.camera_ready ? 'Ready' : 'Not ready'}</strong>
                 </div>
               </div>
+
+              {webcamConsent === false && !emotionError && (
+                <div className="sd-alert sd-alert--warning emotion-inline-alert">
+                  <span className="sd-alert-icon">🔒</span>
+                  <div className="sd-alert-content">
+                    <h4>Webcam detection is turned off</h4>
+                    <p>
+                      Turn on Webcam Emotion Detection under Settings › Privacy Controls to
+                      allow SmartDesk to use your camera.
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {emotionError && (
                 <div className="sd-alert sd-alert--warning emotion-inline-alert">

@@ -1,7 +1,7 @@
 """create os_browser_summary table
 
 Revision ID: 0005_create_os_browser_summary_table
-Revises: 0004_remove_ide_foreground_sec_terminal_debug_counts
+Revises: 4ba685c05c0b
 Create Date: 2026-06-22
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "0005_create_os_browser_summary_table"
-down_revision: Union[str, Sequence[str], None] = "0004_remove_ide_foreground_sec_terminal_debug_counts"
+down_revision: Union[str, Sequence[str], None] = "4ba685c05c0b"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

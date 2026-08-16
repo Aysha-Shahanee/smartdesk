@@ -1,6 +1,93 @@
 import { fetchJson } from './fetchUtils';
 
+/* Falls back to the local backend so a fresh clone runs without a .env, and so
+   this file agrees with main.ts and preload.ts, which both default the same
+   way. Set VITE_BACKEND_URL to point at a deployed backend. */
 const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
+
+export interface GitHubConnectionStatus {
+  user_id: string;
+  connection_status: 'connected' | 'disconnected';
+  github_login?: string;
+  selected_project_id?: string;
+  selected_project_number?: number;
+  selected_project_title?: string;
+}
+
+export interface GitHubProject {
+  project_id: string;
+  number: number;
+  title: string;
+  owner: string;
+}
+
+export interface GitHubStatusOption { id: string; name: string }
+
+export interface GitHubActiveTask {
+  project_item_id: string;
+  issue_number?: number | null;
+  title: string;
+  repository?: string;
+  logical_status: 'ACTIVE';
+  started_at: string;
+  predicted_typical_hours?: number;
+  task_active_seconds?: number | null;
+  time_spent_hours?: number | null;
+  time_attribution_status?: 'repository_match' | 'branch_match' | 'no_match' | 'ambiguous';
+  calculated_through?: string;
+  data_status?: 'complete' | 'partial' | 'unavailable';
+  remaining_time_hours?: number | null;
+  remaining_time_status?:
+    | 'baseline_available'
+    | 'estimate_exceeded'
+    | 'completed'
+    | 'time_spent_unavailable'
+    | 'initial_prediction_unavailable';
+  overrun_hours?: number | null;
+  approaching_initial_estimate?: boolean;
+}
+
+const GITHUB_API = `${API_BASE}/api/v1/integrations/github`;
+
+export const getGitHubStatus = (): Promise<GitHubConnectionStatus> =>
+  fetchJson(`${GITHUB_API}/status`);
+
+export const beginGitHubConnection = (): Promise<{ installation_url: string }> =>
+  fetchJson(`${GITHUB_API}/connect`);
+
+export const getGitHubProjects = (): Promise<{ projects: GitHubProject[] }> =>
+  fetchJson(`${GITHUB_API}/projects`);
+
+export const selectGitHubProject = (project: GitHubProject) =>
+  fetchJson(`${GITHUB_API}/project`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      owner: project.owner,
+      project_number: project.number,
+      project_id: project.project_id,
+      title: project.title,
+    }),
+  });
+
+export const getGitHubStatusOptions = (): Promise<{ options: GitHubStatusOption[] }> =>
+  fetchJson(`${GITHUB_API}/status-options`);
+
+export const getGitHubStatusMapping = (): Promise<{ mapping: Record<string, string> }> =>
+  fetchJson(`${GITHUB_API}/status-mapping`);
+
+export const saveGitHubStatusMapping = (mapping: Record<string, string>) =>
+  fetchJson(`${GITHUB_API}/status-mapping`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mapping }),
+  });
+
+export const disconnectGitHub = () =>
+  fetchJson(`${GITHUB_API}/connection`, { method: 'DELETE' });
+
+export const getGitHubActiveTasks = (): Promise<{ tasks: GitHubActiveTask[] }> =>
+  fetchJson(`${GITHUB_API}/active-tasks`);
 
 /* ---------------------------------------------------------- */
 /* Date-window helpers                                         */
@@ -225,6 +312,58 @@ export const getEmotionStatus = async (): Promise<EmotionStatus> => {
 
 export const getCurrentEmotionSession = async (): Promise<CurrentEmotionSession> => {
   return fetchJson(`${API_BASE}/api/v1/emotion/sessions/current`);
+};
+
+export interface StressPoint {
+  block_start_time: string;
+  block_end_time: string;
+  /** 0–100. Derived from the block's emotion mix — see emotion_stress_service.py. */
+  stress: number;
+  /** 0–1, how much the block's frame count justifies trusting it. */
+  confidence: number;
+  processed_frame_count: number;
+  duration_minutes: number;
+  dominant_emotion: string;
+}
+
+export interface StressSummary {
+  /** null when the window holds no observed blocks — render an empty state, not a zero. */
+  score: number | null;
+  observed_minutes: number;
+  block_count: number;
+  driver: string | null;
+}
+
+export interface StressResponse {
+  from: string;
+  to: string;
+  summary: StressSummary;
+  points: StressPoint[];
+}
+
+/** Stress for a local day, derived from recorded emotion blocks. */
+export const getStress = async (date: string): Promise<StressResponse> => {
+  const { from, to } = dayBounds(date);
+  const params = new URLSearchParams({ from, to });
+  return fetchJson(`${API_BASE}/api/v1/emotion/stress?${params.toString()}`);
+};
+
+export interface EmotionConsent {
+  webcam_enabled: boolean;
+}
+
+/* Webcam capture is opt-in. The backend refuses /start with 403 until this is
+   granted, so the toggle in Settings is the real control, not a hint. */
+export const getEmotionConsent = async (): Promise<EmotionConsent> => {
+  return fetchJson(`${API_BASE}/api/v1/emotion/consent`);
+};
+
+export const setEmotionConsent = async (webcamEnabled: boolean): Promise<EmotionConsent> => {
+  return fetchJson(`${API_BASE}/api/v1/emotion/consent`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ webcam_enabled: webcamEnabled }),
+  });
 };
 
 

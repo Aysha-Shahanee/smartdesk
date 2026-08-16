@@ -1,0 +1,180 @@
+{
+  "trained_rows": 827,
+  "fold_count": 5,
+  "fold_assignment_method": "repositories shuffled with seed 42, then assigned round-robin",
+  "per_fold_metrics": [
+    {
+      "fold": 1,
+      "validation_repositories": [
+        "redis/redis",
+        "prometheus/prometheus",
+        "microsoft/TypeScript",
+        "rust-lang/rust"
+      ],
+      "n_val": 192,
+      "mae_log": 1.3501656548686005,
+      "mae_hours": 112.73811539457245,
+      "calibration_pct": 70.3125,
+      "baseline_mae_hours": 115.73028356481483
+    },
+    {
+      "fold": 2,
+      "validation_repositories": [
+        "vuejs/core",
+        "numpy/numpy",
+        "flutter/flutter",
+        "pandas-dev/pandas"
+      ],
+      "n_val": 282,
+      "mae_log": 1.5375049570477815,
+      "mae_hours": 92.25025249761171,
+      "calibration_pct": 78.01418439716312,
+      "baseline_mae_hours": 92.66521178092987
+    },
+    {
+      "fold": 3,
+      "validation_repositories": [
+        "rails/rails",
+        "kubernetes/kubernetes",
+        "laravel/framework"
+      ],
+      "n_val": 124,
+      "mae_log": 1.3053997062318605,
+      "mae_hours": 79.42271009003149,
+      "calibration_pct": 81.45161290322581,
+      "baseline_mae_hours": 80.17607526881721
+    },
+    {
+      "fold": 4,
+      "validation_repositories": [
+        "microsoft/vscode",
+        "electron/electron",
+        "scikit-learn/scikit-learn"
+      ],
+      "n_val": 207,
+      "mae_log": 1.587538599037622,
+      "mae_hours": 57.18628023514608,
+      "calibration_pct": 73.42995169082126,
+      "baseline_mae_hours": 57.3459078099839
+    },
+    {
+      "fold": 5,
+      "validation_repositories": [
+        "pytorch/pytorch",
+        "tensorflow/tensorflow",
+        "facebook/react"
+      ],
+      "n_val": 22,
+      "mae_log": 1.402592252055038,
+      "mae_hours": 83.79940541877157,
+      "calibration_pct": 72.72727272727273,
+      "baseline_mae_hours": 94.06970959595957
+    }
+  ],
+  "average_cv_metrics": {
+    "mae_log": 1.4366402338481805,
+    "mae_hours": 85.07935272722666,
+    "calibration_pct": 75.18710434369659,
+    "baseline_mae_hours": 87.99743760410107
+  },
+  "feature_columns": [
+    "title_len_words",
+    "body_len_words",
+    "has_code_block",
+    "has_stacktrace",
+    "has_checklist",
+    "has_link",
+    "has_image",
+    "label_count",
+    "has_priority_label",
+    "start_dayofweek",
+    "start_hour_utc",
+    "days_to_weekend",
+    "repo_median_hours_prior",
+    "repo_label_median_hours_prior",
+    "label_category",
+    "repository",
+    "text_svd_0",
+    "text_svd_1",
+    "text_svd_2",
+    "text_svd_3",
+    "text_svd_4",
+    "text_svd_5",
+    "text_svd_6",
+    "text_svd_7",
+    "text_svd_8",
+    "text_svd_9",
+    "text_svd_10",
+    "text_svd_11",
+    "text_svd_12",
+    "text_svd_13",
+    "text_svd_14",
+    "text_svd_15",
+    "text_svd_16",
+    "text_svd_17",
+    "text_svd_18",
+    "text_svd_19",
+    "text_svd_20",
+    "text_svd_21",
+    "text_svd_22",
+    "text_svd_23",
+    "text_svd_24",
+    "text_svd_25",
+    "text_svd_26",
+    "text_svd_27",
+    "text_svd_28",
+    "text_svd_29",
+    "text_svd_30",
+    "text_svd_31",
+    "text_svd_32",
+    "text_svd_33",
+    "text_svd_34",
+    "text_svd_35",
+    "text_svd_36",
+    "text_svd_37",
+    "text_svd_38",
+    "text_svd_39"
+  ],
+  "categorical_columns": [
+    "label_category",
+    "repository"
+  ],
+  "lgb_params": {
+    "objective": "quantile",
+    "metric": "quantile",
+    "num_leaves": 15,
+    "min_data_in_leaf": 10,
+    "learning_rate": 0.05,
+    "feature_fraction": 0.8,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 5,
+    "lambda_l1": 0.1,
+    "lambda_l2": 0.1,
+    "verbosity": -1,
+    "seed": 42
+  },
+  "final_full_data_iterations": {
+    "low": 2,
+    "typical": 38,
+    "high": 3
+  },
+  "cv_metrics_note": "Cross-validation metrics estimate generalization to unseen repositories; they are not the shipped full-data models' training fit.",
+  "cv_history_features_note": "Repository history features are rebuilt inside each fold from training-fold targets only. Held-out repositories use training-derived global/label medians.",
+  "top_feature_gain": {
+    "start_dayofweek": 105.37095963954926,
+    "repo_label_median_hours_prior": 98.74199903011322,
+    "repository": 91.50968945026398,
+    "body_len_words": 66.58204007148743,
+    "text_svd_13": 56.680230140686035,
+    "text_svd_14": 51.17444026470184,
+    "text_svd_21": 42.10666036605835,
+    "text_svd_17": 38.66419994831085,
+    "text_svd_24": 38.305699825286865,
+    "text_svd_7": 35.57537019252777,
+    "text_svd_9": 32.795429706573486,
+    "text_svd_30": 32.35347008705139,
+    "text_svd_34": 30.968950033187866,
+    "text_svd_20": 30.789539694786072,
+    "text_svd_16": 29.920959949493408
+  }
+}

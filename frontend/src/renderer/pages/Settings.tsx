@@ -1,5 +1,20 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getRecommendations } from '../services/api';
+import {
+  beginGitHubConnection,
+  disconnectGitHub,
+  getGitHubProjects,
+  getRecommendations,
+  getGitHubStatus,
+  getGitHubStatusMapping,
+  getGitHubStatusOptions,
+  getEmotionConsent,
+  setEmotionConsent,
+  GitHubConnectionStatus,
+  GitHubProject,
+  GitHubStatusOption,
+  saveGitHubStatusMapping,
+  selectGitHubProject,
+} from '../services/api';
 import './Settings.css';
 
 interface PrivacySettings {
@@ -27,18 +42,124 @@ interface NotifySettings {
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
 const Settings: React.FC = () => {
+  /* webcamEmotion starts off and is authoritative in the backend — the capture
+     loop runs in the API process, so a value kept only here could never stop
+     it. The other two are local display state until they gain a backend of
+     their own. */
   const [privacy, setPrivacy] = useState<PrivacySettings>({
-    webcamEmotion: true,
+    webcamEmotion: false,
     calendarAccess: true,
     cloudSync: false,
   });
+  const [webcamBusy, setWebcamBusy] = useState(true);
+  const [webcamError, setWebcamError] = useState('');
 
   const [integrations] = useState<Integration[]>([
     { name: 'VS Code', status: 'Connected', icon: '💻', color: '#007ACC' },
-    { name: 'GitHub', status: 'Connected (read-only)', icon: '🐙', color: '#8B5CF6' },
     { name: 'Google Calendar', status: 'Connected (read-only)', icon: '📅', color: '#94A3B8' },
   ]);
 
+  const [github, setGithub] = useState<GitHubConnectionStatus | null>(null);
+  const [projects, setProjects] = useState<GitHubProject[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState('');
+  const [statusOptions, setStatusOptions] = useState<GitHubStatusOption[]>([]);
+  const [statusMapping, setStatusMapping] = useState<Record<string, string>>({});
+  const [githubBusy, setGithubBusy] = useState(true);
+  const [githubMessage, setGithubMessage] = useState('');
+  const [githubStatusUnavailable, setGithubStatusUnavailable] = useState(false);
+
+  const loadProjectConfiguration = async () => {
+    const [optionsResponse, mappingResponse] = await Promise.all([
+      getGitHubStatusOptions(),
+      getGitHubStatusMapping(),
+    ]);
+    setStatusOptions(optionsResponse.options);
+    setStatusMapping(Object.fromEntries(
+      optionsResponse.options.map(option => [
+        option.name,
+        mappingResponse.mapping[option.name] || 'OTHER',
+      ])
+    ));
+  };
+
+  const refreshGitHub = async () => {
+    setGithubBusy(true);
+    setGithubMessage('');
+    setGithubStatusUnavailable(false);
+    try {
+      const current = await getGitHubStatus();
+      setGithub(current);
+      if (current.connection_status === 'connected') {
+        const response = await getGitHubProjects();
+        setProjects(response.projects);
+        setSelectedProjectId(current.selected_project_id || '');
+        if (current.selected_project_id) await loadProjectConfiguration();
+      } else {
+        setProjects([]);
+        setSelectedProjectId('');
+        setStatusOptions([]);
+        setStatusMapping({});
+      }
+    } catch (error) {
+      setGithubStatusUnavailable(true);
+      setGithubMessage(error instanceof Error ? error.message : 'Unable to load GitHub settings.');
+    } finally {
+      setGithubBusy(false);
+    }
+  };
+
+  useEffect(() => { refreshGitHub(); }, []);
+
+  const connectGitHub = async () => {
+    try {
+      const { installation_url } = await beginGitHubConnection();
+      if (window.electronAPI) {
+        await window.electronAPI.openGitHubExternal(installation_url);
+      } else {
+        window.location.assign(installation_url);
+      }
+    } catch (error) {
+      setGithubMessage(error instanceof Error ? error.message : 'Unable to connect GitHub.');
+    }
+  };
+
+  const chooseProject = async () => {
+    const project = projects.find(item => item.project_id === selectedProjectId);
+    if (!project) return;
+    setGithubBusy(true);
+    try {
+      await selectGitHubProject(project);
+      await refreshGitHub();
+      setGithubMessage(`Selected ${project.title}.`);
+    } catch (error) {
+      setGithubMessage(error instanceof Error ? error.message : 'Unable to select project.');
+      setGithubBusy(false);
+    }
+  };
+
+  const saveMapping = async () => {
+    setGithubBusy(true);
+    try {
+      await saveGitHubStatusMapping(statusMapping);
+      setGithubMessage('Status mapping saved and project synchronized.');
+    } catch (error) {
+      setGithubMessage(error instanceof Error ? error.message : 'Unable to save status mapping.');
+    } finally {
+      setGithubBusy(false);
+    }
+  };
+
+  const disconnect = async () => {
+    setGithubBusy(true);
+    try {
+      await disconnectGitHub();
+      await refreshGitHub();
+      setGithubMessage('GitHub disconnected from this SmartDesk user.');
+    } catch (error) {
+      setGithubMessage(error instanceof Error ? error.message : 'Unable to disconnect GitHub.');
+      setGithubBusy(false);
+    }
+  };
   /* Notification throttles live in the Electron main process, because it is
      the thing that actually raises a toast and it keeps running when the
      window is closed. This panel is a view onto that state, not a second copy
@@ -75,12 +196,47 @@ const Settings: React.FC = () => {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    getEmotionConsent()
+      .then(({ webcam_enabled }) => {
+        if (cancelled) return;
+        setPrivacy(prev => ({ ...prev, webcamEmotion: webcam_enabled }));
+      })
+      .catch(() => {
+        if (!cancelled) setWebcamError('Could not read the webcam setting from the backend.');
+      })
+      .finally(() => {
+        if (!cancelled) setWebcamBusy(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
   const togglePrivacy = (key: keyof PrivacySettings) => {
     setPrivacy(prev => {
       const updated = { ...prev, [key]: !prev[key] };
       localStorage.setItem('smartdeskSettings', JSON.stringify(updated));
       return updated;
     });
+  };
+
+  /* Webcam consent round-trips to the backend, which is what actually gates
+     capture. Only reflect the new position once the server has accepted it, so
+     the switch can never show a permission the backend has not granted. */
+  const toggleWebcamEmotion = async () => {
+    const next = !privacy.webcamEmotion;
+    setWebcamBusy(true);
+    setWebcamError('');
+    try {
+      const { webcam_enabled } = await setEmotionConsent(next);
+      setPrivacy(prev => ({ ...prev, webcamEmotion: webcam_enabled }));
+    } catch (error) {
+      setWebcamError(
+        error instanceof Error ? error.message : 'Could not save the webcam setting.'
+      );
+    } finally {
+      setWebcamBusy(false);
+    }
   };
 
   return (
@@ -108,10 +264,17 @@ const Settings: React.FC = () => {
             <div className="setting-tags">
               <span>👁️ Processed locally</span>
               <span>🚫 No image storage</span>
+              <span>{privacy.webcamEmotion ? '✅ Camera allowed' : '⛔ Camera blocked'}</span>
             </div>
+            {webcamError && <p className="setting-error">{webcamError}</p>}
           </div>
           <label className="sd-toggle">
-            <input type="checkbox" checked={privacy.webcamEmotion} onChange={() => togglePrivacy('webcamEmotion')} />
+            <input
+              type="checkbox"
+              checked={privacy.webcamEmotion}
+              disabled={webcamBusy}
+              onChange={toggleWebcamEmotion}
+            />
             <span className="sd-toggle-slider" />
           </label>
         </div>
@@ -298,6 +461,78 @@ const Settings: React.FC = () => {
           </div>
         </div>
         <div className="settings-divider" />
+
+        <div className="github-integration">
+          <div className="integration-row github-integration-header">
+            <div className="integration-icon" style={{ background: '#24292F' }}>GH</div>
+            <div className="integration-info">
+              <strong>GitHub Projects</strong>
+              <span className={`integration-status ${github?.connection_status !== 'connected' ? 'integration-status--muted' : ''}`}>
+                {githubBusy && !github
+                  ? 'Checking connection…'
+                  : githubStatusUnavailable
+                    ? 'Connection unavailable'
+                    : github?.connection_status === 'connected'
+                      ? `Connected to ${github.github_login}`
+                      : 'Not connected'}
+              </span>
+              {github?.selected_project_title && (
+                <span className="integration-detail">Selected project: {github.selected_project_title}</span>
+              )}
+            </div>
+            {github?.connection_status === 'connected' ? (
+              <button className="sd-btn" onClick={disconnect} disabled={githubBusy}>Disconnect</button>
+            ) : (
+              <button className="sd-btn sd-btn--primary" onClick={connectGitHub} disabled={githubBusy}>Connect GitHub</button>
+            )}
+          </div>
+
+          {github?.connection_status === 'connected' && (
+            <div className="github-configuration">
+              <label className="github-field">
+                <span>Project</span>
+                <div className="github-field-row">
+                  <select value={selectedProjectId} onChange={event => setSelectedProjectId(event.target.value)}>
+                    <option value="">Choose an accessible Project</option>
+                    {projects.map(project => (
+                      <option key={project.project_id} value={project.project_id}>{project.title}</option>
+                    ))}
+                  </select>
+                  <button className="sd-btn" onClick={chooseProject} disabled={!selectedProjectId || githubBusy}>Select</button>
+                </div>
+              </label>
+
+              {github.selected_project_id && statusOptions.length > 0 && (
+                <div className="github-mapping">
+                  <strong>Status mapping</strong>
+                  <p>Map each Project Status option to SmartDesk's lifecycle.</p>
+                  {statusOptions.map(option => (
+                    <label className="github-mapping-row" key={option.id}>
+                      <span>{option.name}</span>
+                      <select
+                        value={statusMapping[option.name] || 'OTHER'}
+                        onChange={event => setStatusMapping(current => ({
+                          ...current,
+                          [option.name]: event.target.value,
+                        }))}
+                      >
+                        <option value="NOT_STARTED">Not started</option>
+                        <option value="ACTIVE">Active</option>
+                        <option value="DONE">Done</option>
+                        <option value="OTHER">Other</option>
+                      </select>
+                    </label>
+                  ))}
+                  <button className="sd-btn sd-btn--primary" onClick={saveMapping} disabled={githubBusy}>
+                    Save mapping
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {githubMessage && <p className="github-message">{githubMessage}</p>}
+        </div>
 
         {integrations.map((int, i) => (
           <div className="integration-row" key={i}>

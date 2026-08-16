@@ -17,6 +17,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const { createHash, randomUUID } = require("crypto");
 const { URL } = require("url");
+const { normalizeGitHubRepository } = require("./repository");
 
 function cfg(key) {
   let value = vscode.workspace.getConfiguration("smartdesk").get(key);
@@ -127,16 +128,23 @@ function runGit(args, cwd) {
   }
 }
 
-function getWorkspaceFolder() {
+function getWorkspaceFolder(filePath) {
+  if (filePath) {
+    const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(filePath));
+    if (folder) return folder;
+  }
   return vscode.workspace.workspaceFolders?.[0] || null;
 }
 
-function getGitInfo(projectPath) {
-  if (!projectPath) {
-    return { repo_id: null, git_branch: null };
+function getGitInfo(searchPath) {
+  if (!searchPath) {
+    return { repo_id: null, repository: null, git_branch: null };
   }
 
-  const repoRoot = runGit(["rev-parse", "--show-toplevel"], projectPath) || projectPath;
+  const repoRoot = runGit(["rev-parse", "--show-toplevel"], searchPath);
+  if (!repoRoot) {
+    return { repo_id: null, repository: null, git_branch: null };
+  }
   const remoteUrl = runGit(["config", "--get", "remote.origin.url"], repoRoot);
   const branch =
     runGit(["branch", "--show-current"], repoRoot) ||
@@ -145,26 +153,31 @@ function getGitInfo(projectPath) {
 
   return {
     repo_id: repoIdSource ? sha256(repoIdSource) : null,
-    git_branch: branch || null,
+    repository: normalizeGitHubRepository(remoteUrl),
+    // In detached HEAD, git reports "HEAD". Preserve no branch rather than
+    // implying that it is a usable task-attribution branch.
+    git_branch: branch && branch !== "HEAD" ? branch : null,
   };
 }
 
-function getWorkspaceInfo() {
-  const folder = getWorkspaceFolder();
+function getWorkspaceInfo(filePath) {
+  const folder = getWorkspaceFolder(filePath);
   if (!folder) {
     return {
       workspace_name: null,
       project_path: null,
       repo_id: null,
+      repository: null,
       git_branch: null,
     };
   }
 
   const projectPath = folder.uri.fsPath;
+  const searchPath = filePath ? path.dirname(filePath) : projectPath;
   return {
     workspace_name: folder.name,
     project_path: projectPath,
-    ...getGitInfo(projectPath),
+    ...getGitInfo(searchPath),
   };
 }
 
@@ -289,6 +302,7 @@ function currentPayload(event, trigger) {
 
   const langs = languageBreakdown();
 
+  const activeFile = getActiveFileInfo();
   return {
     user_id: cfg("userId"),
     event,
@@ -299,8 +313,8 @@ function currentPayload(event, trigger) {
     parent_process_id: process.ppid || null,
     is_window_focused: windowFocused,
     trigger,
-    ...getWorkspaceInfo(),
-    ...getActiveFileInfo(),
+    ...getWorkspaceInfo(activeFile.active_file_path),
+    ...activeFile,
     counters,
     edited_file_count: editedFiles.size,
     changed_file_count: changedFiles.size,
