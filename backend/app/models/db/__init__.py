@@ -4,6 +4,8 @@ from app.models.db.activity_segment_label import ActivitySegmentLabelRecord
 from app.models.db.activity_segment_pattern import ActivitySegmentPattern
 from app.models.db.activity_window_pattern import ActivityWindowPatternRecord
 from app.models.db.calendar_event import CalendarEventRecord
+from app.models.db.emotion import EmotionBlockRecord
+from app.models.db.emotion import EmotionSessionRecord
 from app.models.db.github import GitHubConnectionRecord
 from app.models.db.github import GitHubInitialPredictionRecord
 from app.models.db.github import GitHubOAuthStateRecord
@@ -25,6 +27,8 @@ __all__ = [
     "ActivityWindowPatternRecord",
     "BrowserSessionRecord",
     "CalendarEventRecord",
+    "EmotionBlockRecord",
+    "EmotionSessionRecord",
     "GitHubConnectionRecord",
     "GitHubInitialPredictionRecord",
     "GitHubOAuthStateRecord",

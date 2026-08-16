@@ -263,6 +263,57 @@ export const getCalendarEvents = async (from?: string, to?: string) => {
 };
 
 /* ---------------------------------------------------------- */
+/* Emotion detection                                           */
+/* ---------------------------------------------------------- */
+
+export interface EmotionStatus {
+  running?: boolean;
+  latest_emotion?: string | null;
+  session_id?: string | null;
+  session_start_time?: string | null;
+  model_ready?: boolean;
+  camera_ready?: boolean;
+  last_error?: string | null;
+}
+
+export interface EmotionBlock {
+  block_start_time?: string;
+  block_end_time?: string;
+  dominant_emotion?: string;
+  emotion_scores?: Record<string, number>;
+  processed_frame_count?: number;
+}
+
+export interface CurrentEmotionSession {
+  ok?: boolean;
+  status?: EmotionStatus;
+  session?: Record<string, unknown> | null;
+  current_block?: {
+    emotion_scores?: Record<string, number>;
+    processed_frame_count?: number;
+  } | null;
+  completed_blocks?: EmotionBlock[];
+  blocks?: EmotionBlock[];
+}
+
+export const startEmotionDetection = async () => {
+  return fetchJson(`${API_BASE}/api/v1/emotion/start`, { method: 'POST' });
+};
+
+export const stopEmotionDetection = async () => {
+  return fetchJson(`${API_BASE}/api/v1/emotion/stop`, { method: 'POST' });
+};
+
+export const getEmotionStatus = async (): Promise<EmotionStatus> => {
+  const data = await fetchJson(`${API_BASE}/api/v1/emotion/status`);
+  return data?.status || data;
+};
+
+export const getCurrentEmotionSession = async (): Promise<CurrentEmotionSession> => {
+  return fetchJson(`${API_BASE}/api/v1/emotion/sessions/current`);
+};
+
+
 /* Recommendations — rule engine output                        */
 /* ---------------------------------------------------------- */
 
