@@ -7,15 +7,16 @@ import {
   getGitHubActiveTasks,
   getIDEDashboard,
   getRecommendations,
+  getStress,
   getWindowClusters,
   type GitHubActiveTask,
   type Recommendation,
+  type StressSummary,
   dayBounds,
 } from '../services/api';
 import { useDateContext } from '../contexts/DateContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { getCategoryColor, getChartChrome } from '../theme/chartTheme';
-import SampleBadge from '../components/SampleBadge';
 import { capitalize, formatDuration, parseSegmentTime } from '../utils/time';
 import { buildDashboardPredictionSummary } from '../utils/dashboardPrediction.mjs';
 import { focusOutOf100, summarizeFocus } from '../utils/focus';
@@ -38,16 +39,16 @@ const SWITCH_RATE_HIGH = 15;
 /* Full scale of the density meter — anything above reads as pinned. */
 const SWITCH_RATE_SCALE = 30;
 
-/* Stress has no collector or model behind it — there is no stress column, no
-   scorer and no endpoint — so it stays a placeholder, flagged in the UI with
-   <SampleBadge /> rather than presented as a measurement.
+/* Both scores on this card are measured now.
 
-   Focus is no longer among them. `activity_segments.focus_score` is written per
-   segment by the backend's FocusScorer and covers upwards of 97% of a day's
-   active time, so the Focus Score below is measured — see utils/focus.ts. */
-/* GitHub task predictions are provided separately by the real GitHub task
+   Focus comes from `activity_segments.focus_score`, written per segment by the
+   backend's FocusScorer, covering upwards of 97% of a day's active time — see
+   utils/focus.ts.
+
+   Stress comes from recorded webcam emotion blocks via /api/v1/emotion/stress.
+   It is null on days with no detection session, and the card says so rather
+   than showing a number nothing produced. GitHub task predictions come from the
    prediction integration. */
-const SAMPLE_STRESS_SCORE = 42;
 const PREDICTION_REFRESH_INTERVAL_MS = 15_000;
 
 interface ActiveSegment {
@@ -87,6 +88,7 @@ const Dashboard: React.FC = () => {
     week: [],
     month: [],
   });
+  const [stress, setStress] = useState<StressSummary | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -94,19 +96,22 @@ const Dashboard: React.FC = () => {
     const load = async () => {
       setLoading(true);
       const { from, to } = dayBounds(selectedDate);
-      const [sum, segs, ideSummary, recs, dayRows, weekRows, monthRows] = await Promise.all([
-        getSegmentsSummary(selectedDate).catch(() => null),
-        getAllSegments(selectedDate).catch(() => []),
-        getIDEDashboard(from, to).catch(() => null),
-        getRecommendations(selectedDate).catch(() => null),
-        getWindowClusters(undefined, 1000, 'day').catch(() => []),
-        getWindowClusters(undefined, 1000, 'week').catch(() => []),
-        getWindowClusters(undefined, 1000, 'month').catch(() => []),
-      ]);
+      const [sum, segs, ideSummary, recs, dayRows, weekRows, monthRows, stressResponse] =
+        await Promise.all([
+          getSegmentsSummary(selectedDate).catch(() => null),
+          getAllSegments(selectedDate).catch(() => []),
+          getIDEDashboard(from, to).catch(() => null),
+          getRecommendations(selectedDate).catch(() => null),
+          getWindowClusters(undefined, 1000, 'day').catch(() => []),
+          getWindowClusters(undefined, 1000, 'week').catch(() => []),
+          getWindowClusters(undefined, 1000, 'month').catch(() => []),
+          getStress(selectedDate).catch(() => null),
+        ]);
       if (cancelled) return;
       setSummary(sum || EMPTY_SUMMARY);
       setSegments(segs);
       setIde(ideSummary);
+      setStress(stressResponse?.summary ?? null);
       /* Highest-scoring findings across every section, capped at four. The
          engine has already deduped them by concern, so two rules describing
          the same problem cannot both land here. The total is kept so the panel
@@ -515,25 +520,42 @@ const Dashboard: React.FC = () => {
 
               <div className="score-block">
                 <div className="score-head">
-                  <span className="metric-label">
-                    Stress Score{' '}
-                    <SampleBadge title="Stress scoring is not implemented — no collector or model produces this number, so it is fixed and does not change with the selected date." />
+                  <span className="metric-label">Stress Score</span>
+                  <span className="metric-value">
+                    {stress?.score !== null && stress?.score !== undefined
+                      ? `${stress.score}/100`
+                      : '—'}
                   </span>
-                  <span className="metric-value">{SAMPLE_STRESS_SCORE}/100</span>
                 </div>
                 <div className="sd-progress">
                   <div
                     className="sd-progress-fill"
-                    style={{ width: `${SAMPLE_STRESS_SCORE}%`, background: 'var(--color-warning)' }}
+                    style={{
+                      width: `${stress?.score ?? 0}%`,
+                      background: 'var(--color-warning)',
+                    }}
                   />
+                </div>
+                <div className="split-bar-labels">
+                  {stress?.score !== null && stress?.score !== undefined ? (
+                    <span>
+                      {stress.observed_minutes} min observed
+                      {stress.driver && stress.driver !== 'Happy'
+                        ? ` • mostly ${stress.driver.toLowerCase()}`
+                        : ''}
+                    </span>
+                  ) : (
+                    <span>No webcam detection on {selectedDate}</span>
+                  )}
                 </div>
               </div>
             </div>
 
             <p className="card-footnote">
-              Focus is measured per segment and weighted by duration. Stress has no collector or
-              model behind it — that figure is a placeholder and does not change with the selected
-              date.
+              Focus is measured per segment and weighted by duration. Stress is derived from
+              recorded webcam emotion blocks — anger raises it, visible happiness lowers it,
+              and blocks that saw few frames count for less. Days without a detection session
+              show no score rather than a guess.
             </p>
           </div>
 

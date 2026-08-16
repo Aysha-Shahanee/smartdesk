@@ -10,19 +10,24 @@ from __future__ import annotations
 import logging
 import sys
 import time
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.time import local_day_start, parse_iso
+from app.repositories.emotion_repository import EmotionRepository
 from app.repositories.preference_repository import PreferenceRepository
 from app.repositories.preference_repository import WEBCAM_EMOTION_CONSENT
+from app.services import emotion_stress_service
 
 logger = logging.getLogger("smartdesk.emotion_routes")
 router = APIRouter()
@@ -86,6 +91,46 @@ def _wait_for_startup_status(service: Any, timeout_seconds: float = 30.0) -> dic
         time.sleep(0.25)
 
     return service.get_status()
+
+
+@router.get("/stress")
+def get_stress(
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
+    user_id: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Stress derived from recorded emotion blocks over a window.
+
+    Defaults to today in the application timezone. `summary.score` is null when
+    the window holds no observed blocks — the caller should say so rather than
+    render a zero.
+    """
+    try:
+        start = parse_iso(from_) if from_ else local_day_start()
+        end = parse_iso(to) if to else start + timedelta(days=1)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=400,
+            detail={"ok": False, "message": "from and to must be ISO 8601 timestamps"},
+        )
+
+    if end < start:
+        raise HTTPException(
+            status_code=400,
+            detail={"ok": False, "message": "to must not be earlier than from"},
+        )
+
+    blocks = EmotionRepository(db).blocks_between(
+        user_id or settings.DEFAULT_USER_ID, start, end
+    )
+
+    return {
+        "from": start.isoformat(),
+        "to": end.isoformat(),
+        "summary": emotion_stress_service.stress_summary(blocks).to_dict(),
+        "points": [point.to_dict() for point in emotion_stress_service.stress_series(blocks)],
+    }
 
 
 @router.get("/consent")

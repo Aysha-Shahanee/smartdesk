@@ -7,7 +7,6 @@ import {
 import { useTheme } from '../contexts/ThemeContext';
 import { useDateContext } from '../contexts/DateContext';
 import { getCategoryColor, getEmotionColor, getChartChrome } from '../theme/chartTheme';
-import SampleDataBanner from '../components/SampleDataBanner';
 import {
   CurrentEmotionSession,
   EmotionStatus,
@@ -15,7 +14,9 @@ import {
   getCurrentEmotionSession,
   getEmotionConsent,
   getEmotionStatus,
+  getStress,
   getWindowClusters,
+  type StressResponse,
   startEmotionDetection,
   stopEmotionDetection,
 } from '../services/api';
@@ -46,13 +47,14 @@ type InsightTab = 'Focus Insights' | 'Stress Insights' | 'Pattern Detection';
 /* Days behind the Focus Insights tab, ending on the selected date. */
 const FOCUS_TREND_DAYS = 7;
 
-const stressThroughDay = [
-  { time: '09:00', level: 25 }, { time: '10:00', level: 30 }, { time: '11:00', level: 28 },
-  { time: '12:00', level: 45 }, { time: '13:00', level: 55 }, { time: '14:00', level: 40 },
-  { time: '15:00', level: 35 }, { time: '16:00', level: 42 }, { time: '17:00', level: 50 },
-];
-
 const DETECTOR_EMOTIONS = ['Angry', 'Happy', 'Neutral', 'Surprise'];
+
+/** Clock label for a 15-minute block, for the stress chart's X axis. */
+const blockClockLabel = (iso: string): string => {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+};
 
 const FOCUS_LEVEL_LABELS: Record<FocusLevel, string> = {
   high_focus: 'High Focus',
@@ -250,32 +252,48 @@ const Insights: React.FC = () => {
   const [isStartingEmotion, setIsStartingEmotion] = useState(false);
   const [isStoppingEmotion, setIsStoppingEmotion] = useState(false);
   const [webcamConsent, setWebcamConsent] = useState<boolean | null>(null);
+  const [stress, setStress] = useState<StressResponse | null>(null);
 
   const refreshEmotionData = useCallback(async () => {
     setIsEmotionLoading(true);
     setEmotionError(null);
     try {
-      const [status, session, consent] = await Promise.all([
+      const [status, session, consent, stressResponse] = await Promise.all([
         getEmotionStatus(),
         getCurrentEmotionSession(),
         getEmotionConsent(),
+        getStress(selectedDate),
       ]);
       setEmotionStatus(status);
       setCurrentEmotionSession(session);
       setWebcamConsent(consent.webcam_enabled);
+      setStress(stressResponse);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Emotion backend is unavailable.';
       setEmotionError(message);
     } finally {
       setIsEmotionLoading(false);
     }
-  }, []);
+  }, [selectedDate]);
 
   useEffect(() => {
     if (activeTab === 'Stress Insights') {
       refreshEmotionData();
     }
   }, [activeTab, refreshEmotionData]);
+
+  /* One point per recorded 15-minute block. Empty until detection has run on
+     the selected day — the chart says so rather than drawing a flat zero. */
+  const stressThroughDay = useMemo(
+    () =>
+      (stress?.points || []).map(point => ({
+        time: blockClockLabel(point.block_start_time),
+        level: point.stress,
+        confidence: point.confidence,
+        dominant: point.dominant_emotion,
+      })),
+    [stress]
+  );
 
   useEffect(() => {
     if (activeTab !== 'Stress Insights' || !emotionStatus?.running) return;
@@ -680,12 +698,10 @@ const Insights: React.FC = () => {
         <p className="subtitle">Focus, stress and pattern analysis</p>
       </div>
 
-      {/* Focus is measured — segment focus scores back both charts on that tab,
-          so the banner would now discredit real numbers. Stress and emotion
-          still have no collector behind them. */}
-      {activeTab === 'Stress Insights' && (
-        <SampleDataBanner what="Stress level and emotion detection" />
-      )}
+      {/* Nothing on this page is placeholder any more: focus comes from segment
+          focus scores, and stress is derived from recorded emotion blocks. Days
+          without a detection session show an empty state rather than a made-up
+          curve, so the banner has no remaining subject. */}
 
       <div className="sd-tabs">
         {(['Focus Insights', 'Stress Insights', 'Pattern Detection'] as InsightTab[]).map(tab => (
@@ -862,15 +878,42 @@ const Insights: React.FC = () => {
                 </button>
               </div>
             </div>
-            <ResponsiveContainer width="100%" height={350}>
-              <LineChart data={stressThroughDay}>
-                <CartesianGrid strokeDasharray="3 3" stroke={chrome.grid} />
-                <XAxis dataKey="time" tick={{ fontSize: 13, fill: chrome.axisText }} />
-                <YAxis domain={[0, 100]} tick={{ fontSize: 13, fill: chrome.axisText }} />
-                <Tooltip contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }} />
-                <Line type="monotone" dataKey="level" name="Stress level" stroke={getEmotionColor('stressed', theme)} strokeWidth={2.5} dot={{ r: 4, fill: getEmotionColor('stressed', theme) }} />
-              </LineChart>
-            </ResponsiveContainer>
+            {stressThroughDay.length === 0 ? (
+              <div className="stress-empty">
+                <h4>No emotion data for {selectedDate}</h4>
+                <p>
+                  {webcamConsent === false
+                    ? 'Webcam detection is turned off. Enable it under Settings › Privacy Controls, then start a session to record stress for this day.'
+                    : 'Start webcam detection above and leave it running — the first block is recorded after 5 minutes, and complete blocks every 15.'}
+                </p>
+              </div>
+            ) : (
+              <>
+                <ResponsiveContainer width="100%" height={350}>
+                  <LineChart data={stressThroughDay}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={chrome.grid} />
+                    <XAxis dataKey="time" tick={{ fontSize: 13, fill: chrome.axisText }} />
+                    <YAxis domain={[0, 100]} tick={{ fontSize: 13, fill: chrome.axisText }} />
+                    <Tooltip
+                      contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }}
+                      formatter={(value: number, _name, entry: any) => [
+                        `${value}/100 · mostly ${entry?.payload?.dominant ?? 'Unknown'}`,
+                        'Stress level',
+                      ]}
+                    />
+                    <Line type="monotone" dataKey="level" name="Stress level" stroke={getEmotionColor('stressed', theme)} strokeWidth={2.5} dot={{ r: 4, fill: getEmotionColor('stressed', theme) }} />
+                  </LineChart>
+                </ResponsiveContainer>
+                <p className="chart-footnote">
+                  One point per recorded 15-minute block, from the webcam detector. Anger
+                  raises the score, visible happiness lowers it, and blocks that saw few
+                  frames are pulled toward the calm baseline rather than trusted outright.
+                  {stress?.summary.score !== null && stress?.summary
+                    ? ` Day average ${stress.summary.score}/100 over ${stress.summary.observed_minutes} observed minutes.`
+                    : ''}
+                </p>
+              </>
+            )}
           </div>
 
           <div className="sd-grid-2" style={{ marginTop: 'var(--space-xl)' }}>

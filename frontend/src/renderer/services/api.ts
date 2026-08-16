@@ -313,6 +313,40 @@ export const getCurrentEmotionSession = async (): Promise<CurrentEmotionSession>
   return fetchJson(`${API_BASE}/api/v1/emotion/sessions/current`);
 };
 
+export interface StressPoint {
+  block_start_time: string;
+  block_end_time: string;
+  /** 0–100. Derived from the block's emotion mix — see emotion_stress_service.py. */
+  stress: number;
+  /** 0–1, how much the block's frame count justifies trusting it. */
+  confidence: number;
+  processed_frame_count: number;
+  duration_minutes: number;
+  dominant_emotion: string;
+}
+
+export interface StressSummary {
+  /** null when the window holds no observed blocks — render an empty state, not a zero. */
+  score: number | null;
+  observed_minutes: number;
+  block_count: number;
+  driver: string | null;
+}
+
+export interface StressResponse {
+  from: string;
+  to: string;
+  summary: StressSummary;
+  points: StressPoint[];
+}
+
+/** Stress for a local day, derived from recorded emotion blocks. */
+export const getStress = async (date: string): Promise<StressResponse> => {
+  const { from, to } = dayBounds(date);
+  const params = new URLSearchParams({ from, to });
+  return fetchJson(`${API_BASE}/api/v1/emotion/stress?${params.toString()}`);
+};
+
 export interface EmotionConsent {
   webcam_enabled: boolean;
 }
