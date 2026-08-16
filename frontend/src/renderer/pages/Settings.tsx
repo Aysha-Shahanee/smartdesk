@@ -7,6 +7,8 @@ import {
   getGitHubStatus,
   getGitHubStatusMapping,
   getGitHubStatusOptions,
+  getEmotionConsent,
+  setEmotionConsent,
   GitHubConnectionStatus,
   GitHubProject,
   GitHubStatusOption,
@@ -40,11 +42,17 @@ interface NotifySettings {
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
 const Settings: React.FC = () => {
+  /* webcamEmotion starts off and is authoritative in the backend — the capture
+     loop runs in the API process, so a value kept only here could never stop
+     it. The other two are local display state until they gain a backend of
+     their own. */
   const [privacy, setPrivacy] = useState<PrivacySettings>({
-    webcamEmotion: true,
+    webcamEmotion: false,
     calendarAccess: true,
     cloudSync: false,
   });
+  const [webcamBusy, setWebcamBusy] = useState(true);
+  const [webcamError, setWebcamError] = useState('');
 
   const [integrations] = useState<Integration[]>([
     { name: 'VS Code', status: 'Connected', icon: '💻', color: '#007ACC' },
@@ -188,12 +196,47 @@ const Settings: React.FC = () => {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    getEmotionConsent()
+      .then(({ webcam_enabled }) => {
+        if (cancelled) return;
+        setPrivacy(prev => ({ ...prev, webcamEmotion: webcam_enabled }));
+      })
+      .catch(() => {
+        if (!cancelled) setWebcamError('Could not read the webcam setting from the backend.');
+      })
+      .finally(() => {
+        if (!cancelled) setWebcamBusy(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
   const togglePrivacy = (key: keyof PrivacySettings) => {
     setPrivacy(prev => {
       const updated = { ...prev, [key]: !prev[key] };
       localStorage.setItem('smartdeskSettings', JSON.stringify(updated));
       return updated;
     });
+  };
+
+  /* Webcam consent round-trips to the backend, which is what actually gates
+     capture. Only reflect the new position once the server has accepted it, so
+     the switch can never show a permission the backend has not granted. */
+  const toggleWebcamEmotion = async () => {
+    const next = !privacy.webcamEmotion;
+    setWebcamBusy(true);
+    setWebcamError('');
+    try {
+      const { webcam_enabled } = await setEmotionConsent(next);
+      setPrivacy(prev => ({ ...prev, webcamEmotion: webcam_enabled }));
+    } catch (error) {
+      setWebcamError(
+        error instanceof Error ? error.message : 'Could not save the webcam setting.'
+      );
+    } finally {
+      setWebcamBusy(false);
+    }
   };
 
   return (
@@ -221,10 +264,17 @@ const Settings: React.FC = () => {
             <div className="setting-tags">
               <span>👁️ Processed locally</span>
               <span>🚫 No image storage</span>
+              <span>{privacy.webcamEmotion ? '✅ Camera allowed' : '⛔ Camera blocked'}</span>
             </div>
+            {webcamError && <p className="setting-error">{webcamError}</p>}
           </div>
           <label className="sd-toggle">
-            <input type="checkbox" checked={privacy.webcamEmotion} onChange={() => togglePrivacy('webcamEmotion')} />
+            <input
+              type="checkbox"
+              checked={privacy.webcamEmotion}
+              disabled={webcamBusy}
+              onChange={toggleWebcamEmotion}
+            />
             <span className="sd-toggle-slider" />
           </label>
         </div>

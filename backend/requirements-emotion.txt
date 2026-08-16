@@ -1,0 +1,10 @@
+# Webcam emotion detection. torch itself is already in requirements-core.txt
+# via sentence-transformers; these are the vision-only additions.
+#
+# Skip this file if you are not working on emotion detection — the API starts
+# fine without it, and /api/v1/emotion/start reports the missing dependency
+# rather than failing silently.
+
+torchvision
+opencv-python
+pillow

@@ -1,26 +1,17 @@
-fastapi
-uvicorn[standard]
-alembic
-pydantic>=2.9.0
-# tests/test_categorizer.py imports pytest; without it that module fails to
-# import and unittest discovery silently skips a quarter of the suite.
-pytest
-python-dotenv
-sqlalchemy
-tzdata
-psutil
-requests
--e ../github_data_collection
-lightgbm>=4.0,<5.0
-pandas>=2.0
-google-api-python-client
-google-auth
-google-auth-oauthlib
-gspread>=5.0.0
-sentence-transformers>=2.2.2
-torch>=2.0.0
-torchvision
-numpy>=1.24.0
-scikit-learn>=1.3.0
-opencv-python
-pillow
+# Full backend install — every feature. `pip install -r requirements.txt` from
+# this directory behaves exactly as it always has.
+#
+# The split below exists so a teammate working on, say, the dashboard is not
+# obliged to download vision wheels. Install a subset by naming the files you
+# want instead of this one:
+#
+#   pip install -r requirements-core.txt                    # app only
+#   pip install -r requirements-core.txt -r requirements-prediction.txt
+#   pip install -r requirements-core.txt -r requirements-emotion.txt
+#
+# The relative editable install in requirements-prediction.txt is resolved
+# against the working directory, so run pip from backend/ either way.
+
+-r requirements-core.txt
+-r requirements-prediction.txt
+-r requirements-emotion.txt

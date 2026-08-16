@@ -13,6 +13,7 @@ import {
   EmotionStatus,
   getAllSegments,
   getCurrentEmotionSession,
+  getEmotionConsent,
   getEmotionStatus,
   getWindowClusters,
   startEmotionDetection,
@@ -202,20 +203,39 @@ const formatSessionTime = (value?: string | null) => {
   });
 };
 
-const sumEmotionScores = (session: CurrentEmotionSession | null) => {
-  const totals = DETECTOR_EMOTIONS.reduce<Record<string, number>>((acc, emotion) => {
+/**
+ * Frame-weighted mean of each emotion across a session's blocks.
+ *
+ * Each block stores a mean probability, so blocks are directly comparable but
+ * not equally informative — a block with 900 processed frames says far more
+ * than one with 40. Weighting by `processed_frame_count` on the way back up
+ * keeps a short block from counting as much as a full one.
+ */
+const averageEmotionScores = (session: CurrentEmotionSession | null) => {
+  const weighted = DETECTOR_EMOTIONS.reduce<Record<string, number>>((acc, emotion) => {
     acc[emotion] = 0;
     return acc;
   }, {});
 
   const blocks = session?.completed_blocks || session?.blocks || [];
+  let totalFrames = 0;
+
   blocks.forEach(block => {
+    const frames = Number(block.processed_frame_count || 0);
+    if (frames <= 0) return;
+    totalFrames += frames;
     DETECTOR_EMOTIONS.forEach(emotion => {
-      totals[emotion] += Number(block.emotion_scores?.[emotion] || 0);
+      weighted[emotion] += Number(block.emotion_scores?.[emotion] || 0) * frames;
     });
   });
 
-  return totals;
+  if (totalFrames === 0) return weighted;
+
+  DETECTOR_EMOTIONS.forEach(emotion => {
+    weighted[emotion] /= totalFrames;
+  });
+
+  return weighted;
 };
 
 const Insights: React.FC = () => {
@@ -229,17 +249,20 @@ const Insights: React.FC = () => {
   const [isEmotionLoading, setIsEmotionLoading] = useState(false);
   const [isStartingEmotion, setIsStartingEmotion] = useState(false);
   const [isStoppingEmotion, setIsStoppingEmotion] = useState(false);
+  const [webcamConsent, setWebcamConsent] = useState<boolean | null>(null);
 
   const refreshEmotionData = useCallback(async () => {
     setIsEmotionLoading(true);
     setEmotionError(null);
     try {
-      const [status, session] = await Promise.all([
+      const [status, session, consent] = await Promise.all([
         getEmotionStatus(),
         getCurrentEmotionSession(),
+        getEmotionConsent(),
       ]);
       setEmotionStatus(status);
       setCurrentEmotionSession(session);
+      setWebcamConsent(consent.webcam_enabled);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Emotion backend is unavailable.';
       setEmotionError(message);
@@ -291,7 +314,7 @@ const Insights: React.FC = () => {
   };
 
   const emotionTotals = useMemo(
-    () => sumEmotionScores(currentEmotionSession),
+    () => averageEmotionScores(currentEmotionSession),
     [currentEmotionSession],
   );
   const emotionTotalValue = Object.values(emotionTotals).reduce((sum, value) => sum + value, 0);
@@ -817,7 +840,16 @@ const Insights: React.FC = () => {
                 <button
                   className="sd-btn sd-btn--primary"
                   onClick={handleStartEmotion}
-                  disabled={Boolean(emotionStatus?.running) || isStartingEmotion}
+                  disabled={
+                    Boolean(emotionStatus?.running) ||
+                    isStartingEmotion ||
+                    webcamConsent !== true
+                  }
+                  title={
+                    webcamConsent === false
+                      ? 'Turn on Webcam Emotion Detection in Settings first'
+                      : undefined
+                  }
                 >
                   {isStartingEmotion ? 'Starting...' : 'Start Webcam Detection'}
                 </button>
@@ -866,6 +898,19 @@ const Insights: React.FC = () => {
                   <strong>{emotionStatus?.camera_ready ? 'Ready' : 'Not ready'}</strong>
                 </div>
               </div>
+
+              {webcamConsent === false && !emotionError && (
+                <div className="sd-alert sd-alert--warning emotion-inline-alert">
+                  <span className="sd-alert-icon">🔒</span>
+                  <div className="sd-alert-content">
+                    <h4>Webcam detection is turned off</h4>
+                    <p>
+                      Turn on Webcam Emotion Detection under Settings › Privacy Controls to
+                      allow SmartDesk to use your camera.
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {emotionError && (
                 <div className="sd-alert sd-alert--warning emotion-inline-alert">

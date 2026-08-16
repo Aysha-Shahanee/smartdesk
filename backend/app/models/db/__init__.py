@@ -9,6 +9,7 @@ from app.models.db.emotion import EmotionSessionRecord
 from app.models.db.github import GitHubConnectionRecord
 from app.models.db.github import GitHubInitialPredictionRecord
 from app.models.db.github import GitHubOAuthStateRecord
+from app.models.db.preference import UserPreferenceRecord
 from app.models.db.recommendation import RecommendationEventRecord
 from app.models.db.recommendation import RecommendationRecord
 from app.models.db.service_heartbeat import ServiceHeartbeatRecord
@@ -39,5 +40,6 @@ __all__ = [
     "RecommendationRecord",
     "ServiceHeartbeatRecord",
     "UserBaselineRecord",
+    "UserPreferenceRecord",
     "WorkPeriodRecord",
 ]

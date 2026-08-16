@@ -1,14 +1,12 @@
 import socket
 from pathlib import Path
 from typing import List
-from pathlib import Path
 
 from pydantic_settings import BaseSettings
 
 # Stamped on every collected row. Bump when the row shape changes so
 # training/aggregation pipelines can tell schema generations apart.
 SCHEMA_VERSION = "3"
-BACKEND_DIR = Path(__file__).resolve().parents[2]
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -105,7 +103,7 @@ class Settings(BaseSettings):
     SMARTDESK_GITHUB_WEBHOOK_SECRET: str = ""
     SMARTDESK_GITHUB_MONITOR_MODE: str = "webhook"
     SMARTDESK_GITHUB_MODEL_ARTIFACT_DIR: str = str(
-        BACKEND_DIR / "model_artifacts" / "github_effort"
+        BACKEND_ROOT / "model_artifacts" / "github_effort"
     )
 
     class Config:

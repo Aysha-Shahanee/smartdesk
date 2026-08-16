@@ -1,3 +1,14 @@
+"""NOT WIRED INTO THE RUNNING APP.
+
+Retained from the standalone research prototype. Nothing in SmartDesk imports
+this module: EmotionRecognitionService persists through storage.local_database
+into the backend's own SQLite database, and no emotion data leaves the machine.
+
+Kept for reference only. Before importing any of it, note that it uploads
+webcam-derived emotion data to a third-party service, so it must not be wired
+up without a consent gate equivalent to the one on /api/v1/emotion/start.
+"""
+
 from __future__ import annotations
 
 import json

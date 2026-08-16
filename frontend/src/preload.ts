@@ -4,7 +4,6 @@
 // contextBridge.
 
 import { contextBridge, ipcRenderer } from 'electron'
-import { app } from 'electron'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   getEnv: () => ({

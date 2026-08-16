@@ -313,6 +313,24 @@ export const getCurrentEmotionSession = async (): Promise<CurrentEmotionSession>
   return fetchJson(`${API_BASE}/api/v1/emotion/sessions/current`);
 };
 
+export interface EmotionConsent {
+  webcam_enabled: boolean;
+}
+
+/* Webcam capture is opt-in. The backend refuses /start with 403 until this is
+   granted, so the toggle in Settings is the real control, not a hint. */
+export const getEmotionConsent = async (): Promise<EmotionConsent> => {
+  return fetchJson(`${API_BASE}/api/v1/emotion/consent`);
+};
+
+export const setEmotionConsent = async (webcamEnabled: boolean): Promise<EmotionConsent> => {
+  return fetchJson(`${API_BASE}/api/v1/emotion/consent`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ webcam_enabled: webcamEnabled }),
+  });
+};
+
 
 /* Recommendations — rule engine output                        */
 /* ---------------------------------------------------------- */

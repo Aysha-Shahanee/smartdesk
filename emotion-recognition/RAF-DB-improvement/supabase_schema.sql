@@ -1,3 +1,9 @@
+-- NOT WIRED INTO THE RUNNING APP.
+--
+-- Schema for the retained-but-unused Supabase sync prototype (see
+-- storage/supabase_sync.py). SmartDesk stores emotion data locally via alembic
+-- migration 0011_create_emotion_local_tables; nothing applies this file.
+
 create table if not exists public.emotion_blocks (
     id uuid primary key,
     user_id text not null default 'local_user',

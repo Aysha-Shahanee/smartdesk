@@ -1,0 +1,29 @@
+# Session tracking, activity segmentation, focus scoring, categorisation,
+# recommendations and calendar sync — everything the app does before either ML
+# integration is switched on.
+
+fastapi
+uvicorn[standard]
+alembic
+pydantic>=2.9.0
+# tests/test_categorizer.py imports pytest; without it that module fails to
+# import and unittest discovery silently skips a quarter of the suite.
+pytest
+python-dotenv
+sqlalchemy
+tzdata
+psutil
+requests
+
+# Google Calendar (read-only sync) and the shared-sheet export.
+google-api-python-client
+google-auth
+google-auth-oauthlib
+gspread>=5.0.0
+
+# Segment embedding and categorisation. sentence-transformers pulls torch, so
+# torch is a core dependency regardless of whether emotion detection is used.
+sentence-transformers>=2.2.2
+torch>=2.0.0
+numpy>=1.24.0
+scikit-learn>=1.3.0

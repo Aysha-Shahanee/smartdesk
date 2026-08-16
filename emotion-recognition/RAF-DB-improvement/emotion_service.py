@@ -82,10 +82,27 @@ class EmotionRecognitionService:
         self._thread.start()
         return {"ok": True, "message": "Emotion recognition started.", "status": self.get_status()}
 
-    def stop(self, wait: bool = True) -> dict[str, Any]:
+    def stop(self, wait: bool = True, timeout_seconds: float = 10.0) -> dict[str, Any]:
+        """Ask the capture loop to stop, waiting a bounded time for it to finish.
+
+        The loop can be parked inside a blocking `cap.read()` when the webcam is
+        unplugged or its driver stalls, and an unbounded join there would hang
+        both this request and the shutdown hook that shares this call. Time the
+        join out instead and report the thread as still running, so the caller
+        sees a stuck camera rather than a request that never returns.
+        """
         self._stop_event.set()
+
         if wait and self._thread and self._thread.is_alive():
-            self._thread.join()
+            self._thread.join(timeout_seconds)
+            if self._thread.is_alive():
+                message = (
+                    f"Emotion recognition did not stop within {timeout_seconds:.0f}s; "
+                    "the webcam capture thread is still running."
+                )
+                self._set_error("stop_timeout", message)
+                return {"ok": False, "message": message, "status": self.get_status()}
+
         return {"ok": True, "message": "Emotion recognition stopped.", "status": self.get_status()}
 
     def get_status(self) -> dict[str, Any]:
@@ -116,7 +133,7 @@ class EmotionRecognitionService:
         if self.aggregator:
             current_block = {
                 "block_start_time": self.aggregator.block_start.isoformat() if self.aggregator.block_start else None,
-                "emotion_scores": dict(self.aggregator.emotion_scores),
+                "emotion_scores": self.aggregator.mean_scores(),
                 "processed_frame_count": self.aggregator.processed_frame_count,
             }
 
@@ -172,6 +189,13 @@ class EmotionRecognitionService:
                 if show_window:
                     if detector.show_frame("Emotion Detector (Stable)", frame):
                         self._stop_event.set()
+        except Exception as exc:
+            # Without this the exception would leave the thread with last_error
+            # unset, and /start reports `ok` off exactly that field — a failed
+            # model download or a missing dependency would read as a clean start.
+            with self._lock:
+                stage = self._status.get("last_error_stage") or "startup"
+            self._set_error(stage, str(exc))
         finally:
             self._finish_run(show_window)
 
@@ -266,6 +290,15 @@ class EmotionRecognitionService:
         }
 
     def _set_stage(self, stage: str) -> None:
+        """Record the stage in progress, unless a failure already claimed it.
+
+        Teardown runs its own stages after a failure, so without this guard the
+        reported stage would always be the last shutdown step rather than the
+        one that actually broke.
+        """
+        with self._lock:
+            if self._status.get("last_error"):
+                return
         self._set_status(last_error_stage=stage)
 
     def _set_error(self, stage: str, message: str) -> None:

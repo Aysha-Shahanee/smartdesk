@@ -21,9 +21,35 @@ WorkPeriodScheduler ──►  groups sessions into work_periods (every 60s)
 
 Dashboard API       ──►  aggregates all tables (5 panels + monitoring overview)
 Dashboard UI        ──►  /dashboard/ui — live health check of all 4 layers
+
+GitHub collector    ──►  github_data.db + github_initial_predictions
+                         (Projects v2 webhooks; LightGBM effort model)
+Emotion service     ──►  emotion_sessions / emotion_blocks
+                         (webcam thread, opt-in, 15-minute blocks)
 ```
 
 Sessions split at every focus boundary, so one row never mixes foreground and background time. If the backend restarts, extension heartbeats automatically re-open their sessions — no data is lost.
+
+### Where data is stored
+
+Everything the app reads lives in `backend/smartdesk.db` under alembic, with one
+exception: the GitHub collector keeps task lifecycles in its own
+`github_data_collection/storage/github_data.db`, managed by `create_all` rather
+than migrations. `GitHubPredictionService.active_tasks()` joins the two in
+Python. Worth knowing before adding a query that spans them.
+
+Nothing is uploaded anywhere. `emotion-recognition/RAF-DB-improvement/storage/`
+contains a Supabase sync prototype retained from earlier work — every file in it
+is marked at the top and imported by nothing. Do not wire it up without a
+consent gate equivalent to the one on `/api/v1/emotion/start`.
+
+### Privacy
+
+Webcam emotion detection is **opt-in and off by default**. The toggle in
+Settings → Privacy Controls writes to `user_preferences`, and
+`POST /api/v1/emotion/start` returns `403` until it is on — the check is in the
+backend because that is where the capture thread runs. Turning it off also stops
+a session already in progress.
 
 ## Setup
 
@@ -78,13 +104,37 @@ For local diagnostics without changing GitHub, use
 cd backend
 python -m venv venv                     # first time only
 .\venv\Scripts\python.exe -m pip install -r requirements.txt
-.\venv\Scripts\python.exe -m alembic upgrade head   # first time only — creates smartdesk.db
+.\venv\Scripts\python.exe -m alembic upgrade head   # after every pull — applies new migrations
 .\venv\Scripts\python.exe -m uvicorn app.main:app
 
 That single command starts everything: the HTTP server on `http://127.0.0.1:8000`, the OS foreground monitor (1s polling), the session timeout job, the work period scheduler, and the calendar auto-sync job.
 
 Then open the **monitoring dashboard**: <http://127.0.0.1:8000/dashboard/ui> — it shows live health, totals, and recent rows for all four layers, with the calendar **Connect** / **Sync now** buttons. Auto-refreshes every 30s.
 ```
+
+#### Installing only part of the backend
+
+`requirements.txt` installs everything and is the right default. It is a thin
+wrapper over three files, so you can skip the heavy optional pieces when you are
+not working on them:
+
+| File | Covers | Notable weight |
+| --- | --- | --- |
+| `requirements-core.txt` | Sessions, segments, focus, categorisation, recommendations, calendar | torch, via sentence-transformers |
+| `requirements-prediction.txt` | GitHub task time prediction | lightgbm, pandas, the collector package |
+| `requirements-emotion.txt` | Webcam emotion detection | torchvision, opencv, pillow |
+
+```powershell
+# app only, no ML integrations
+.\venv\Scripts\python.exe -m pip install -r requirements-core.txt
+```
+
+The API starts with any subset installed. A feature whose dependencies are
+missing reports that on its own endpoints rather than preventing startup.
+
+`requirements-prediction.txt` contains a relative editable install
+(`-e ../github_data_collection`), so run pip with `backend/` as the working
+directory in every case.
 
 ### 2. IDE extension (VS Code, Antigravity, Cursor, …)
 
@@ -267,6 +317,35 @@ GET /dashboard/overview    per-layer health, totals, recent rows (feeds the UI)
 GET /dashboard/ui          monitoring dashboard page
 ```
 
+### Emotion detection
+
+```text
+GET    /api/v1/emotion/consent           is webcam capture allowed
+PUT    /api/v1/emotion/consent           grant or revoke; revoking stops a running session
+POST   /api/v1/emotion/start             403 until consent is granted
+POST   /api/v1/emotion/stop              bounded wait; ok:false if the thread is stuck
+GET    /api/v1/emotion/status            running, model/camera readiness, last error
+GET    /api/v1/emotion/sessions/current  session, completed blocks, in-progress block
+```
+
+Block scores are per-emotion **mean** probabilities with `processed_frame_count`
+alongside, so blocks of different lengths are directly comparable.
+
+### GitHub task prediction
+
+```text
+GET    /api/v1/integrations/github/status          connection state
+GET    /api/v1/integrations/github/connect         begin App installation
+GET    /api/v1/integrations/github/projects        Projects v2 available to the install
+PUT    /api/v1/integrations/github/project         choose the project to track
+GET    /api/v1/integrations/github/status-options  the project's Status column values
+PUT    /api/v1/integrations/github/status-mapping  map them to ACTIVE / DONE / OTHER
+POST   /api/v1/integrations/github/initial-sync    import currently-active issues
+GET    /api/v1/integrations/github/active-tasks    estimates, time spent, remaining
+POST   /api/v1/integrations/github/webhook         GitHub delivery endpoint (HMAC verified)
+DELETE /api/v1/integrations/github/connection      disconnect
+```
+
 Also: `GET /` (service status), `GET /health/`, `GET /docs` (Swagger UI).
 
 ## Database
@@ -282,6 +361,10 @@ Every row carries `device_id` (which machine collected it — auto-detected host
 | `browser_sessions` | One row per browser tab session (≥3s, focused window only) |
 | `calendar_events` | Google Calendar events (upserted, never duplicated) |
 | `work_periods` | 30-minute activity blocks (auto-grouped) |
+| `activity_segments` | Canonical non-overlapping timeline built from the three session tables |
+| `emotion_sessions`, `emotion_blocks` | Webcam emotion detection: one row per session, one per 15-minute block |
+| `github_connections`, `github_initial_predictions` | GitHub App connection and per-task effort estimates |
+| `user_preferences` | Settings toggles the backend must enforce, such as webcam consent |
 
 Recreate from scratch:
 
@@ -291,6 +374,21 @@ Remove-Item backend\smartdesk.db -Force
 cd backend
 .\venv\Scripts\python.exe -m alembic upgrade head
 ```
+
+### Writing a migration
+
+Generate the revision rather than hand-numbering it:
+
+```powershell
+.\venv\Scripts\python.exe -m alembic revision -m "what it does"
+```
+
+The `NNNN_` prefixes on the older files are historical and no longer sequential —
+two branches each added an `0011` and an `0013`, which is exactly the collision
+alembic's generated hashes avoid. The revision id inside the file is what
+matters; the filename is only a label. If a merge leaves two heads, join them
+with `alembic merge -m "..." <head> <head>` instead of editing `down_revision`
+by hand, and check with `alembic heads` before you commit.
 
 ## Environment Variables
 

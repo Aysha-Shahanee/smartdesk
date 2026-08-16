@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -11,6 +11,12 @@ from sqlalchemy.orm import Session
 
 from app.core.time import ensure_aware, parse_iso
 from app.models.db import ActivitySegmentRecord, IDESessionRecord
+
+
+# Real UTC offsets run from -12:00 to +14:00. Padding the SQL window by more
+# than the widest of them guarantees no candidate segment is filtered out by a
+# zone the stored value has already forgotten.
+_ZONE_PADDING = timedelta(hours=15)
 
 
 @dataclass(frozen=True)
@@ -106,6 +112,14 @@ class GitHubTaskTimeSpentService:
             .join(IDESessionRecord, ActivitySegmentRecord.ide_session_id == IDESessionRecord.id)
             .filter(
                 ActivitySegmentRecord.user_id == lifecycle.get("smartdesk_user_id", lifecycle.get("user_id")),
+                # Segment times come back from SQLite without their zone, which
+                # is why stored_segment_time_utc has to reconstruct it below. So
+                # the window can only be narrowed here, not decided: pad by the
+                # widest real UTC offset and let the exact comparison stay in
+                # Python. That still drops everything outside the lifecycle,
+                # which is the whole table on any account older than a day.
+                ActivitySegmentRecord.end_time_utc >= lifecycle_start - _ZONE_PADDING,
+                ActivitySegmentRecord.start_time_utc <= lifecycle_end + _ZONE_PADDING,
             )
             .all()
         )

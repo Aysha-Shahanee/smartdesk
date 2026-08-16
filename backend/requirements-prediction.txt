@@ -1,0 +1,10 @@
+# GitHub task time prediction: the Projects v2 collector plus the LightGBM
+# effort model that produces initial estimates.
+#
+# The editable install is a relative path, so pip must be run from this
+# directory: `pip install -r requirements-prediction.txt` with backend/ as the
+# working directory.
+
+-e ../github_data_collection
+lightgbm>=4.0,<5.0
+pandas>=2.0

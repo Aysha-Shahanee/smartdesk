@@ -14,12 +14,22 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter
+from fastapi import Depends
 from fastapi import HTTPException
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.database import get_db
+from app.repositories.preference_repository import PreferenceRepository
+from app.repositories.preference_repository import WEBCAM_EMOTION_CONSENT
 
 logger = logging.getLogger("smartdesk.emotion_routes")
 router = APIRouter()
+
+
+class EmotionConsentUpdate(BaseModel):
+    webcam_enabled: bool
 
 EMOTION_PROJECT_DIR = (
     Path(__file__).resolve().parents[3]
@@ -78,8 +88,53 @@ def _wait_for_startup_status(service: Any, timeout_seconds: float = 30.0) -> dic
     return service.get_status()
 
 
+@router.get("/consent")
+def get_emotion_consent(db: Session = Depends(get_db)) -> dict[str, Any]:
+    granted = PreferenceRepository(db).get_bool(
+        settings.DEFAULT_USER_ID, WEBCAM_EMOTION_CONSENT, default=False
+    )
+    return {"webcam_enabled": granted}
+
+
+@router.put("/consent")
+def set_emotion_consent(
+    payload: EmotionConsentUpdate, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """Record the Settings webcam toggle, and stop capture when it is revoked."""
+    granted = PreferenceRepository(db).set_bool(
+        settings.DEFAULT_USER_ID, WEBCAM_EMOTION_CONSENT, payload.webcam_enabled
+    )
+    if not granted:
+        stop_emotion_service_if_running()
+    return {"webcam_enabled": granted}
+
+
+def _require_webcam_consent(db: Session) -> None:
+    """Refuse to open the camera unless the user has said yes.
+
+    The check belongs here rather than in the renderer: the capture loop runs in
+    this process, so this is the only place that can actually enforce it.
+    """
+    granted = PreferenceRepository(db).get_bool(
+        settings.DEFAULT_USER_ID, WEBCAM_EMOTION_CONSENT, default=False
+    )
+    if not granted:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "ok": False,
+                "stage": "consent",
+                "message": (
+                    "Webcam emotion detection is turned off. Enable it under "
+                    "Settings > Privacy Controls to start."
+                ),
+            },
+        )
+
+
 @router.post("/start")
-def start_emotion_detection() -> dict[str, Any]:
+def start_emotion_detection(db: Session = Depends(get_db)) -> dict[str, Any]:
+    _require_webcam_consent(db)
     service = _get_emotion_service()
 
     try:
@@ -129,7 +184,9 @@ def stop_emotion_detection() -> dict[str, Any]:
 
     history = service.get_session_history()
     return {
-        "ok": True,
+        # A timed-out join leaves the capture thread alive; say so rather than
+        # reporting a stop that did not happen.
+        "ok": bool(result.get("ok", False)),
         "message": result.get("message", "Emotion recognition stopped."),
         "status": result.get("status", service.get_status()),
         "session_history": history,
@@ -158,6 +215,9 @@ def stop_emotion_service_if_running() -> None:
         return
 
     try:
-        _emotion_service.stop(wait=True)
+        # Bounded so a stalled webcam cannot keep the backend from exiting.
+        result = _emotion_service.stop(wait=True, timeout_seconds=5.0)
+        if not result.get("ok"):
+            logger.warning("Emotion capture thread still running at shutdown.")
     except Exception:
         logger.exception("Failed to stop emotion recognition during shutdown.")
