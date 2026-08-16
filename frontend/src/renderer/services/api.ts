@@ -1,10 +1,9 @@
 import { fetchJson } from './fetchUtils';
 
-const API_BASE = import.meta.env.VITE_BACKEND_URL;
-
-if (!API_BASE) {
-  throw new Error('VITE_BACKEND_URL must be configured for the SmartDesk frontend');
-}
+/* Falls back to the local backend so a fresh clone runs without a .env, and so
+   this file agrees with main.ts, preload.ts and src/services/api.ts, which all
+   default the same way. Set VITE_BACKEND_URL to point at a deployed backend. */
+const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
 
 export interface GitHubConnectionStatus {
   user_id: string;
