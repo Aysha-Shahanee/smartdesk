@@ -25,9 +25,9 @@
   "unseen_label": "normalize to other; empty labels normalize to unlabeled",
   "required_artifacts": {
     "manifest.json": "2c573306433a944542c49f8e60194c584fb86899dac5867628637e9d6c69dad5",
-    "model_low.txt": "f01732ad18214537c1dbe35d21ce19eed84fb69ea904deb0589cfa6fc3cd4f9b",
-    "model_typical.txt": "512b53fc03927a2533d7f3cd5f12812a6cefbfe855ecc2fc75ec2e21c8d1346e",
-    "model_high.txt": "795882e9dcd8188f10167d647909996db71c8eca6393c5ae8bd5c1a26387b428",
+    "model_low.txt": "416125a994c27c586c49c5aac9337f11ef59bc8a2cec5605360f84e4ca6fc063",
+    "model_typical.txt": "2e53932323de359b382d38e34d401bfe4af5a9114115c74b9cdaf9292fce2216",
+    "model_high.txt": "ffbd17cc4c43941913b1f22ff1b184940abb0dd06e49958578f6cb1b9a0247b3",
     "tfidf_vectorizer.pkl": "92dbb8f8349900440a1b543cb6b9952209a1df75caa6e155caa4c8fb97d871d7",
     "svd_reducer.pkl": "9e651b5759972b019c0779918d7c655bd867ea52a21463727acd9e49905d551f",
     "repo_stats.json": "01251cd7451853b1af1cea3249b52e04718cc656ebfd0e227593e66176f0e82b",

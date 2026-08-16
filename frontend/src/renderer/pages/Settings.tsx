@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   beginGitHubConnection,
   disconnectGitHub,
   getGitHubProjects,
+  getRecommendations,
   getGitHubStatus,
   getGitHubStatusMapping,
   getGitHubStatusOptions,
@@ -12,8 +13,6 @@ import {
   saveGitHubStatusMapping,
   selectGitHubProject,
 } from '../services/api';
-import { useCallback, useEffect, useState } from 'react';
-import { getRecommendations } from '../services/api';
 import './Settings.css';
 
 interface PrivacySettings {

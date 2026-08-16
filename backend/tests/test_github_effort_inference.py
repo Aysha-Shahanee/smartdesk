@@ -1,3 +1,5 @@
+import hashlib
+import json
 import tempfile
 import unittest
 import math
@@ -9,6 +11,19 @@ from app.services.github_effort_inference_service import (
     ModelArtifactError,
     get_github_effort_inference_service,
 )
+
+
+def test_required_artifact_hashes_match_and_lightgbm_models_are_lf_only():
+    artifact_dir = Path(settings.SMARTDESK_GITHUB_MODEL_ARTIFACT_DIR)
+    preprocessing = json.loads(
+        (artifact_dir / "preprocessing_manifest.json").read_text(encoding="utf-8")
+    )
+
+    for name, expected_hash in preprocessing["required_artifacts"].items():
+        content = (artifact_dir / name).read_bytes()
+        assert hashlib.sha256(content).hexdigest() == expected_hash
+        if name.startswith("model_"):
+            assert b"\r\n" not in content
 
 
 class GitHubEffortInferenceTests(unittest.TestCase):
