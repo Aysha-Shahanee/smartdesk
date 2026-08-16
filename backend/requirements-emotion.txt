@@ -5,6 +5,12 @@
 # fine without it, and /api/v1/emotion/start reports the missing dependency
 # rather than failing silently.
 
-torchvision
-opencv-python
+# torchvision pins an exact torch version, so an unpinned install silently
+# upgrades the torch that sentence-transformers and the effort model run on.
+# Install the torchvision built for the torch already in the venv instead:
+#   torch 2.12 -> torchvision 0.27, torch 2.13 -> torchvision 0.28.
+torchvision==0.27.1
+# OpenCV 5 dropped cv2.CascadeClassifier, which emotion_detector.py uses for
+# face detection — stay on the 4.x line until that moves to FaceDetectorYN.
+opencv-python>=4.8,<5
 pillow
