@@ -202,6 +202,7 @@ export interface CurrentEmotionSession {
   status?: EmotionStatus;
   session?: Record<string, unknown> | null;
   current_block?: {
+    block_start_time?: string;
     emotion_scores?: Record<string, number>;
     processed_frame_count?: number;
   } | null;
