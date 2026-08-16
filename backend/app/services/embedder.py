@@ -139,13 +139,9 @@ class Embedder:
         if segment.detail:
             text_parts.append(segment.detail)
 
-        # Optionally include state and source if they provide useful context.
-        # For now, we exclude them to avoid adding generic terms that may
-        # dilute the semantic signal for activity classification.
-        # if segment.state:
-        #     text_parts.append(segment.state)
-        # if segment.primary_source:
-        #     text_parts.append(segment.primary_source)
+        # segment.state and segment.primary_source are deliberately excluded:
+        # they contribute generic terms that dilute the semantic signal for
+        # activity classification.
 
         if not text_parts:
             return None
