@@ -74,6 +74,13 @@ class RecommendationRecord(Base):
             unique=True,
         ),
         Index("idx_recommendations_user_status", "user_id", "status", "local_date"),
+        # Answers the engine's cooldown question — "when did this rule last fire
+        # for this user?" — from the index alone, with generated_at already
+        # ordered for the MAX.
+        Index(
+            "idx_recommendations_user_rule_time",
+            "user_id", "rule_id", "generated_at",
+        ),
     )
 
 

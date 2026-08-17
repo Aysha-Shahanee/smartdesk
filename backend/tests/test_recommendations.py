@@ -18,7 +18,13 @@ from app.services.recommendations.baselines import (
     percentile,
 )
 from app.services.recommendations.engine import RecommendationEngine
-from app.services.recommendations.narrative import fmt_minutes, magnitude, render
+from app.services.recommendations.narrative import (
+    fmt_clock,
+    fmt_hour,
+    fmt_minutes,
+    magnitude,
+    render,
+)
 from app.services.recommendations.registry import BY_ID, REGISTRY, load_all_rules
 from app.services.recommendations.types import (
     Evidence,
@@ -292,6 +298,31 @@ class TestNarrative(unittest.TestCase):
         self.assertEqual(fmt_minutes(60), "1h")
         self.assertEqual(fmt_minutes(95), "1h 35m")
 
+    def test_clock_rounds_before_it_wraps(self):
+        """The minute carry must not cross midnight behind the day count's back.
+
+        Rounding after the modulo produced "23:60" from fmt_hour and, worse,
+        "00:00" with no day qualifier from fmt_clock — a stop-time percentile a
+        thousandth of an hour short of midnight reported as the previous
+        morning.
+        """
+        self.assertEqual(fmt_hour(23.999), "00:00")
+        self.assertEqual(fmt_clock(23.999), "00:00 the next morning")
+
+    def test_hour_is_always_a_valid_clock_time(self):
+        for step in range(0, 48 * 60):
+            value = step / 60.0
+            with self.subTest(value=value):
+                hour, _, minute = fmt_hour(value).partition(":")
+                self.assertLess(int(hour), 24)
+                self.assertLess(int(minute), 60)
+
+    def test_clock_qualifies_the_day_it_lands_on(self):
+        self.assertEqual(fmt_clock(18.82), "18:49")
+        self.assertEqual(fmt_clock(25.5), "01:30 the next morning")
+        # One day over but not morning — "the next morning" would be wrong.
+        self.assertEqual(fmt_clock(47.99), "23:59 the next day")
+
     def test_magnitude_buckets_are_ordered(self):
         self.assertEqual(magnitude(0.5), "slightly")
         self.assertEqual(magnitude(1.5), "noticeably")
@@ -374,6 +405,219 @@ class TestEffectGate(unittest.TestCase):
     def test_both_arms_populated_is_credible(self):
         from app.services.recommendations.effects import MIN_ARM_SAMPLES
         self.assertTrue(self._effect(MIN_ARM_SAMPLES, MIN_ARM_SAMPLES).credible)
+
+
+class TestRecoverySpans(unittest.TestCase):
+    """The bisect membership test must agree with the scan it replaced."""
+
+    def _spans(self, *pairs):
+        return [
+            (BASE + timedelta(minutes=a), BASE + timedelta(minutes=b))
+            for a, b in pairs
+        ]
+
+    def test_overlapping_spans_are_coalesced(self):
+        from app.services.recommendations.effects import _merge_spans
+        merged = _merge_spans(self._spans((0, 60), (30, 90), (200, 260)))
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(merged[0][1], BASE + timedelta(minutes=90))
+
+    def test_adjacent_spans_are_coalesced(self):
+        from app.services.recommendations.effects import _merge_spans
+        merged = _merge_spans(self._spans((0, 60), (60, 120)))
+        self.assertEqual(len(merged), 1)
+
+    def test_unsorted_input_is_handled(self):
+        from app.services.recommendations.effects import _merge_spans
+        merged = _merge_spans(self._spans((200, 260), (0, 60)))
+        self.assertEqual(merged[0][0], BASE)
+
+    def test_membership_matches_the_linear_scan(self):
+        """The property that matters: same answer as `any(start <= w < stop)`.
+
+        Checked over a grid that straddles every boundary, because the failure
+        this replaces would be an off-by-one at a span edge silently moving a
+        window from the treated arm to the control arm.
+        """
+        from bisect import bisect_right
+        from app.services.recommendations.effects import _merge_spans
+
+        spans = self._spans((0, 60), (30, 90), (200, 260), (255, 300))
+        merged = _merge_spans(spans)
+        starts = [s for s, _ in merged]
+
+        for minute in range(-10, 330):
+            when = BASE + timedelta(minutes=minute)
+            expected = any(start <= when < stop for start, stop in spans)
+            index = bisect_right(starts, when) - 1
+            actual = index >= 0 and when < merged[index][1]
+            with self.subTest(minute=minute):
+                self.assertEqual(actual, expected)
+
+
+class TestPersistence(unittest.TestCase):
+    """The batched write must keep the per-row isolation it replaced."""
+
+    def setUp(self):
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from app.core.database import Base
+        from app.models.db import RecommendationEventRecord, RecommendationRecord
+
+        self.db_engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(
+            bind=self.db_engine,
+            tables=[
+                RecommendationRecord.__table__,
+                RecommendationEventRecord.__table__,
+            ],
+        )
+        self.Session = sessionmaker(bind=self.db_engine)
+        self.db = self.Session()
+        self.engine = RecommendationEngine.__new__(RecommendationEngine)
+        self.Record = RecommendationRecord
+
+    def tearDown(self):
+        self.db.close()
+        self.db_engine.dispose()
+
+    def _spec(self, rule_id="TS-01", cooldown=timedelta(hours=6)):
+        from app.services.recommendations.types import RuleSpec, Section, Severity
+        return RuleSpec(
+            id=rule_id, version=1, scope=Scope.DAILY, section=Section.INSIGHT,
+            severity=Severity.LOW,
+            title="Title {v}", why="Why {v}", action="Do {v}",
+            fn=lambda c: None, cooldown=cooldown,
+        )
+
+    def _record(self, dedup_key, rule_id="TS-01"):
+        finding = Finding(
+            dedup_key=dedup_key,
+            facts={"v": dedup_key},
+            evidence=Evidence(basis="absolute"),
+        )
+        return self.engine._build(self._spec(rule_id), finding, 1.0, ctx(), BASE)
+
+    def _write(self, *dedup_keys):
+        return self.engine._write(
+            self.db, [self._record(key) for key in dedup_keys]
+        )
+
+    def _count(self):
+        return self.db.query(self.Record).count()
+
+    def test_a_scope_commits_once_for_the_whole_batch(self):
+        """The measured win: one fsync per scope, not one per card.
+
+        pysqlite runs in legacy mode and implicitly commits before any non-DML
+        statement, so a SAVEPOINT per row would quietly restore the old
+        behaviour. Counting COMMITs is the only way to notice that regression.
+        """
+        from sqlalchemy import event
+
+        commits = []
+
+        def on_commit(_conn):
+            commits.append(1)
+
+        event.listen(self.db_engine, "commit", on_commit)
+        try:
+            self.assertEqual(self._write("a", "b", "c", "d", "e"), 5)
+        finally:
+            event.remove(self.db_engine, "commit", on_commit)
+        self.assertEqual(self._count(), 5)
+        self.assertEqual(len(commits), 1)
+
+    def test_a_racing_duplicate_does_not_lose_the_batch(self):
+        """The concurrent-writer case the unique index exists for.
+
+        The pre-check in `_run_scope` makes this rare, not impossible: the live
+        job and an on-demand API call can render the same card in the same
+        instant. When the batch insert loses that race, the rows beside the
+        duplicate must still land.
+        """
+        self.assertEqual(self._write("b"), 1)
+        # "b" already exists, so this batch violates the unique index.
+        self.assertEqual(self._write("d", "b", "e"), 2)
+        keys = {row.dedup_key for row in self.db.query(self.Record).all()}
+        self.assertEqual(keys, {"b", "d", "e"})
+
+    def test_the_session_survives_a_rejected_batch(self):
+        self._write("x")
+        self._write("x", "y")
+        self.assertEqual(self._write("z"), 1)
+        self.assertEqual(self._count(), 3)
+
+    def test_an_empty_batch_touches_nothing(self):
+        self.assertEqual(self.engine._write(self.db, []), 0)
+        self.assertEqual(self._count(), 0)
+
+    def test_existing_keys_are_read_for_the_day(self):
+        self._write("a", "b")
+        keys = self.engine._existing_keys(self.db, "test_user", "2026-08-14")
+        self.assertEqual(keys, {"a", "b"})
+        self.assertEqual(
+            self.engine._existing_keys(self.db, "test_user", "2026-08-15"), set()
+        )
+
+    def test_a_rule_whose_template_cannot_render_produces_no_row(self):
+        """A missing fact is a rule bug, and must not reach the database."""
+        broken = Finding(dedup_key="k", facts={}, evidence=Evidence(basis="absolute"))
+        self.assertIsNone(
+            self.engine._build(self._spec(), broken, 1.0, ctx(), BASE)
+        )
+
+
+class TestCooldown(TestPersistence):
+    """One grouped read must reproduce the per-rule query's verdicts."""
+
+    def _write_as(self, dedup_key: str, rule_id: str) -> None:
+        self.engine._write(self.db, [self._record(dedup_key, rule_id)])
+
+    def test_a_rule_inside_its_cooldown_is_suppressed(self):
+        self._write_as("k", "TS-01")
+        spec = self._spec("TS-01", cooldown=timedelta(hours=6))
+        last = self.engine._last_fired(self.db, "test_user", [spec], BASE)
+        self.assertTrue(self.engine._on_cooldown(last, spec, BASE))
+
+    def test_a_rule_past_its_cooldown_is_allowed(self):
+        self._write_as("k", "TS-01")
+        spec = self._spec("TS-01", cooldown=timedelta(hours=6))
+        later = BASE + timedelta(hours=7)
+        last = self.engine._last_fired(self.db, "test_user", [spec], later)
+        self.assertFalse(self.engine._on_cooldown(last, spec, later))
+
+    def test_an_unfired_rule_is_never_on_cooldown(self):
+        spec = self._spec("TS-99")
+        last = self.engine._last_fired(self.db, "test_user", [spec], BASE)
+        self.assertFalse(self.engine._on_cooldown(last, spec, BASE))
+
+    def test_the_horizon_covers_the_longest_cooldown_in_the_family(self):
+        """A short-cooldown rule must not shrink the window a long one needs."""
+        self._write_as("k", "TS-LONG")
+        brief = self._spec("TS-BRIEF", cooldown=timedelta(minutes=5))
+        lengthy = self._spec("TS-LONG", cooldown=timedelta(days=7))
+        as_of = BASE + timedelta(days=3)
+        last = self.engine._last_fired(self.db, "test_user", [brief, lengthy], as_of)
+        self.assertIn("TS-LONG", last)
+        self.assertTrue(self.engine._on_cooldown(last, lengthy, as_of))
+
+    def test_one_query_serves_the_whole_family(self):
+        """Twenty rules, one read. This is the whole point of the change."""
+        from sqlalchemy import event
+
+        specs = [self._spec(f"TS-{i:02d}") for i in range(20)]
+        seen = []
+
+        def count(*_args):
+            seen.append(1)
+
+        event.listen(self.db_engine, "before_cursor_execute", count)
+        try:
+            self.engine._last_fired(self.db, "test_user", specs, BASE)
+        finally:
+            event.remove(self.db_engine, "before_cursor_execute", count)
+        self.assertEqual(len(seen), 1)
 
 
 class TestRanker(unittest.TestCase):

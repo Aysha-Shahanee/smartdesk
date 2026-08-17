@@ -403,6 +403,7 @@ def build_weekly_context(
     return FeatureContext(
         data, as_of=week_end, user_id=user_id,
         days_of_history=baselines.days_of_history,
+        day_summaries=days,
     )
 
 
@@ -603,4 +604,5 @@ def build_monthly_context(
     return FeatureContext(
         data, as_of=month_end, user_id=user_id,
         days_of_history=baselines.days_of_history,
+        day_summaries=days,
     )

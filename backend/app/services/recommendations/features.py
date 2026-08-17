@@ -510,6 +510,30 @@ def _hygiene_features(db: Session, user_id: str, day_start: datetime, segments: 
     return data
 
 
+#: Cached ``(mtime, fields)`` from the categoriser artefact. The model is frozen
+#: once trained — the file's own module says so — yet the two scalars HY-09
+#: needs were being unpickled off disk on every daily context build, which is
+#: also every daily report request. Keyed on mtime so a retrain is picked up.
+_MODEL_META: tuple[float, dict] | None = None
+
+
+def _model_meta(path: Path) -> dict:
+    """The categoriser's self-reported quality, read at most once per retrain."""
+    global _MODEL_META
+    mtime = path.stat().st_mtime
+    if _MODEL_META is not None and _MODEL_META[0] == mtime:
+        return _MODEL_META[1]
+
+    payload = joblib.load(path)
+    fields: dict = {"model_basis": str(payload.get("holdout_basis") or "unknown")}
+    accuracy = payload.get("holdout_accuracy")
+    if accuracy is not None:
+        fields["model_holdout"] = float(accuracy)
+
+    _MODEL_META = (mtime, fields)
+    return fields
+
+
 def _model_health(db: Session) -> dict:
     """How stale the categoriser is against the labels it has not seen.
 
@@ -528,11 +552,9 @@ def _model_health(db: Session) -> dict:
             data["model_missing"] = 1.0
             return data
 
-        payload = joblib.load(path)
-        accuracy = payload.get("holdout_accuracy")
-        if accuracy is not None:
-            data["model_holdout"] = float(accuracy)
-        data["model_basis"] = str(payload.get("holdout_basis") or "unknown")
+        # The label count below is deliberately *not* cached: corrections arrive
+        # continuously, and that number moving is the whole signal HY-09 reads.
+        data.update(_model_meta(path))
     except Exception:
         logger.debug("Could not read the categoriser model for HY-09")
         return data
