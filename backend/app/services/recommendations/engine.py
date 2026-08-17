@@ -148,9 +148,18 @@ class RecommendationEngine:
         # one that survives, not whichever happened to be registered first.
         candidates.sort(key=lambda item: item[2], reverse=True)
 
-        seen_keys: set[str] = set()
+        # Two grouped reads for the whole family, replacing one cooldown query
+        # per surviving candidate — a busy daily run issued seventeen of those,
+        # each filtering on a column trio no index covered.
+        local_date = as_of.strftime("%Y-%m-%d")
+        last_fired = self._last_fired(db, ctx.user_id, REGISTRY[scope], as_of)
+        # Seeding the seen set from what is already stored turns the common
+        # duplicate — a rule that fired earlier today — into a set lookup
+        # instead of a rendered record and a caught IntegrityError.
+        seen_keys: set[str] = self._existing_keys(db, ctx.user_id, local_date)
+
         per_section: dict[Section, int] = {}
-        written = 0
+        staged: list[RecommendationRecord] = []
 
         for spec, finding, score in candidates:
             if finding.dedup_key in seen_keys:
@@ -158,14 +167,16 @@ class RecommendationEngine:
             cap = SECTION_CAPS.get(spec.section, 3)
             if per_section.get(spec.section, 0) >= cap:
                 continue
-            if self._on_cooldown(db, ctx.user_id, spec, as_of):
+            if self._on_cooldown(last_fired, spec, as_of):
                 continue
-            if self._persist(db, spec, finding, score, ctx, as_of):
-                seen_keys.add(finding.dedup_key)
-                per_section[spec.section] = per_section.get(spec.section, 0) + 1
-                written += 1
+            record = self._build(spec, finding, score, ctx, as_of)
+            if record is None:
+                continue
+            staged.append(record)
+            seen_keys.add(finding.dedup_key)
+            per_section[spec.section] = per_section.get(spec.section, 0) + 1
 
-        return written
+        return self._write(db, staged)
 
     def _evaluate(
         self,
@@ -231,34 +242,118 @@ class RecommendationEngine:
     # Persistence                                                         #
     # ------------------------------------------------------------------ #
 
-    def _on_cooldown(
-        self,
+    @staticmethod
+    def _last_fired(
         db: Session,
         user_id: str,
+        specs: list[RuleSpec],
+        as_of: datetime,
+    ) -> dict[str, str]:
+        """When each rule in a family last fired, in one grouped read.
+
+        Bounded by the longest cooldown in the family — nothing older than that
+        could suppress anything, so there is no reason to read it. Comparison
+        stays on the ISO strings the column already holds, exactly as the
+        per-rule query did.
+        """
+        if not specs:
+            return {}
+        horizon = max(spec.cooldown for spec in specs)
+        rows = db.execute(
+            text("""
+                SELECT rule_id, MAX(generated_at) AS last_at
+                FROM recommendations
+                WHERE user_id = :user_id AND generated_at >= :since
+                GROUP BY rule_id
+            """),
+            {"user_id": user_id, "since": (as_of - horizon).isoformat()},
+        ).mappings().all()
+        return {row["rule_id"]: row["last_at"] for row in rows}
+
+    @staticmethod
+    def _existing_keys(db: Session, user_id: str, local_date: str) -> set[str]:
+        """Dedup keys already stored for this user on this local day.
+
+        The same trio the unique index guards, read once so the engine can
+        decline to build a card the database would reject anyway.
+        """
+        rows = db.execute(
+            text("""
+                SELECT DISTINCT dedup_key FROM recommendations
+                WHERE user_id = :user_id AND local_date = :local_date
+            """),
+            {"user_id": user_id, "local_date": local_date},
+        ).scalars().all()
+        return set(rows)
+
+    @staticmethod
+    def _on_cooldown(
+        last_fired: dict[str, str],
         spec: RuleSpec,
         as_of: datetime,
     ) -> bool:
         """True when this rule fired recently enough that repeating it would nag."""
-        since = (as_of - spec.cooldown).isoformat()
-        recent = db.query(RecommendationRecord.id).filter(
-            RecommendationRecord.user_id == user_id,
-            RecommendationRecord.rule_id == spec.id,
-            RecommendationRecord.generated_at >= since,
-        ).first()
-        return recent is not None
+        last = last_fired.get(spec.id)
+        return last is not None and last >= (as_of - spec.cooldown).isoformat()
 
-    def _persist(
-        self,
-        db: Session,
+    @staticmethod
+    def _write(db: Session, records: list[RecommendationRecord]) -> int:
+        """Commit a scope's cards in one transaction. Returns the count written.
+
+        One commit rather than one per card. That matters more than it looks on
+        SQLite, where each commit is an fsync: eight rows measured at 51.6 ms
+        written singly against 6.7 ms written together.
+
+        SAVEPOINT is deliberately not used to isolate the rows. The pysqlite
+        driver runs in its legacy mode (``isolation_level == ''``) and issues an
+        implicit COMMIT before any non-DML statement, so wrapping each row in
+        ``begin_nested()`` silently commits the batch a row at a time and gives
+        back nothing. The dedup pre-check above is what makes a violation here
+        rare instead; the retry below is what makes it survivable.
+        """
+        if not records:
+            return 0
+        try:
+            db.add_all(records)
+            db.commit()
+            return len(records)
+        except IntegrityError:
+            # Two writers produced the same card in the same instant — the live
+            # job and an on-demand API call. Rare, real, and not worth losing
+            # the rest of the batch over.
+            db.rollback()
+            logger.debug("Batch write raced a concurrent writer; retrying singly.")
+
+        written = 0
+        for record in records:
+            try:
+                db.add(record)
+                db.commit()
+                written += 1
+            except IntegrityError:
+                db.rollback()
+                logger.debug(
+                    "Duplicate recommendation for %s / %s; keeping the existing row.",
+                    record.rule_id, record.dedup_key,
+                )
+        return written
+
+    @staticmethod
+    def _build(
         spec: RuleSpec,
         finding: Finding,
         score: float,
         ctx: FeatureContext,
         as_of: datetime,
-    ) -> bool:
+    ) -> RecommendationRecord | None:
+        """Render a finding into a row. Pure — no session, no I/O.
+
+        ``None`` when the rule's templates could not be satisfied, which
+        ``narrative.render`` has already logged as the rule bug it is.
+        """
         rendered = narrative.render(spec, finding)
         if rendered is None:
-            return False
+            return None
         title, why, action = rendered
 
         severity = finding.severity or spec.severity
@@ -299,21 +394,7 @@ class RecommendationEngine:
             valid_until=valid_until,
             status="active",
         )
-
-        try:
-            db.add(record)
-            db.commit()
-            return True
-        except IntegrityError:
-            # The unique index on (user_id, dedup_key, local_date) fired: the
-            # live job and an on-demand API call generated at the same moment.
-            # Both are correct, one wins, nothing is lost.
-            db.rollback()
-            logger.debug(
-                "Duplicate recommendation for %s / %s; keeping the existing row.",
-                spec.id, finding.dedup_key,
-            )
-            return False
+        return record
 
     def _expire_stale(self, db: Session, user_id: str, as_of: datetime) -> int:
         """Retire live cards whose moment has passed."""

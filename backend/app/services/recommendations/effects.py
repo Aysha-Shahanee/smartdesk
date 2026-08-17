@@ -15,6 +15,7 @@ which is the difference between this and the hardcoded claim it replaces.
 from __future__ import annotations
 
 import logging
+from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -32,6 +33,24 @@ MIN_ARM_SAMPLES = 8
 
 #: How long after a meeting ends the "recovery" window runs.
 RECOVERY_MINUTES = 60
+
+
+def _merge_spans(
+    spans: list[tuple[datetime, datetime]],
+) -> list[tuple[datetime, datetime]]:
+    """Sort and coalesce overlapping intervals into a disjoint, ordered list.
+
+    Back-to-back meetings produce recovery windows that overlap, and merging
+    them first is what lets the membership test below be a binary search
+    instead of a scan over every meeting for every window.
+    """
+    merged: list[tuple[datetime, datetime]] = []
+    for start, stop in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], stop))
+        else:
+            merged.append((start, stop))
+    return merged
 
 
 @dataclass
@@ -111,6 +130,17 @@ def post_meeting_focus_effect(
     if not recovery_spans:
         return None
 
+    # Merged once, then binary-searched per window. The obvious `any(...)` over
+    # every span inside the window loop is O(windows x meetings), and with a
+    # 30-day window against a full calendar that scan was the most expensive
+    # thing in the daily feature build.
+    merged = _merge_spans(recovery_spans)
+    span_starts = [start for start, _ in merged]
+
+    def in_recovery(when: datetime) -> bool:
+        index = bisect_right(span_starts, when) - 1
+        return index >= 0 and when < merged[index][1]
+
     treated: dict[tuple[int, int], list[float]] = {}
     control: dict[tuple[int, int], list[float]] = {}
 
@@ -122,7 +152,7 @@ def post_meeting_focus_effect(
         focus = float(row["avg_focus_score"] or 0.0)
         key = (when.weekday(), when.hour)
 
-        if any(start <= when < stop for start, stop in recovery_spans):
+        if in_recovery(when):
             treated.setdefault(key, []).append(focus)
         elif when.strftime("%Y-%m-%d") not in meeting_days:
             # Controls are drawn only from days with no meeting at all. A

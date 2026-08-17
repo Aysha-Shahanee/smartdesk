@@ -145,7 +145,7 @@ class FeatureContext(Mapping[str, Any]):
     IDE features are absent and the four rules requiring them are gated out.
     """
 
-    __slots__ = ("_data", "days_of_history", "as_of", "user_id")
+    __slots__ = ("_data", "days_of_history", "as_of", "user_id", "day_summaries")
 
     def __init__(
         self,
@@ -154,6 +154,7 @@ class FeatureContext(Mapping[str, Any]):
         as_of,
         user_id: str,
         days_of_history: int,
+        day_summaries: list | None = None,
     ) -> None:
         # Keys carrying None are dropped rather than stored: a feature that
         # could not be computed must be *absent* so requirement gating catches
@@ -162,6 +163,11 @@ class FeatureContext(Mapping[str, Any]):
         self.as_of = as_of
         self.user_id = user_id
         self.days_of_history = days_of_history
+        # The per-day rows the period builders already reduced, carried for the
+        # report to reuse. Deliberately an attribute rather than a feature: it
+        # is a list of dataclasses, and putting it in the mapping would expose
+        # it to `requires` gating and to the debug endpoint's feature dump.
+        self.day_summaries = day_summaries or []
 
     def __getitem__(self, key: str) -> Any:
         return self._data[key]

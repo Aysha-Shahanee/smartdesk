@@ -25,7 +25,6 @@ from app.services.recommendations.periods import (
     WEEKDAY_NAMES,
     build_monthly_context,
     build_weekly_context,
-    summarise_days,
 )
 from app.services.recommendations.types import FeatureContext, Scope
 
@@ -185,6 +184,20 @@ def _load_findings(
     return grouped, notes
 
 
+def _days_in_period(ctx: FeatureContext, start: str, end: str) -> list:
+    """The period's days, sliced from what the context already reduced.
+
+    The period builders summarise more history than the report shows — four
+    weeks behind a weekly context, sixty days behind a monthly one — so the
+    reporting window is always a slice of work already done. Calling
+    ``summarise_days`` again here re-fetched the same segments and re-derived
+    the same blocks, and cost roughly a third of the request. It also left two
+    passes over different ranges free to disagree about a figure the report
+    prints once.
+    """
+    return [day for day in ctx.day_summaries if start <= day.date <= end]
+
+
 def _categories_from(mix: dict[str, float], active_min: float) -> list[CategorySlice]:
     return sorted(
         (
@@ -303,12 +316,7 @@ def _weekly_facts(
                 higher_is_better=False),
     ]
 
-    days = summarise_days(
-        db, user_id,
-        datetime.fromisoformat(f"{start}T00:00:00"),
-        datetime.fromisoformat(f"{end}T00:00:00") + timedelta(days=1),
-        baselines,
-    )
+    days = _days_in_period(ctx, start, end)
     facts.days = [
         DayPoint(
             date=d.date,
@@ -374,12 +382,7 @@ def _monthly_facts(
                     ctx.num("mo_deep_now"), "min", ctx.get("mo_deep_prev"))
         )
 
-    days = summarise_days(
-        db, user_id,
-        datetime.fromisoformat(f"{start}T00:00:00"),
-        datetime.fromisoformat(f"{end}T00:00:00") + timedelta(days=1),
-        baselines,
-    )
+    days = _days_in_period(ctx, start, end)
     facts.days = [
         DayPoint(
             date=d.date, weekday=WEEKDAY_NAMES[d.weekday][:3],
