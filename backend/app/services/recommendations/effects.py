@@ -23,6 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.services.recommendations.baselines import percentile
+from app.services.recommendations.stats import sign_test
 
 logger = logging.getLogger("smartdesk.recommendations.effects")
 
@@ -63,6 +64,18 @@ class MatchedEffect:
     n_control: int
     #: Relative change, negative meaning the treatment arm scored lower.
     relative: float
+    #: Two-sided p from a sign test over the matched pairs.
+    #:
+    #: The pairing is what makes this rule the strongest claim the engine
+    #: makes, and it is also what makes an effect size on its own misleading:
+    #: eleven pairs that mostly moved down look identical to eleven that split
+    #: six-five, once you take the median. The sign test asks the only
+    #: question the design supports — did the differences fall on one side
+    #: more often than a coin would explain — without assuming anything about
+    #: their shape.
+    pair_p: float = 1.0
+    #: How many matched slots the p-value is computed over.
+    n_pairs: int = 0
 
     @property
     def credible(self) -> bool:
@@ -188,6 +201,8 @@ def post_meeting_focus_effect(
             (treated_overall - control_overall) / control_overall
             if control_overall > 0 else 0.0
         ),
+        pair_p=sign_test(differences),
+        n_pairs=len(differences),
     )
     if not effect.credible:
         logger.debug(

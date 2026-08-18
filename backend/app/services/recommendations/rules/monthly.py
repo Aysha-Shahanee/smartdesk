@@ -60,6 +60,7 @@ def _delta_finding(
             n=int(ctx.num("month_active_days")),
             effect=abs(change) * 5,
             comparison="the preceding 30 days",
+            p_value=ctx.get(f"mo_{label}_p"),
         ),
         severity=Severity.LOW if improving else Severity.MEDIUM,
     )
@@ -150,6 +151,7 @@ def category_migration(ctx: FeatureContext) -> Finding | None:
         evidence=Evidence(
             basis="month_over_month", n=int(ctx.num("month_active_days")),
             comparison="the preceding 30 days",
+            p_value=ctx.get("mix_shift_p"),
         ),
     )
 
@@ -217,7 +219,8 @@ def habit_change(ctx: FeatureContext) -> Finding | None:
         evidence=Evidence(
             basis="sustained_weeks", n=int(ctx.num("month_active_days")),
             effect=3.0,
-            comparison="weekly medians against the preceding month",
+            comparison="the days either side of the change point",
+            p_value=ctx.get("habit_p"),
         ),
         severity=Severity.LOW if formed else Severity.MEDIUM,
     )

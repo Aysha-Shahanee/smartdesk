@@ -56,6 +56,35 @@ class Settings(BaseSettings):
     # yourself with, and the rule stays silent until someone opts in.
     DAILY_DEEP_WORK_TARGET_MIN: int = 0
 
+    # ── Recommendation exploration ─────────────────────────────────
+    # How often the surfacing policy shows a card that did not earn its slot,
+    # so that the learned ranker can be evaluated rather than merely trusted.
+    #
+    # Off by default. Exploration is a deliberate, visible trade: the panel
+    # gets slightly worse on purpose, in exchange for the only data that makes
+    # any off-policy estimate valid. That is a decision to take knowingly at
+    # the start of an evaluation period, not a default to inherit.
+    #
+    # 0.1 is the usual starting point — one card in ten in the marginal slot.
+    # Raise it for a shorter evaluation, lower it if dismissals climb. Only
+    # the lowest-ranked slot of a section is ever at stake, and a high-severity
+    # card is never displaced, so the worst case is one weaker suggestion.
+    RECOMMENDATION_EPSILON: float = 0.0
+
+    # False-discovery rate the daily battery of statistical claims is held to.
+    #
+    # The engine re-evaluates every rule each day, and a good fraction of them
+    # end in a significance test. Publishing each one that clears 0.05 on its
+    # own would mean publishing noise regularly and confidently: twenty true
+    # nulls give about a 64% chance that one of them looks real. Benjamini-
+    # Hochberg holds the *proportion* of published claims that are false to
+    # this level instead.
+    #
+    # 0.1 rather than 0.05 on purpose. These are nudges, not diagnoses; the
+    # cost of one wrong suggestion is a dismissed card, and being too strict
+    # here shows the user nothing at all, which is its own failure.
+    RECOMMENDATION_FDR_Q: float = 0.10
+
     # ── Shared label sheet ─────────────────────────────────────────
     # Mirrors every typed label correction to a Google Sheet so a team can
     # pool training data. The database is always written first and remains

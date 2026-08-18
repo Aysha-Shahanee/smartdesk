@@ -104,7 +104,10 @@ def _span_label(start: str, end: str) -> str:
     except ValueError:
         return f"{start} to {end}"
     if first.year != last.year:
-        return f"{first:%-d %B %Y} to {last:%-d %B %Y}".replace("%-d", "")
+        return (
+            f"{first.day} {first:%B} {first.year} to "
+            f"{last.day} {last:%B} {last.year}"
+        )
     if first.month != last.month:
         return f"{first.day} {first:%B} to {last.day} {last:%B} {last.year}"
     return f"{first.day}-{last.day} {last:%B} {last.year}"
@@ -159,6 +162,8 @@ def _load_findings(
             RecommendationRecord.scope.in_(scopes),
             RecommendationRecord.local_date.in_(local_dates),
             RecommendationRecord.status.in_(("active", "applied")),
+            # Never quote a card nobody was shown.
+            RecommendationRecord.shadow.isnot(True),
         )
         .order_by(RecommendationRecord.score.desc())
         .all()
