@@ -1,0 +1,30 @@
+# Gitleaks configuration.
+#
+# Extends the bundled ruleset rather than replacing it, so the default detectors
+# for AWS, GitHub, Google, Slack and private keys all stay active and this file
+# only records what is deliberately allowed through.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Values that look like secrets and are not"
+
+paths = [
+  # Placeholders only, and the file exists to be read.
+  '''\.env\.example$''',
+  # Lockfiles carry integrity hashes that trip entropy detectors.
+  '''package-lock\.json$''',
+  '''\.lock$''',
+  # Vendored dependencies are not ours to scan.
+  '''(^|/)venv/''',
+  '''(^|/)node_modules/''',
+]
+
+regexes = [
+  # The shared-label Google Sheet id in backend/app/core/config.py. A document
+  # identifier, not a credential: it grants nothing without an authorised
+  # account, and the sheet is opt-in behind ENABLE_GSHEET_SYNC. Listed here so
+  # the scanner stays quiet about it rather than being switched off.
+  '''1G_oudT83kv-JSugqzbVE-nbLyjmQ0c7YY5EGpbLUaG8''',
+]

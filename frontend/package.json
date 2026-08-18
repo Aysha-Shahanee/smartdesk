@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "electron-vite",
     "dev:backend": "cd ../backend && .\\venv\\Scripts\\python -m uvicorn app.main:app --reload",
-    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "npm run typecheck && electron-vite build",
     "preview": "electron-vite preview",
     "electron:build": "electron-builder"
   },

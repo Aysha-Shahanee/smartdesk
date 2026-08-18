@@ -33,6 +33,11 @@ from app.services.recommendations.baselines import (
     fetch_segments,
 )
 from app.services.recommendations.effects import post_meeting_focus_effect
+from app.repositories.preference_repository import PreferenceRepository
+from app.services.recommendations.redaction import (
+    TITLE_FEATURES,
+    redact_features,
+)
 from app.services.recommendations.types import FeatureContext
 
 logger = logging.getLogger("smartdesk.recommendations.features")
@@ -382,6 +387,11 @@ def build_live_context(
     if as_of.hour in baselines.hour_focus:
         data["hour_focus_now"] = baselines.hour_focus[as_of.hour]
 
+    # Titles are free text written by software the user does not control, and
+    # they reach card copy and exported reports. Scrubbed here, at the one
+    # boundary every context passes through, rather than at each render site.
+    redact_features(data, TITLE_FEATURES)
+    data["pref.sensitivity"] = PreferenceRepository(db).sensitivity(user_id)
     return FeatureContext(
         data,
         as_of=as_of,
@@ -599,6 +609,8 @@ def build_daily_context(
     active = [s for s in segments if s["state"] == "active"]
     if not active:
         data.update(baselines.flatten())
+        redact_features(data, TITLE_FEATURES)
+        data["pref.sensitivity"] = PreferenceRepository(db).sensitivity(user_id)
         return FeatureContext(
             data, as_of=day_start, user_id=user_id,
             days_of_history=baselines.days_of_history,
@@ -757,6 +769,8 @@ def build_daily_context(
         data["control_focus"] = effect.control_median
         data["post_meeting_relative"] = effect.relative
         data["post_meeting_n"] = float(min(effect.n_treated, effect.n_control))
+        data["post_meeting_p"] = effect.pair_p
+        data["post_meeting_pairs"] = float(effect.n_pairs)
 
     # PL-08 — the app pair you bounce between most. Counted as an unordered
     # pair, because A->B and B->A are the same habit seen from two sides.
@@ -819,6 +833,8 @@ def build_daily_context(
         data["low_confidence_share"] = low / active_sec
 
     data.update(baselines.flatten())
+    redact_features(data, TITLE_FEATURES)
+    data["pref.sensitivity"] = PreferenceRepository(db).sensitivity(user_id)
     return FeatureContext(
         data,
         as_of=day_start,

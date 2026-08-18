@@ -15,6 +15,14 @@ from datetime import datetime, timedelta
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.services.recommendations.stats import (
+    deseasonalise_weekday,
+    level_shift,
+    mann_kendall,
+    mann_whitney_u,
+    sign_test,
+    spearman_p,
+)
 from app.services.recommendations.baselines import (
     BaselineSet,
     DEEP_BLOCK_MIN_SEC,
@@ -292,6 +300,10 @@ def build_weekly_context(
             data["deep_trend_weeks"] = float(len(weekly_totals))
             data["deep_trend_first"] = weekly_totals[0]
             data["deep_trend_last"] = weekly_totals[-1]
+            # Theil-Sen says which way; Mann-Kendall says whether the ordering
+            # could have come out that way by chance. Four weekly totals is
+            # enough for a slope and nowhere near enough to trust one.
+            data["deep_trend_p"] = mann_kendall(weekly_totals)[2]
 
     # WK-04 — meeting load against focus.
     with_meetings = [d for d in days if d.meeting_min > 0]
@@ -302,6 +314,7 @@ def build_weekly_context(
         if rho is not None:
             data["meeting_focus_rho"] = rho
             data["meeting_focus_n"] = float(len(days))
+            data["meeting_focus_p"] = spearman_p(rho, len(days))
 
     # WK-05 — consistency of daily active hours.
     actives = [d.active_min for d in this_week]
@@ -321,6 +334,7 @@ def build_weekly_context(
             data["week_focus_first"] = scored[0]
             data["week_focus_last"] = scored[-1]
             data["week_focus_days"] = float(len(scored))
+            data["week_focus_p"] = mann_kendall(scored)[2]
 
     # WK-09 — which languages the editor time went to, and how that moved.
     languages = db.execute(
@@ -379,6 +393,18 @@ def build_weekly_context(
     prior_active = sum(d.active_min for d in prior)
     if prior_active > 0:
         data["prior_learn_share"] = sum(d.learn_min for d in prior) / prior_active
+        # Two pooled ratios differ by *something* almost always; the test asks
+        # whether the daily shares behind them separate. Unpaired and
+        # different-sized, so a rank test rather than the paired one used for
+        # the matched-pair rules.
+        this_daily = [
+            d.learn_min / d.active_min for d in this_week if d.active_min > 0
+        ]
+        prior_daily = [
+            d.learn_min / d.active_min for d in prior if d.active_min > 0
+        ]
+        if len(this_daily) >= 3 and len(prior_daily) >= 3:
+            data["learn_share_p"] = mann_whitney_u(this_daily, prior_daily)[1]
 
     # WK-11 — consecutive days meeting the deep-work median.
     deep_stat = baselines.global_stats.get("deep_work_min")
@@ -490,12 +516,18 @@ def build_monthly_context(
             ("active", lambda d: d.active_min),
             ("distraction", lambda d: d.distraction_min),
         ):
-            now_median = percentile([selector(d) for d in current], 0.50)
-            was_median = percentile([selector(d) for d in prior], 0.50)
+            now_values = [selector(d) for d in current]
+            was_values = [selector(d) for d in prior]
+            now_median = percentile(now_values, 0.50)
+            was_median = percentile(was_values, 0.50)
             data[f"mo_{label}_now"] = now_median
             data[f"mo_{label}_prev"] = was_median
             if was_median > 0:
                 data[f"mo_{label}_change"] = (now_median - was_median) / was_median
+            # A ratio of two medians moves for any reason at all. The test asks
+            # whether the two months' daily values actually separate, which is
+            # the claim the card makes.
+            data[f"mo_{label}_p"] = mann_whitney_u(now_values, was_values)[1]
 
     # MO-04 — the month's best day, as a template to copy.
     best = max(current, key=lambda d: d.deep_min, default=None)
@@ -531,40 +563,66 @@ def build_monthly_context(
                 data["mix_lost"] = lost[0]
                 data["mix_lost_delta"] = lost[1]
 
-    # MO-02 / MO-03 — habit formation and erosion. A metric that moved by at
-    # least one MAD and *stayed* moved for three consecutive weeks is a habit;
-    # the same movement in a single week is a good or bad week. Measured on
-    # weekly medians so a single day cannot carry it.
-    weekly_deep: list[float] = []
-    for index in range(4):
-        bucket_end = month_end - timedelta(days=7 * index)
-        bucket_start = bucket_end - timedelta(days=7)
-        window = [
-            d.deep_min for d in current
-            if bucket_start.strftime("%Y-%m-%d") <= d.date < bucket_end.strftime("%Y-%m-%d")
-        ]
-        if window:
-            weekly_deep.append(percentile(window, 0.50))
-    weekly_deep.reverse()
+                # The shares above are pooled over each month, so a single
+                # atypical week can move them. The test asks whether the
+                # *daily* shares of the two categories separate between the
+                # months, and the claim is only as strong as the weaker of
+                # the two movements it describes.
+                def daily_share(rows: list[DaySummary], key: str) -> list[float]:
+                    out = []
+                    for row in rows:
+                        total = sum(row.category_min.values())
+                        if total > 0:
+                            out.append(row.category_min.get(key, 0.0) / total)
+                    return out
 
-    if len(weekly_deep) >= 3 and prior:
-        prior_median = percentile([d.deep_min for d in prior], 0.50)
-        spread = percentile(
-            [abs(d.deep_min - prior_median) for d in prior], 0.50
+                p_values = []
+                for key in (gained[0], lost[0]):
+                    now_daily = daily_share(current, key)
+                    was_daily = daily_share(prior, key)
+                    if len(now_daily) >= 3 and len(was_daily) >= 3:
+                        p_values.append(mann_whitney_u(now_daily, was_daily)[1])
+                if p_values:
+                    data["mix_shift_p"] = max(p_values)
+
+    # MO-02 / MO-03 — habit formation and erosion. A level that moved and
+    # *stayed* moved is a habit; the same movement in a single week is a good or
+    # bad week.
+    #
+    # Located by change-point detection rather than by asking whether three
+    # consecutive weekly medians each cleared one MAD. That older test could
+    # only see a change of exactly the shape it was written for — three weeks
+    # long and one spread deep — and both of those numbers were arbitrary. CUSUM
+    # asks where the level actually moved and answers at whatever lag the data
+    # shows, and the daily series is deseasonalised first so a run of quiet
+    # weekends is not mistaken for an eroding habit.
+    daily = sorted(prior + current, key=lambda d: d.date)
+    if len(daily) >= 14:
+        remainder = deseasonalise_weekday(
+            [d.deep_min for d in daily], [d.weekday for d in daily]
         )
-        if spread > 0:
-            above = [w for w in weekly_deep[-3:] if w - prior_median >= spread]
-            below = [w for w in weekly_deep[-3:] if prior_median - w >= spread]
-            if len(above) == 3:
-                data["habit_direction"] = "formed"
-                data["habit_weeks"] = 3.0
-                data["habit_now"] = weekly_deep[-1]
-                data["habit_before"] = prior_median
-            elif len(below) == 3:
-                data["habit_direction"] = "eroded"
-                data["habit_weeks"] = 3.0
-                data["habit_now"] = weekly_deep[-1]
-                data["habit_before"] = prior_median
+        shift = level_shift(remainder, threshold=1.0)
+        if shift is not None:
+            # Reported against the raw series, because "your deep work moved
+            # from 95 to 140 minutes" is the sentence the card needs; the
+            # deseasonalised remainder is centred near zero and would read as
+            # nonsense.
+            split = shift["index"]
+            before_raw = [d.deep_min for d in daily[:split]]
+            after_raw = [d.deep_min for d in daily[split:]]
+            data["habit_direction"] = (
+                "formed" if shift["direction"] == "up" else "eroded"
+            )
+            data["habit_weeks"] = round(len(after_raw) / 7.0, 1)
+            data["habit_now"] = percentile(after_raw, 0.50)
+            data["habit_before"] = percentile(before_raw, 0.50)
+            data["habit_strength"] = shift["strength"]
+            data["habit_effect_sigma"] = shift["effect_sigma"]
+            # CUSUM says where the level moved; this says whether the two sides
+            # of that split are distinguishable. Without it a change point is
+            # always found somewhere, because the statistic always has a
+            # maximum.
+            data["habit_p"] = mann_whitney_u(after_raw, before_raw)[1]
 
     # MO-05 — days where the anomaly detector flagged several windows at once.
     anomaly_days = db.execute(

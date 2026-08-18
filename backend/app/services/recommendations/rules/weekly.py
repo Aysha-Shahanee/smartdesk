@@ -114,6 +114,7 @@ def four_week_trend(ctx: FeatureContext) -> Finding | None:
         evidence=Evidence(
             basis="theil_sen", n=int(ctx["deep_trend_weeks"]), effect=slope / 60.0,
             comparison="weekly deep-work totals",
+            p_value=ctx.get("deep_trend_p"),
         ),
         severity=Severity.LOW if up else Severity.MEDIUM,
     )
@@ -152,6 +153,7 @@ def meeting_load_vs_focus(ctx: FeatureContext) -> Finding | None:
         evidence=Evidence(
             basis="spearman", n=int(ctx["meeting_focus_n"]), effect=abs(rho) * 3,
             comparison="daily meeting minutes against daily focus",
+            p_value=ctx.get("meeting_focus_p"),
         ),
         severity=Severity.MEDIUM if negative else Severity.LOW,
     )
@@ -265,6 +267,7 @@ def learning_balance(ctx: FeatureContext) -> Finding | None:
             basis="personal_prior_weeks", n=int(ctx.num("week_day_count")),
             effect=abs(now - prior) * 10,
             comparison="the preceding three weeks",
+            p_value=ctx.get("learn_share_p"),
         ),
     )
 
@@ -355,6 +358,7 @@ def within_week_decay(ctx: FeatureContext) -> Finding | None:
             basis="theil_sen", n=int(ctx["week_focus_days"]),
             effect=abs(slope) * 20,
             comparison="this week's daily focus scores",
+            p_value=ctx.get("week_focus_p"),
         ),
         severity=Severity.MEDIUM if down else Severity.LOW,
     )

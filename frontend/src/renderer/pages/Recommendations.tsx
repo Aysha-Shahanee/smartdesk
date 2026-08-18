@@ -6,6 +6,8 @@ import {
   type Recommendation,
   type RecommendationResponse,
 } from '../services/api';
+import EngineControlsPanel from '../components/EngineControlsPanel';
+import RuleHealthPanel from '../components/RuleHealthPanel';
 import './Recommendations.css';
 
 /**
@@ -305,6 +307,8 @@ const Recommendations: React.FC = () => {
           ))}
         </div>
       </div>
+      <RuleHealthPanel />
+      <EngineControlsPanel />
     </div>
   );
 };

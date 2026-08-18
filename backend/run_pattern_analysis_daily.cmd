@@ -19,4 +19,14 @@ if errorlevel 1 (
 )
 
 ".\venv\Scripts\python.exe" run_pattern_analysis.py
+if errorlevel 1 (
+    echo [%date% %time%] clustering failed; skipping recommendations, which
+    echo   read the patterns it was supposed to write.
+    exit /b 1
+)
+
+REM Stage 3 was documented above but never actually invoked, so the daily,
+REM weekly and monthly rule families never ran -- only the LIVE family, from
+REM the 60-second job inside the backend process.
+".\venv\Scripts\python.exe" run_recommendations.py
 exit /b %errorlevel%

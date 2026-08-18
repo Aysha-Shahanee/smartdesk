@@ -71,6 +71,14 @@ class Evidence:
     n: int = 0
     effect: float | None = None
     comparison: str | None = None
+    #: Two-sided p for the claim, where the claim is a statistical one.
+    #:
+    #: ``None`` means "not a hypothesis test", not "not significant" — an
+    #: absolute finding like "the IDE stopped reporting" has nothing to test
+    #: and must not be swept up by the multiplicity gate. Only findings that
+    #: carry a number here are ranked against each other by the engine's
+    #: Benjamini-Hochberg pass.
+    p_value: float | None = None
 
     @property
     def confidence(self) -> float:

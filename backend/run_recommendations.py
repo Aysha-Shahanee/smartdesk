@@ -84,7 +84,12 @@ def main() -> None:
 
         scopes = scopes_for(run_at)
         logger.info("Running scopes: %s", ", ".join(s.value for s in scopes))
-        written = engine.generate(db, user_id, as_of, scopes=scopes)
+        # supersede: this pass runs after the window roll-up and the clustering
+        # it depends on, so it is the only one whose inputs are complete. Cards
+        # the interactive path wrote earlier from a lagging roll-up are retired
+        # rather than deduplicated against, which is what kept a stale total on
+        # the panel next to a fresh one describing the same day.
+        written = engine.generate(db, user_id, as_of, scopes=scopes, supersede=True)
         logger.info("Wrote %d recommendation(s)", written)
 
         # Cheap and a no-op until enough feedback exists, so there is no reason

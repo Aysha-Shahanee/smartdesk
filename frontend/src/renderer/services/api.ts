@@ -413,6 +413,233 @@ export const getRecommendations = async (
   return fetchJson(`${API_BASE}/api/v1/recommendations?${queryParams.toString()}`);
 };
 
+/* ---------------------------------------------------------- */
+/* Rule health — per-rule telemetry over recorded feedback     */
+/* ---------------------------------------------------------- */
+
+/**
+ * One rule's record. `verdict` compares the rule against *this user's own*
+ * acceptance rate rather than a fixed bar, because acceptance in this class
+ * of system varies enormously between people — a constant would measure
+ * temperament rather than rule quality.
+ *
+ *  - `below`    the whole confidence interval sits under the user's average
+ *  - `above`    the whole interval sits over it
+ *  - `typical`  the interval straddles it, i.e. no evidence of a difference
+ *  - `unproven` fired, but too few judged cards to rate
+ *  - `silent`   never fired in the window; says nothing about quality
+ */
+export interface RuleHealth {
+  rule_id: string;
+  scope: string | null;
+  section: string | null;
+  severity: string | null;
+  known: boolean;
+  fired: number;
+  applied: number;
+  dismissed: number;
+  snoozed: number;
+  expired: number;
+  still_active: number;
+  judged: number;
+  acceptance: number | null;
+  acceptance_low: number | null;
+  acceptance_high: number | null;
+  ppv: number | null;
+  response_rate: number | null;
+  median_seconds_to_apply: number | null;
+  median_seconds_to_dismiss: number | null;
+  first_fired: string | null;
+  last_fired: string | null;
+  verdict: 'below' | 'typical' | 'unproven' | 'above' | 'silent';
+  muted: boolean;
+}
+
+/** The scrutability controls and their current settings. */
+export interface RecommendationPreferences {
+  baseline_epoch: string | null;
+  sensitivity: number;
+  muted: string[];
+  shadowed: string[];
+}
+
+/** One ordering strategy's offline scores. */
+export interface RankingMetrics {
+  strategy: string;
+  k: number;
+  days: number;
+  precision_at_k: number | null;
+  recall_at_k: number | null;
+  ndcg_at_k: number | null;
+  mrr: number | null;
+  hit_rate: number | null;
+  coverage: number | null;
+  diversity: number | null;
+  /**
+   * Self-normalised inverse-propensity estimate of this ordering's value.
+   *
+   * The only figure here about a policy the user never saw: the others score
+   * orderings of cards that were actually shown. Null unless exploration has
+   * produced the propensity variation the estimator needs.
+   */
+  off_policy_value: number | null;
+}
+
+/** One rule scored against days where the condition was planted or withheld. */
+export interface RuleAccuracy {
+  rule_id: string;
+  positives: number;
+  negatives: number;
+  true_positives: number;
+  false_positives: number;
+  false_negatives: number;
+  true_negatives: number;
+  gated: number;
+  errors: string[];
+  precision: number | null;
+  recall: number | null;
+  f1: number | null;
+}
+
+export interface SimulationReport {
+  seed: number;
+  rules: number;
+  true_positives: number;
+  false_positives: number;
+  false_negatives: number;
+  true_negatives: number;
+  precision: number | null;
+  recall: number | null;
+  gated: number;
+  errors: string[];
+  per_rule: Record<string, RuleAccuracy>;
+  /** Detection rate keyed by how many sigma the planted deviation was. */
+  sensitivity: Record<string, Record<string, number>>;
+}
+
+export interface EvaluationReport {
+  k: number;
+  days_evaluated: number;
+  labelled_cards: number;
+  relevant_cards: number;
+  beats_random: boolean | null;
+  ranker_helps: boolean | null;
+  strategies: Record<string, RankingMetrics>;
+  support: {
+    identified: boolean;
+    reason: string;
+    cards_with_propensity: number;
+    explored_cards: number;
+  };
+}
+
+export interface RuleHealthReport {
+  user_id: string;
+  since: string | null;
+  overall_acceptance: number | null;
+  overall_judged: number;
+  overall_fired: number;
+  muted_count: number;
+  rules: RuleHealth[];
+}
+
+/** Per-rule fire rate, acceptance, PPV and time-to-action. Worst rules first. */
+export const getRuleHealth = async (since?: string): Promise<RuleHealthReport> => {
+  const queryParams = new URLSearchParams();
+  queryParams.append('user_id', 'local_user');
+  if (since) queryParams.append('since', since);
+  return fetchJson(`${API_BASE}/api/v1/recommendations/rules/health?${queryParams.toString()}`);
+};
+
+/**
+ * Switch a rule off, or back on.
+ *
+ * Takes effect at generation: a muted rule stops producing cards rather than
+ * having its cards hidden. Cards it produced before are kept — the record of
+ * a rule doing badly is what justifies muting it.
+ */
+export const setRuleMuted = async (
+  ruleId: string,
+  muted: boolean,
+): Promise<{ rule_id: string; muted: boolean }> => {
+  const queryParams = new URLSearchParams({ user_id: 'local_user' });
+  return fetchJson(
+    `${API_BASE}/api/v1/recommendations/rules/${ruleId}/mute?${queryParams.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ muted }),
+    },
+  );
+};
+
+/** Run a rule silently: evaluated on real data, its output recorded, never shown. */
+export const setRuleShadow = async (
+  ruleId: string,
+  shadow: boolean,
+): Promise<{ rule_id: string; shadow: boolean }> => {
+  const queryParams = new URLSearchParams({ user_id: 'local_user' });
+  return fetchJson(
+    `${API_BASE}/api/v1/recommendations/rules/${ruleId}/shadow?${queryParams.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shadow }),
+    },
+  );
+};
+
+/** The scrutability controls and their current settings. */
+export const getRecommendationPreferences = async (): Promise<RecommendationPreferences> =>
+  fetchJson(`${API_BASE}/api/v1/recommendations/preferences?user_id=local_user`);
+
+/**
+ * Ignore recorded activity before `date` when computing baselines.
+ *
+ * Nothing is deleted — the activity stays in the timeline, only the baseline
+ * window moves. Passing null clears the epoch and restores every comparison.
+ */
+export const setBaselineEpoch = async (
+  date: string | null,
+): Promise<{ baseline_epoch: string | null }> =>
+  fetchJson(
+    `${API_BASE}/api/v1/recommendations/preferences/baseline-epoch?user_id=local_user`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date }),
+    },
+  );
+
+/** How far from usual a day must be before the engine mentions it. */
+export const setSensitivity = async (
+  value: number,
+): Promise<{ sensitivity: number }> =>
+  fetchJson(
+    `${API_BASE}/api/v1/recommendations/preferences/sensitivity?user_id=local_user`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value }),
+    },
+  );
+
+/** Offline evaluation of the ordering against its own ablations. */
+export const getEvaluation = async (k = 3): Promise<EvaluationReport> =>
+  fetchJson(
+    `${API_BASE}/api/v1/recommendations/evaluation?user_id=local_user&k=${k}`,
+  );
+
+/**
+ * Rule accuracy against synthetic days with planted conditions.
+ *
+ * The only measurement here that is precision and recall in the ordinary
+ * sense: the condition is put into the features on purpose, so the right
+ * answer is known before the rule runs.
+ */
+export const getSimulation = async (seed = 0): Promise<SimulationReport> =>
+  fetchJson(`${API_BASE}/api/v1/recommendations/simulation?seed=${seed}`);
+
 /** Record Applied / Not relevant / Snoozed. This is the ranker's training set. */
 export const sendRecommendationFeedback = async (
   recommendationId: string,
