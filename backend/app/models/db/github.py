@@ -8,6 +8,8 @@ class GitHubConnectionRecord(Base):
 
     id = Column(Integer, primary_key=True)
     user_id = Column(String, unique=True, index=True, nullable=False)
+    installation_account_login = Column(String, nullable=True)
+    installation_account_type = Column(String, nullable=True)
     github_login = Column(String, nullable=True)
     installation_id = Column(Integer, unique=True, index=True, nullable=True)
     selected_owner = Column(String, nullable=True)

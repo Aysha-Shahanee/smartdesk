@@ -49,13 +49,29 @@ def connect(service: GitHubIntegrationService = Depends(get_service)):
 def callback(installation_id: int = Query(...), state: str = Query(...),
              service: GitHubIntegrationService = Depends(get_service)):
     try:
-        service.complete_installation(installation_id, state)
-        if settings.SMARTDESK_FRONTEND_URL:
-            frontend = settings.SMARTDESK_FRONTEND_URL.rstrip("/")
-            return RedirectResponse(url=f"{frontend}/#/settings?github=connected", status_code=303)
-        return RedirectResponse(url="/api/v1/integrations/github/setup?connected=1", status_code=303)
+        result = service.complete_installation(installation_id, state)
+        if result.get("user_authorization_url"):
+            return RedirectResponse(url=result["user_authorization_url"], status_code=303)
+        return _frontend_github_redirect("connected")
     except Exception as exc:
         translate_error(exc)
+
+
+@router.get("/user-callback")
+def user_callback(code: str = Query(...), state: str = Query(...),
+                  service: GitHubIntegrationService = Depends(get_service)):
+    try:
+        service.complete_user_authorization(code, state)
+        return _frontend_github_redirect("connected")
+    except Exception as exc:
+        translate_error(exc)
+
+
+def _frontend_github_redirect(result: str):
+    if settings.SMARTDESK_FRONTEND_URL:
+        frontend = settings.SMARTDESK_FRONTEND_URL.rstrip("/")
+        return RedirectResponse(url=f"{frontend}/#/settings?github={result}", status_code=303)
+    return RedirectResponse(url=f"/api/v1/integrations/github/setup?{result}=1", status_code=303)
 
 
 @router.get("/projects")

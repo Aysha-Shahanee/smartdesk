@@ -7,8 +7,10 @@ const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
 
 export interface GitHubConnectionStatus {
   user_id: string;
-  connection_status: 'connected' | 'disconnected';
+  connection_status: 'connected' | 'disconnected' | 'pending_user_authorization' | 'reauthorization_required';
   github_login?: string;
+  installation_account_login?: string;
+  installation_account_type?: 'User' | 'Organization';
   selected_project_id?: string;
   selected_project_number?: number;
   selected_project_title?: string;

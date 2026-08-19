@@ -20,8 +20,9 @@ class GitHubIntegrationRepository:
     def get_connection_by_project(self, project_id: str) -> Optional[GitHubConnectionRecord]:
         return self.db.query(GitHubConnectionRecord).filter_by(selected_project_id=project_id).first()
 
-    def connect(self, user_id: str, github_login: str,
-                installation_id: int) -> GitHubConnectionRecord:
+    def connect(self, user_id: str, github_login: str, installation_id: int,
+                installation_account_login: str | None = None,
+                installation_account_type: str | None = None) -> GitHubConnectionRecord:
         row = self.get_connection(user_id)
         now = utc_now()
         if row is None:
@@ -29,8 +30,38 @@ class GitHubIntegrationRepository:
             self.db.add(row)
         row.github_login = github_login
         row.installation_id = installation_id
+        row.installation_account_login = installation_account_login or github_login
+        row.installation_account_type = installation_account_type
         row.connection_status = "connected"
         row.updated_at = now
+        self.db.commit()
+        self.db.refresh(row)
+        return row
+
+    def stage_organization_installation(self, user_id: str, installation_id: int,
+                                        account_login: str, account_type: str) -> GitHubConnectionRecord:
+        row = self.get_connection(user_id)
+        now = utc_now()
+        if row is None:
+            row = GitHubConnectionRecord(user_id=user_id, created_at=now)
+            self.db.add(row)
+        row.installation_id = installation_id
+        row.installation_account_login = account_login
+        row.installation_account_type = account_type
+        row.github_login = None
+        row.connection_status = "pending_user_authorization"
+        row.updated_at = now
+        self.db.commit()
+        self.db.refresh(row)
+        return row
+
+    def complete_user_authorization(self, user_id: str, github_login: str) -> GitHubConnectionRecord:
+        row = self.get_connection(user_id)
+        if row is None or row.connection_status != "pending_user_authorization" or not row.installation_id:
+            raise ValueError("No organization installation is awaiting user authorization")
+        row.github_login = github_login
+        row.connection_status = "connected"
+        row.updated_at = utc_now()
         self.db.commit()
         self.db.refresh(row)
         return row
