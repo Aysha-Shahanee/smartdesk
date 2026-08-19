@@ -12,11 +12,14 @@ from app.repositories.github_integration_repository import GitHubIntegrationRepo
 from app.services.github_prediction_service import GitHubPredictionService
 from github_data_collection import (
     build_installation_url,
+    build_user_authorization_url,
     create_app_jwt,
     create_installation_token,
     discover_projects,
+    exchange_user_code,
     get_event_identity,
     get_installation,
+    get_authenticated_user,
     get_status_mapping,
     get_status_options,
     handle_github_webhook_event,
@@ -59,6 +62,8 @@ class GitHubIntegrationService:
         return {
             "user_id": row.user_id,
             "github_login": row.github_login,
+            "installation_account_login": row.installation_account_login,
+            "installation_account_type": row.installation_account_type,
             "installation_id": row.installation_id,
             "connection_status": status,
             "selected_owner": row.selected_owner,
@@ -69,9 +74,60 @@ class GitHubIntegrationService:
 
     def begin_installation(self, user_id: str) -> str:
         self._require_app_config()
+        row = self.repository.get_connection(user_id)
+        if (
+            row is not None
+            and row.connection_status in {
+                "reauthorization_required", "pending_user_authorization"
+            }
+            and row.installation_id
+        ):
+            installation = get_installation(self._app_jwt(), row.installation_id)
+            account = installation.get("account") or {}
+            account_login = account.get("login")
+            account_type = account.get("type")
+            if account_type == "Organization" and account_login:
+                if (
+                    row.installation_account_login
+                    and row.installation_account_login.casefold() != account_login.casefold()
+                ):
+                    raise RuntimeError(
+                        "Preserved GitHub installation account does not match GitHub"
+                    )
+                return self._begin_organization_user_authorization(
+                    user_id, row.installation_id, account_login, account_type
+                )
+
         state = secrets.token_urlsafe(32)
         self.repository.create_state(user_id, self._state_hash(state))
         return build_installation_url(settings.SMARTDESK_GITHUB_APP_SLUG, state)
+
+    @staticmethod
+    def _require_user_oauth_config() -> None:
+        if not all((
+            settings.SMARTDESK_GITHUB_OAUTH_CLIENT_ID,
+            settings.SMARTDESK_GITHUB_OAUTH_CLIENT_SECRET,
+            settings.SMARTDESK_GITHUB_USER_CALLBACK_URL,
+        )):
+            raise RuntimeError(
+                "GitHub user OAuth configuration is required for organization installations"
+            )
+
+    def _begin_organization_user_authorization(
+        self, user_id: str, installation_id: int,
+        account_login: str, account_type: str,
+    ) -> str:
+        self._require_user_oauth_config()
+        self.repository.stage_organization_installation(
+            user_id, installation_id, account_login, account_type
+        )
+        oauth_state = secrets.token_urlsafe(32)
+        self.repository.create_state(user_id, self._state_hash(oauth_state))
+        return build_user_authorization_url(
+            settings.SMARTDESK_GITHUB_OAUTH_CLIENT_ID,
+            settings.SMARTDESK_GITHUB_USER_CALLBACK_URL,
+            oauth_state,
+        )
 
     def complete_installation(self, installation_id: int, state: str) -> dict:
         self._require_app_config()
@@ -79,15 +135,50 @@ class GitHubIntegrationService:
             raise ValueError("Installation ID and state are required")
         user_id = self.repository.consume_state(self._state_hash(state))
         installation = get_installation(self._app_jwt(), installation_id)
-        login = (installation.get("account") or {}).get("login")
-        if not login:
+        account = installation.get("account") or {}
+        account_login = account.get("login")
+        account_type = account.get("type")
+        if not account_login or account_type not in {"User", "Organization"}:
             raise RuntimeError("GitHub installation has no account identity")
-        row = self.repository.connect(user_id, login, installation_id)
-        return self.connection_status(row.user_id)
+        if account_type == "User":
+            row = self.repository.connect(
+                user_id, account_login, installation_id,
+                installation_account_login=account_login,
+                installation_account_type=account_type,
+            )
+            return {**self.connection_status(row.user_id), "user_authorization_url": None}
+
+        user_authorization_url = self._begin_organization_user_authorization(
+            user_id, installation_id, account_login, account_type
+        )
+        return {
+            **self.connection_status(user_id),
+            "user_authorization_url": user_authorization_url,
+        }
+
+    def complete_user_authorization(self, code: str, state: str) -> dict:
+        self._require_user_oauth_config()
+        if not code or not state:
+            raise ValueError("GitHub user authorization code and state are required")
+        user_id = self.repository.consume_state(self._state_hash(state))
+        row = self.repository.get_connection(user_id)
+        if row is None or row.connection_status != "pending_user_authorization":
+            raise ValueError("No organization installation is awaiting user authorization")
+        user_token = exchange_user_code(
+            settings.SMARTDESK_GITHUB_OAUTH_CLIENT_ID,
+            settings.SMARTDESK_GITHUB_OAUTH_CLIENT_SECRET,
+            code,
+            settings.SMARTDESK_GITHUB_USER_CALLBACK_URL,
+        )
+        login = get_authenticated_user(user_token).get("login")
+        if not login:
+            raise RuntimeError("GitHub user authorization returned no login")
+        self.repository.complete_user_authorization(user_id, login)
+        return self.connection_status(user_id)
 
     def _token(self, user_id: str) -> str:
         row = self.repository.get_connection(user_id)
-        if row is None or row.connection_status != "connected" or not row.installation_id:
+        if row is None or row.connection_status != "connected" or not row.installation_id or not row.github_login:
             raise PermissionError("GitHub App is not installed for this SmartDesk user")
         return create_installation_token(self._app_jwt(), row.installation_id)
 
@@ -95,7 +186,7 @@ class GitHubIntegrationService:
         row = self.repository.get_connection(user_id)
         if row is None or not row.github_login:
             raise PermissionError("GitHub App is not installed for this SmartDesk user")
-        return discover_projects(self._token(user_id), row.github_login)
+        return discover_projects(self._token(user_id), row.installation_account_login)
 
     def select_project(self, user_id: str, selection) -> dict:
         accessible = self.projects(user_id)

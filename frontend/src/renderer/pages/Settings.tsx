@@ -683,8 +683,12 @@ const Settings: React.FC = () => {
                   : githubStatusUnavailable
                     ? 'Connection unavailable'
                     : github?.connection_status === 'connected'
-                      ? `Connected to ${github.github_login}`
-                      : 'Not connected'}
+                      ? `Connected as ${github.github_login}`
+                      : github?.connection_status === 'reauthorization_required'
+                        ? 'Reconnect to verify your GitHub user'
+                        : github?.connection_status === 'pending_user_authorization'
+                          ? 'Waiting for GitHub user authorization'
+                          : 'Not connected'}
               </span>
               {github?.selected_project_title && (
                 <span className="integration-detail">Selected project: {github.selected_project_title}</span>
