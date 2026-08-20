@@ -348,8 +348,14 @@ class DashboardService:
             "configured": cal_status["configured"],
             "connected": cal_status["connected"],
             "last_sync": cal_status["last_sync"],
+            "needs_reconnect": cal_status.get("needs_reconnect", False),
+            "last_error": cal_status.get("last_error"),
+            # A token that Google no longer honours must not read as "ok" just
+            # because a successful sync happened before it expired — that is
+            # precisely how the last outage stayed invisible on this page.
             "status": (
-                "ok" if cal_status["connected"] and cal_status["last_sync"]
+                "needs_reconnect" if cal_status.get("needs_reconnect")
+                else "ok" if cal_status["connected"] and cal_status["last_sync"]
                 else "not_connected" if not cal_status["connected"]
                 else "no_data"
             ),

@@ -138,21 +138,19 @@ def build_sections(facts: ReportFacts) -> list[Section]:
             key="watch", heading="Also worth knowing", body=[], items=insights[:4]
         ))
 
-    # 7 — The plan.
-    planning = facts.findings.get("planning", [])
-    if planning:
-        sections.append(Section(
-            key="plan",
-            heading="For next time",
-            body=[],
-            items=planning[:3],
-        ))
-
-    # 8 — How solid this is. Printed every time, not only when something is
-    # wrong: a reader cannot judge a number without knowing what backs it.
-    sections.append(Section(
-        key="quality", heading="How solid this is", body=_quality(facts)
-    ))
+    # A report says what happened. It used to end with two more sections:
+    #
+    #   7 "For next time"    — the `planning` findings, which the Recommendations
+    #                          tab already surfaces, live and with their own
+    #                          feedback controls. Printing them here duplicated
+    #                          that surface and turned a record into advice.
+    #   8 "How solid this is" — history depth and hygiene caveats. Data-quality
+    #                          problems now have somewhere better to be: calendar
+    #                          health sits in Settings, and the hygiene rules
+    #                          still fire on the Recommendations tab.
+    #
+    # Both are dropped here rather than hidden in the UI, so the markdown and
+    # PDF exports say exactly what the screen says.
     return sections
 
 
@@ -230,19 +228,11 @@ def _focus_profile(facts: ReportFacts) -> list[str]:
     return lines
 
 
-def _quality(facts: ReportFacts) -> list[str]:
-    lines = [
-        f"Comparisons draw on {facts.days_of_history} days of recorded "
-        f"activity. Anything needing more history than that is suppressed "
-        f"rather than estimated."
-    ]
-    if facts.days_of_history < 10:
-        lines.append(
-            "Below about 10 days the personal percentiles are not yet stable, "
-            "so most comparative statements are being withheld."
-        )
-    lines.extend(facts.data_notes)
-    return lines
+# _quality() lived here and rendered the "How solid this is" section. Removed
+# with the section itself. ReportFacts.data_notes is still populated by
+# _load_findings — it is the hygiene caveat list, and leaving it on the facts
+# object keeps it available to anything that wants to reinstate a caveats
+# surface without re-deriving it.
 
 
 def render_markdown(facts: ReportFacts, sections: list[Section]) -> str:
@@ -256,16 +246,27 @@ def render_markdown(facts: ReportFacts, sections: list[Section]) -> str:
     ]
 
     if facts.metrics:
-        out.append("| Metric | Value | Your usual |")
-        out.append("| --- | ---: | ---: |")
+        # The "Your usual" column is dropped entirely when nothing fills it —
+        # the monthly scope carries no comparisons, and a column of em-dashes
+        # implies a missing value rather than one that was never defined.
+        any_baseline = any(m.baseline is not None for m in facts.metrics)
+        if any_baseline:
+            out.append("| Metric | Value | Your usual |")
+            out.append("| --- | ---: | ---: |")
+        else:
+            out.append("| Metric | Value |")
+            out.append("| --- | ---: |")
         for metric in facts.metrics:
-            usual = (
-                _format_metric(
-                    Metric(metric.key, metric.label, metric.baseline, metric.unit)
+            row = f"| {metric.label} | {_format_metric(metric)} |"
+            if any_baseline:
+                usual = (
+                    _format_metric(
+                        Metric(metric.key, metric.label, metric.baseline, metric.unit)
+                    )
+                    if metric.baseline is not None else "—"
                 )
-                if metric.baseline is not None else "—"
-            )
-            out.append(f"| {metric.label} | {_format_metric(metric)} | {usual} |")
+                row += f" {usual} |"
+            out.append(row)
         out.append("")
 
     for section in sections:
@@ -304,19 +305,26 @@ def render_html(facts: ReportFacts, sections: list[Section]) -> str:
     viewer's theme, because this exists to become a PDF and a dark PDF is a
     waste of toner and unreadable when printed.
     """
+    # Same rule as the markdown table: no "Your usual" column at all when no
+    # metric in this scope has a baseline, rather than a column of em-dashes.
+    any_baseline = any(m.baseline is not None for m in facts.metrics)
+    usual_header = '<th class="n">Your usual</th>' if any_baseline else ""
+
     rows = []
     for metric in facts.metrics:
-        usual = (
-            _format_metric(
-                Metric(metric.key, metric.label, metric.baseline, metric.unit)
-            )
-            if metric.baseline is not None else "&mdash;"
-        )
-        rows.append(
+        cells = (
             f"<tr><td>{_escape(metric.label)}</td>"
             f"<td class='n'>{_escape(_format_metric(metric))}</td>"
-            f"<td class='n muted'>{usual}</td></tr>"
         )
+        if any_baseline:
+            usual = (
+                _format_metric(
+                    Metric(metric.key, metric.label, metric.baseline, metric.unit)
+                )
+                if metric.baseline is not None else "&mdash;"
+            )
+            cells += f"<td class='n muted'>{usual}</td>"
+        rows.append(cells + "</tr>")
 
     body = []
     for section in sections:
@@ -371,7 +379,7 @@ def render_html(facts: ReportFacts, sections: list[Section]) -> str:
     {facts.days_of_history} days of history</div>
 </header>
 <table><thead><tr><th>Metric</th><th class="n">Value</th>
-<th class="n">Your usual</th></tr></thead><tbody>{"".join(rows)}</tbody></table>
+{usual_header}</tr></thead><tbody>{"".join(rows)}</tbody></table>
 {"".join(body)}
 </body></html>
 """
