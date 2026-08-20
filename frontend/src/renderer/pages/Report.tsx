@@ -215,7 +215,6 @@ const NarrativePanel: React.FC<{ report: NarrativeReport | null; loading: boolea
                     <span className="narrative-finding-tag">Do this</span>
                     {item.action}
                   </p>
-                  <p className="narrative-finding-src">{item.based_on} • {item.rule_id}</p>
                 </article>
               ))}
             </div>

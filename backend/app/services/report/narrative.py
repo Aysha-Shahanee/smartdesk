@@ -279,7 +279,6 @@ def render_markdown(facts: ReportFacts, sections: list[Section]) -> str:
             out.append(f"**{item['title']}**  ")
             out.append(f"{item['why']}  ")
             out.append(f"*{item['action']}*  ")
-            out.append(f"<sub>{item['based_on']} · {item['rule_id']}</sub>")
             out.append("")
 
     return "\n".join(out).rstrip() + "\n"
@@ -337,8 +336,6 @@ def render_html(facts: ReportFacts, sections: list[Section]) -> str:
                 f"<strong>{_escape(item['title'])}</strong>"
                 f"<p>{_escape(item['why'])}</p>"
                 f"<p class='action'>{_escape(item['action'])}</p>"
-                f"<p class='src'>{_escape(item['based_on'])} &middot; "
-                f"{_escape(item['rule_id'])}</p>"
                 "</div>"
             )
 
@@ -369,7 +366,6 @@ def render_html(facts: ReportFacts, sections: list[Section]) -> str:
               margin: 0 0 14px; page-break-inside: avoid; }}
   .finding strong {{ display: block; margin-bottom: 4px; }}
   .action {{ font-style: italic; color: #3c4552; }}
-  .src {{ font-family: Consolas, monospace; font-size: 8pt; color: #858d9a; }}
 </style></head>
 <body>
 <header>
