@@ -258,8 +258,10 @@ def _daily_facts(
         _metric("fragmentation", "Activities per hour", ctx.num("frag_index"),
                 "count", ctx.get("baseline.frag_index.p50"),
                 higher_is_better=False),
-        _metric("idle", "Idle time", ctx.num("idle_min"), "min", None,
-                higher_is_better=False),
+        # No idle tile. Idle is the absence of the thing the report is about,
+        # and it was the only metric here that was not a statement about the
+        # work. DY-13 still raises an unusually idle day on the Recommendations
+        # tab, where "this is off for you" is the actual point.
     ]
 
     mix = ctx.get("category_mix") or {}
@@ -309,15 +311,22 @@ def _weekly_facts(
         return facts
 
     day_count = max(ctx.num("week_day_count"), 1.0)
+    # Week-scoped baselines: the median of this user's previous whole weeks,
+    # from periods.weekly_baseline(). Absent until three complete weeks have
+    # been recorded, in which case these read as plain totals.
     facts.metrics = [
-        _metric("active", "Active time", ctx.num("week_active_min"), "min"),
-        _metric("deep", "Deep work", ctx.num("week_deep_min"), "min"),
-        _metric("active_days", "Active days", ctx.num("week_active_days"), "count"),
+        _metric("active", "Active time", ctx.num("week_active_min"), "min",
+                ctx.get("baseline.week_active_min.p50")),
+        _metric("deep", "Deep work", ctx.num("week_deep_min"), "min",
+                ctx.get("baseline.week_deep_min.p50")),
+        _metric("active_days", "Active days", ctx.num("week_active_days"),
+                "count", ctx.get("baseline.week_active_days.p50")),
         _metric("daily_average", "Daily average",
                 ctx.num("week_active_min") / day_count, "min",
                 ctx.get("baseline.daily_active_min.p50")),
         _metric("late_nights", "Sessions past midnight",
-                ctx.num("late_night_count"), "count", None,
+                ctx.num("late_night_count"), "count",
+                ctx.get("baseline.late_night_count.p50"),
                 higher_is_better=False),
     ]
 
@@ -373,18 +382,27 @@ def _monthly_facts(
         return facts
 
     active_days = max(ctx.num("month_active_days"), 1.0)
+    # No comparisons at this scope, by choice.
+    #
+    # Nothing here can be held against a like-for-like norm. A 30-day total is
+    # a single sample, so no baseline for it can exist; the daily average would
+    # have to borrow the *daily* median, and the typical-day figure the previous
+    # 30-day window — two different kinds of comparison sitting in one row of
+    # tiles, next to three that carry none at all. That mixture reads as a bug
+    # rather than as a distinction. The month reports what happened; the daily
+    # and weekly scopes, whose units do have comparable history, do the
+    # comparing.
     facts.metrics = [
         _metric("active", "Active time", ctx.num("month_active_min"), "min"),
         _metric("deep", "Deep work", ctx.num("month_deep_min"), "min"),
         _metric("active_days", "Active days", ctx.num("month_active_days"), "count"),
         _metric("daily_average", "Daily average",
-                ctx.num("month_active_min") / active_days, "min",
-                ctx.get("baseline.daily_active_min.p50")),
+                ctx.num("month_active_min") / active_days, "min"),
     ]
     if "mo_deep_now" in ctx:
         facts.metrics.append(
             _metric("deep_median", "Deep work on a typical day",
-                    ctx.num("mo_deep_now"), "min", ctx.get("mo_deep_prev"))
+                    ctx.num("mo_deep_now"), "min")
         )
 
     days = _days_in_period(ctx, start, end)

@@ -263,6 +263,62 @@ export const getCalendarEvents = async (from?: string, to?: string) => {
 };
 
 /* ---------------------------------------------------------- */
+/* Google Calendar connection                                  */
+/* ---------------------------------------------------------- */
+
+const CALENDAR_API = `${API_BASE}/api/v1/calendar`;
+
+/**
+ * `state` is the one field the UI should branch on.
+ *
+ * - `not_configured` — no OAuth client on this machine; connecting is impossible.
+ * - `disconnected`   — nobody has consented, or the user switched it off.
+ * - `needs_reconnect`— a token exists but Google rejects it. Only re-consent fixes it.
+ * - `degraded`       — connected and retrying after a transient failure.
+ * - `collecting`     — syncing normally.
+ */
+export type CalendarState =
+  | 'not_configured'
+  | 'disconnected'
+  | 'needs_reconnect'
+  | 'degraded'
+  | 'collecting';
+
+export interface CalendarStatus {
+  configured: boolean;
+  connected: boolean;
+  last_sync?: string | null;
+  event_count: number;
+  state: CalendarState;
+  collecting: boolean;
+  needs_reconnect: boolean;
+  reconnect_reason?: string | null;
+  last_error?: string | null;
+  last_error_at?: string | null;
+  last_attempt_at?: string | null;
+  consecutive_failures: number;
+  connected_at?: string | null;
+  sync_interval_min: number;
+  last_sync_stats?: Record<string, number> | null;
+  stale_hours?: number | null;
+}
+
+const calendarQuery = () => new URLSearchParams({ user_id: 'local_user' }).toString();
+
+export const getCalendarStatus = (): Promise<CalendarStatus> =>
+  fetchJson(`${CALENDAR_API}/status?${calendarQuery()}`);
+
+/** Returns the Google consent URL; the caller opens it in the system browser. */
+export const beginCalendarConnection = (): Promise<{ auth_url: string }> =>
+  fetchJson(`${CALENDAR_API}/connect/url?${calendarQuery()}`);
+
+export const syncCalendarNow = (): Promise<Record<string, number>> =>
+  fetchJson(`${CALENDAR_API}/sync?${calendarQuery()}`, { method: 'POST' });
+
+export const disconnectCalendar = (): Promise<CalendarStatus> =>
+  fetchJson(`${CALENDAR_API}/disconnect?${calendarQuery()}`, { method: 'POST' });
+
+/* ---------------------------------------------------------- */
 /* Emotion detection                                           */
 /* ---------------------------------------------------------- */
 

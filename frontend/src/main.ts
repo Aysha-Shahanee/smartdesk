@@ -355,6 +355,19 @@ app.whenReady().then(() => {
     }
     await shell.openExternal(url.toString())
   })
+
+  /* Google spreads the consent flow across two hosts depending on the account
+     state, so both are allowed — and nothing else is. The URL comes from our
+     own backend, but this handler is reachable from any renderer code, so it
+     validates rather than trusts. */
+  ipcMain.handle('open-calendar-external', async (_event, rawUrl: string) => {
+    const url = new URL(rawUrl)
+    const allowed = ['accounts.google.com', 'accounts.youtube.com']
+    if (url.protocol !== 'https:' || !allowed.includes(url.hostname)) {
+      throw new Error('Only the Google consent screen may be opened externally')
+    }
+    await shell.openExternal(url.toString())
+  })
   createWindow()
   if (Notification.isSupported()) {
     setInterval(() => { void pollRecommendations() }, POLL_MS)

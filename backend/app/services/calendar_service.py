@@ -26,6 +26,7 @@ import os
 import secrets
 from datetime import datetime
 from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,29 @@ SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 # oauthlib raises "Scope has changed" and the callback 500s.
 os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
+#: Refresh the access token this long before it actually expires. Waiting for
+#: ``creds.expired`` means every sync that lands in the last seconds of a token's
+#: life fails on a race it did not need to run.
+REFRESH_SKEW = timedelta(minutes=10)
+
+#: Substrings Google uses when the *refresh* token itself is dead. These are the
+#: only failures that genuinely require the user to consent again; everything
+#: else (DNS, proxy, 5xx from the token endpoint) is transient and must not cost
+#: the user their connection. Before this split, one offline moment ran
+#: ``disconnect()`` and silently ended collection until somebody noticed.
+FATAL_REFRESH_MARKERS = (
+    "invalid_grant",
+    "token has been expired or revoked",
+    "account has been deleted",
+    "invalid_client",
+    "unauthorized_client",
+)
+
+#: Consecutive transient refresh failures tolerated before the connection is
+#: flagged for reconnect anyway. Stops an unrecognised permanent error from
+#: retrying forever with nothing shown in the UI.
+MAX_TRANSIENT_REFRESH_FAILURES = 8
+
 
 def _store_dir() -> Path:
     path = Path(settings.CALENDAR_STORE_DIR)
@@ -65,6 +89,16 @@ def _oauth_state_file() -> Path:
 
 def _sync_state_file() -> Path:
     return _store_dir() / "sync_state.json"
+
+
+def _conn_state_file() -> Path:
+    """Connection health, kept apart from sync_state.
+
+    sync_state holds Google's nextSyncToken and is wiped on every reconnect and
+    on a 410. Health has to outlive that: the whole point is to still be able to
+    say *why* the calendar stopped after the token was thrown away.
+    """
+    return _store_dir() / "connection_state.json"
 
 
 def _read_json(path: Path) -> dict:
@@ -86,6 +120,21 @@ class CalendarNotConfiguredError(Exception):
 
 class CalendarNotConnectedError(Exception):
     """The user has not completed the OAuth consent flow yet."""
+
+
+class CalendarReconnectRequiredError(CalendarNotConnectedError):
+    """The stored token is dead — only a fresh consent can fix it.
+
+    Subclasses CalendarNotConnectedError so the existing 409 handling in the
+    routes keeps working unchanged.
+    """
+
+
+class CalendarSyncTransientError(Exception):
+    """A sync failed for a reason that is likely to fix itself (network, 5xx).
+
+    The caller should retry later and must *not* treat the connection as lost.
+    """
 
 
 class CalendarService:
@@ -176,21 +225,124 @@ class CalendarService:
             flow.code_verifier = entry["code_verifier"]
         flow.fetch_token(code=code)
 
-        _token_file(user_id).write_text(flow.credentials.to_json(), encoding="utf-8")
-        # New consent — start from a clean sync window.
+        credentials = flow.credentials
+        _token_file(user_id).write_text(credentials.to_json(), encoding="utf-8")
+        # New consent — start from a clean sync window and a clean health record,
+        # so a previous expiry does not keep the UI showing "needs reconnect".
         self._clear_sync_state(user_id)
+        self._clear_conn_state(user_id)
+        expiry = getattr(credentials, "expiry", None)
+        self._update_conn_state(
+            user_id,
+            connected_at=local_now_iso(),
+            needs_reconnect=False,
+            consecutive_failures=0,
+            has_refresh_token=bool(credentials.refresh_token),
+            token_expiry=expiry.isoformat() if expiry else None,
+        )
+        if not credentials.refresh_token:
+            # Without one, collection dies the moment the access token lapses
+            # (~1 h) and no amount of retrying brings it back.
+            logger.warning(
+                "Google returned no refresh token for %s — collection will stop "
+                "when the access token expires. Revoke the app at "
+                "myaccount.google.com/permissions and connect again.",
+                user_id,
+            )
         logger.info("Google Calendar connected for user %s.", user_id)
         return user_id
 
     def is_connected(self, user_id: str) -> bool:
         return _token_file(user_id).exists()
 
+    def needs_reconnect(self, user_id: str) -> bool:
+        """True when a token exists but Google will no longer honour it."""
+        return bool(self._conn_state(user_id).get("needs_reconnect"))
+
+    def is_collecting(self, user_id: str) -> bool:
+        """The single question the UI toggle asks: is data actually coming in?"""
+        return (
+            self.is_configured()
+            and self.is_connected(user_id)
+            and not self.needs_reconnect(user_id)
+        )
+
     def disconnect(self, user_id: str) -> None:
         _token_file(user_id).unlink(missing_ok=True)
         self._clear_sync_state(user_id)
+        self._clear_conn_state(user_id)
+
+    # ------------------------------------------------------------------ #
+    # Connection health                                                    #
+    # ------------------------------------------------------------------ #
+
+    def _conn_state(self, user_id: str) -> dict[str, Any]:
+        return _read_json(_conn_state_file()).get(user_id, {})
+
+    def _update_conn_state(self, user_id: str, **fields: Any) -> dict[str, Any]:
+        state = _read_json(_conn_state_file())
+        entry = state.get(user_id, {})
+        entry.update(fields)
+        state[user_id] = entry
+        _write_json(_conn_state_file(), state)
+        return entry
+
+    def _clear_conn_state(self, user_id: str) -> None:
+        state = _read_json(_conn_state_file())
+        state.pop(user_id, None)
+        _write_json(_conn_state_file(), state)
+
+    def _mark_reconnect_required(self, user_id: str, reason: str) -> None:
+        """Flag the connection dead without deleting the token.
+
+        Keeping the file is deliberate. ``disconnect()`` used to run here, which
+        erased the only evidence that the calendar had ever been connected — the
+        UI then showed a plain "Not connected", indistinguishable from a user who
+        never set it up, and the 15-minute job went back to skipping in silence.
+        """
+        self._update_conn_state(
+            user_id,
+            needs_reconnect=True,
+            reconnect_reason=reason,
+            last_error=reason,
+            last_error_at=local_now_iso(),
+        )
+        logger.warning(
+            "Google Calendar for %s needs reconnecting: %s", user_id, reason
+        )
+
+    def _mark_sync_success(self, user_id: str, stats: dict[str, Any]) -> None:
+        self._update_conn_state(
+            user_id,
+            last_success_at=local_now_iso(),
+            last_attempt_at=local_now_iso(),
+            consecutive_failures=0,
+            last_error=None,
+            last_error_at=None,
+            needs_reconnect=False,
+            reconnect_reason=None,
+            last_sync_stats={k: v for k, v in stats.items() if isinstance(v, int)},
+        )
+
+    def _mark_sync_failure(self, user_id: str, error: str) -> int:
+        failures = int(self._conn_state(user_id).get("consecutive_failures") or 0) + 1
+        self._update_conn_state(
+            user_id,
+            last_attempt_at=local_now_iso(),
+            consecutive_failures=failures,
+            last_error=error,
+            last_error_at=local_now_iso(),
+        )
+        return failures
+
+    @staticmethod
+    def _is_fatal_refresh_error(exc: Exception) -> bool:
+        blob = f"{exc} {getattr(exc, 'args', ())}".lower()
+        return any(marker in blob for marker in FATAL_REFRESH_MARKERS)
 
     def _load_credentials(self, user_id: str):
         from google.auth.exceptions import RefreshError
+        from google.auth.exceptions import TransportError
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
 
@@ -200,21 +352,65 @@ class CalendarService:
                 "Google Calendar is not connected. Use the Connect button first."
             )
 
+        if self.needs_reconnect(user_id):
+            raise CalendarReconnectRequiredError(
+                self._conn_state(user_id).get("reconnect_reason")
+                or "Google access expired. Click Connect again."
+            )
+
         creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-        if creds.expired and creds.refresh_token:
+
+        # Refresh ahead of expiry rather than after it, so a sync never spends
+        # its one attempt discovering the token died thirty seconds ago.
+        # google-auth stores ``expiry`` as a naive UTC datetime.
+        expiry = getattr(creds, "expiry", None)
+        utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
+        due = creds.expired or (
+            expiry is not None and expiry - REFRESH_SKEW <= utc_now
+        )
+        if due and creds.refresh_token:
             try:
                 creds.refresh(Request())
             except RefreshError as exc:
-                # Refresh token revoked or expired (7-day limit while the
-                # OAuth app is in "Testing" status). Drop the dead token so
-                # the dashboard shows "not connected" instead of failing
-                # silently on every sync.
-                logger.warning("Calendar token refresh failed (%s) — disconnecting.", exc)
-                self.disconnect(user_id)
-                raise CalendarNotConnectedError(
-                    "Google token expired or was revoked. Click Connect again."
+                if self._is_fatal_refresh_error(exc):
+                    # Google expires the refresh token after seven days while
+                    # the OAuth app sits in "Testing" publishing status. That is
+                    # a console setting, not something this code can outlast.
+                    self._mark_reconnect_required(
+                        user_id,
+                        "Google access expired or was revoked. Reconnect to "
+                        "resume collection. (Publishing the OAuth app to "
+                        "Production stops the 7-day expiry.)",
+                    )
+                    raise CalendarReconnectRequiredError(
+                        "Google access expired or was revoked. Click Connect again."
+                    ) from exc
+
+                failures = self._mark_sync_failure(user_id, f"Token refresh failed: {exc}")
+                if failures >= MAX_TRANSIENT_REFRESH_FAILURES:
+                    self._mark_reconnect_required(
+                        user_id,
+                        f"Token refresh has failed {failures} times in a row: {exc}",
+                    )
+                    raise CalendarReconnectRequiredError(str(exc)) from exc
+                raise CalendarSyncTransientError(
+                    f"Token refresh failed ({failures} in a row): {exc}"
                 ) from exc
+            except (TransportError, OSError) as exc:
+                # Offline, captive portal, proxy. The token is still perfectly
+                # good; only the network is not.
+                failures = self._mark_sync_failure(user_id, f"Network error: {exc}")
+                raise CalendarSyncTransientError(
+                    f"Could not reach Google ({failures} in a row): {exc}"
+                ) from exc
+
             token_path.write_text(creds.to_json(), encoding="utf-8")
+            new_expiry = getattr(creds, "expiry", None)
+            self._update_conn_state(
+                user_id,
+                token_expiry=new_expiry.isoformat() if new_expiry else None,
+                consecutive_failures=0,
+            )
         return creds
 
     # ------------------------------------------------------------------ #
@@ -222,7 +418,49 @@ class CalendarService:
     # ------------------------------------------------------------------ #
 
     def sync(self, user_id: str, db: Session) -> dict[str, Any]:
-        """Fetch events from Google and upsert them. Returns sync stats."""
+        """Fetch events from Google and upsert them. Returns sync stats.
+
+        Every outcome is recorded in connection_state.json so the Settings page
+        can say what happened. A failure here never silently ends collection:
+        either it is transient and the next tick retries, or it is fatal and the
+        connection is flagged ``needs_reconnect`` for the UI to surface.
+        """
+        import socket
+        import ssl
+
+        from googleapiclient.errors import HttpError
+
+        try:
+            stats = self._run_sync(user_id, db)
+        except (CalendarReconnectRequiredError, CalendarNotConnectedError,
+                CalendarNotConfiguredError, CalendarSyncTransientError):
+            raise
+        except HttpError as exc:
+            status_code = getattr(getattr(exc, "resp", None), "status", None)
+            if status_code in (401, 403):
+                self._mark_reconnect_required(
+                    user_id,
+                    f"Google rejected the stored access ({status_code}). Reconnect to resume.",
+                )
+                raise CalendarReconnectRequiredError(str(exc)) from exc
+            failures = self._mark_sync_failure(user_id, f"Google API error {status_code}: {exc}")
+            raise CalendarSyncTransientError(
+                f"Google API error {status_code} ({failures} in a row): {exc}"
+            ) from exc
+        except (socket.error, ssl.SSLError, TimeoutError, ConnectionError) as exc:
+            failures = self._mark_sync_failure(user_id, f"Network error: {exc}")
+            raise CalendarSyncTransientError(
+                f"Could not reach Google ({failures} in a row): {exc}"
+            ) from exc
+        except Exception as exc:
+            failures = self._mark_sync_failure(user_id, f"{type(exc).__name__}: {exc}")
+            logger.exception("Calendar sync failed for %s (%d in a row).", user_id, failures)
+            raise
+
+        self._mark_sync_success(user_id, stats)
+        return stats
+
+    def _run_sync(self, user_id: str, db: Session) -> dict[str, Any]:
         from googleapiclient.discovery import build
         from googleapiclient.errors import HttpError
 
@@ -264,7 +502,7 @@ class CalendarService:
                     # Sync token expired — drop it and run a full re-sync.
                     logger.info("Calendar sync token expired; running full re-sync.")
                     self._clear_sync_state(user_id)
-                    return self.sync(user_id, db)
+                    return self._run_sync(user_id, db)
                 raise
 
             for item in response.get("items", []):
@@ -416,17 +654,64 @@ class CalendarService:
     # ------------------------------------------------------------------ #
 
     def status(self, user_id: str, db: Session) -> dict[str, Any]:
+        """Everything the Settings toggle and the health dashboard need.
+
+        ``configured``/``connected``/``last_sync``/``event_count`` keep their
+        original meaning — DashboardService.get_layer_health() reads them by
+        name — and the health fields are added alongside.
+        """
         sync_state = _read_json(_sync_state_file()).get(user_id, {})
+        conn = self._conn_state(user_id)
+        configured = self.is_configured()
+        connected = self.is_connected(user_id)
+        needs_reconnect = bool(conn.get("needs_reconnect"))
+
+        if not configured:
+            state = "not_configured"
+        elif not connected:
+            state = "disconnected"
+        elif needs_reconnect:
+            state = "needs_reconnect"
+        elif conn.get("consecutive_failures"):
+            state = "degraded"
+        else:
+            state = "collecting"
+
+        last_sync = sync_state.get("last_sync") or conn.get("last_success_at")
         return {
-            "configured": self.is_configured(),
-            "connected": self.is_connected(user_id),
-            "last_sync": sync_state.get("last_sync"),
+            "configured": configured,
+            "connected": connected,
+            "last_sync": last_sync,
             "event_count": (
                 db.query(CalendarEventRecord)
                 .filter(CalendarEventRecord.user_id == user_id)
                 .count()
             ),
+            # ---- health ----
+            "state": state,
+            "collecting": state in ("collecting", "degraded"),
+            "needs_reconnect": needs_reconnect,
+            "reconnect_reason": conn.get("reconnect_reason"),
+            "last_error": conn.get("last_error"),
+            "last_error_at": conn.get("last_error_at"),
+            "last_attempt_at": conn.get("last_attempt_at"),
+            "consecutive_failures": int(conn.get("consecutive_failures") or 0),
+            "connected_at": conn.get("connected_at"),
+            "sync_interval_min": settings.CALENDAR_SYNC_INTERVAL_MIN,
+            "last_sync_stats": conn.get("last_sync_stats"),
+            "stale_hours": self._stale_hours(last_sync),
         }
+
+    @staticmethod
+    def _stale_hours(last_sync: str | None) -> float | None:
+        if not last_sync:
+            return None
+        try:
+            return round(
+                (datetime.now(APP_TZ) - parse_iso(last_sync)).total_seconds() / 3600.0, 2
+            )
+        except (TypeError, ValueError):
+            return None
 
     def list_events(
         self, user_id: str, db: Session, from_iso: str | None, to_iso: str | None

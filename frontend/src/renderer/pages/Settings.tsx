@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  beginCalendarConnection,
   beginGitHubConnection,
+  CalendarStatus,
+  disconnectCalendar,
   disconnectGitHub,
+  getCalendarStatus,
   getGitHubProjects,
   getRecommendations,
   getGitHubStatus,
@@ -14,12 +18,15 @@ import {
   GitHubStatusOption,
   saveGitHubStatusMapping,
   selectGitHubProject,
+  syncCalendarNow,
 } from '../services/api';
 import './Settings.css';
 
+/* calendarAccess used to live here as a local boolean that defaulted to true
+   and controlled nothing. It now comes from the backend connection state, which
+   is the only thing that decides whether events are actually collected. */
 interface PrivacySettings {
   webcamEmotion: boolean;
-  calendarAccess: boolean;
   cloudSync: boolean;
 }
 
@@ -48,15 +55,17 @@ const Settings: React.FC = () => {
      their own. */
   const [privacy, setPrivacy] = useState<PrivacySettings>({
     webcamEmotion: false,
-    calendarAccess: true,
     cloudSync: false,
   });
   const [webcamBusy, setWebcamBusy] = useState(true);
   const [webcamError, setWebcamError] = useState('');
 
+  /* Google Calendar is no longer in this list: it had a hardcoded "Connected
+     (read-only)" label and a Disconnect button wired to nothing, which is how a
+     dead connection went unnoticed for eleven days. It has a real block below,
+     driven by /api/v1/calendar/status. */
   const [integrations] = useState<Integration[]>([
     { name: 'VS Code', status: 'Connected', icon: '💻', color: '#007ACC' },
-    { name: 'Google Calendar', status: 'Connected (read-only)', icon: '📅', color: '#94A3B8' },
   ]);
 
   const [github, setGithub] = useState<GitHubConnectionStatus | null>(null);
@@ -160,6 +169,198 @@ const Settings: React.FC = () => {
       setGithubBusy(false);
     }
   };
+
+  /* ---------------------------------------------------------------- */
+  /* Google Calendar                                                    */
+  /* ---------------------------------------------------------------- */
+
+  const [calendar, setCalendar] = useState<CalendarStatus | null>(null);
+  const [calendarBusy, setCalendarBusy] = useState(true);
+  const [calendarMessage, setCalendarMessage] = useState('');
+  const [calendarUnavailable, setCalendarUnavailable] = useState(false);
+  /* True from the moment the consent tab opens until the backend reports a
+     token. Consent happens in the system browser, so the app has no callback to
+     wait on — it polls, and this flag is what stops the polling. */
+  const [awaitingConsent, setAwaitingConsent] = useState(false);
+  /* Set only when the app could not open the browser itself, so the user can
+     still complete consent by hand. Empty the rest of the time. */
+  const [manualAuthUrl, setManualAuthUrl] = useState('');
+  const consentPoll = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const refreshCalendar = useCallback(async (): Promise<CalendarStatus | null> => {
+    try {
+      const status = await getCalendarStatus();
+      setCalendar(status);
+      setCalendarUnavailable(false);
+      return status;
+    } catch {
+      // Backend down or still starting. Say so rather than showing "off",
+      // which would read as "collection is disabled" and it is not.
+      setCalendarUnavailable(true);
+      return null;
+    } finally {
+      setCalendarBusy(false);
+    }
+  }, []);
+
+  useEffect(() => { void refreshCalendar(); }, [refreshCalendar]);
+
+  const stopConsentPoll = useCallback(() => {
+    if (consentPoll.current !== null) {
+      clearInterval(consentPoll.current);
+      consentPoll.current = null;
+    }
+    setAwaitingConsent(false);
+  }, []);
+
+  // Never leave an interval running behind a closed page.
+  useEffect(() => () => stopConsentPoll(), [stopConsentPoll]);
+
+  /**
+   * Hand the consent URL to a real browser.
+   *
+   * Returns false when the app could not open it itself, which happens when the
+   * Electron main process is older than this renderer: `ipcMain.handle` only
+   * registers at main-process startup, so a hot-reloaded renderer can call a
+   * channel that does not exist yet and get "No handler registered". The URL is
+   * still perfectly good, so the caller shows it instead of dead-ending.
+   */
+  const openConsentScreen = async (authUrl: string): Promise<boolean> => {
+    if (!window.electronAPI) {
+      // Plain browser (vite dev) — a normal tab is exactly right.
+      window.open(authUrl, '_blank', 'noopener');
+      return true;
+    }
+    if (!window.electronAPI.openCalendarExternal) return false;
+    try {
+      await window.electronAPI.openCalendarExternal(authUrl);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const connectCalendar = async () => {
+    setCalendarBusy(true);
+    setCalendarMessage('');
+    setManualAuthUrl('');
+    try {
+      const { auth_url } = await beginCalendarConnection();
+      const opened = await openConsentScreen(auth_url);
+      setAwaitingConsent(true);
+      if (opened) {
+        setCalendarMessage('Approve access in the browser tab that just opened, then come back here.');
+      } else {
+        // Polling still runs: consent completed in any browser lands on the
+        // backend callback, and the next poll picks the token up.
+        setManualAuthUrl(auth_url);
+        setCalendarMessage(
+          'Could not open the browser automatically — restart the app to fix that. '
+          + 'In the meantime, open this link yourself to finish connecting:'
+        );
+      }
+
+      /* Poll until the OAuth callback has stored a token. Give up after five
+         minutes so an abandoned consent screen does not poll forever; the
+         status still refreshes on the next visit to this page. */
+      const startedAt = Date.now();
+      stopConsentPoll();
+      consentPoll.current = setInterval(async () => {
+        const status = await refreshCalendar();
+        if (status?.connected) {
+          stopConsentPoll();
+          setManualAuthUrl('');
+          setCalendarMessage('Google Calendar connected. Events are syncing now.');
+        } else if (Date.now() - startedAt > 5 * 60 * 1000) {
+          stopConsentPoll();
+          setCalendarMessage('Timed out waiting for approval. Click Connect to try again.');
+        }
+      }, 2000);
+    } catch (error) {
+      setCalendarMessage(
+        error instanceof Error ? error.message : 'Unable to start the Google connection.'
+      );
+    } finally {
+      setCalendarBusy(false);
+    }
+  };
+
+  const turnOffCalendar = async () => {
+    setCalendarBusy(true);
+    setCalendarMessage('');
+    setManualAuthUrl('');
+    stopConsentPoll();
+    try {
+      const status = await disconnectCalendar();
+      setCalendar(status);
+      setCalendarMessage('Calendar collection is off. Events already synced are kept.');
+    } catch (error) {
+      setCalendarMessage(
+        error instanceof Error ? error.message : 'Unable to turn calendar collection off.'
+      );
+    } finally {
+      setCalendarBusy(false);
+    }
+  };
+
+  /** One switch, both directions — connect when off, disconnect when on. */
+  const toggleCalendar = () => {
+    if (calendar?.connected) {
+      void turnOffCalendar();
+    } else {
+      void connectCalendar();
+    }
+  };
+
+  const syncCalendar = async () => {
+    setCalendarBusy(true);
+    setCalendarMessage('');
+    try {
+      const stats = await syncCalendarNow();
+      await refreshCalendar();
+      setCalendarMessage(
+        `Synced: ${stats.created ?? 0} new, ${stats.updated ?? 0} updated, ${stats.unchanged ?? 0} unchanged.`
+      );
+    } catch (error) {
+      await refreshCalendar();
+      setCalendarMessage(
+        error instanceof Error ? error.message : 'Sync failed. Auto-sync will retry on its own.'
+      );
+    } finally {
+      setCalendarBusy(false);
+    }
+  };
+
+  /* One phrase answering "is my calendar being collected right now?". Derived
+     once so the privacy switch, the integration row and the tag line cannot
+     disagree with each other. */
+  const calendarSummary = (() => {
+    if (calendarUnavailable) return 'Status unavailable';
+    if (calendarBusy && !calendar) return 'Checking…';
+    if (!calendar) return 'Status unknown';
+    switch (calendar.state) {
+      case 'not_configured': return 'Not set up on this machine';
+      case 'disconnected': return awaitingConsent ? 'Waiting for approval…' : 'Off';
+      case 'needs_reconnect': return 'Stopped — reconnect needed';
+      case 'degraded': return `Retrying — ${calendar.consecutive_failures} failed attempt(s)`;
+      case 'collecting': return 'Collecting';
+      default: return 'Status unknown';
+    }
+  })();
+
+  const calendarHealthy = calendar?.state === 'collecting';
+
+  /** "3 minutes ago" style, from an ISO string the backend already localised. */
+  const calendarLastSync = (() => {
+    if (!calendar?.last_sync) return 'never';
+    const hours = calendar.stale_hours;
+    if (hours === null || hours === undefined) return calendar.last_sync;
+    if (hours < 1 / 60) return 'just now';
+    if (hours < 1) return `${Math.round(hours * 60)} min ago`;
+    if (hours < 48) return `${Math.round(hours)} h ago`;
+    return `${Math.round(hours / 24)} days ago`;
+  })();
+
   /* Notification throttles live in the Electron main process, because it is
      the thing that actually raises a toast and it keeps running when the
      window is closed. This panel is a view onto that state, not a second copy
@@ -279,6 +480,9 @@ const Settings: React.FC = () => {
           </label>
         </div>
 
+        {/* Same switch as the one in Integrations, reading the same backend
+            state. Flipping it on opens Google's consent screen; off deletes the
+            stored token and stops collection immediately. */}
         <div className="setting-row">
           <div className="setting-icon-wrap" style={{ background: '#ECFDF5' }}>📅</div>
           <div className="setting-info">
@@ -287,10 +491,16 @@ const Settings: React.FC = () => {
             <div className="setting-tags">
               <span>🔓 Read-only</span>
               <span>👁️ Event times only</span>
+              <span>{calendarSummary}</span>
             </div>
           </div>
           <label className="sd-toggle">
-            <input type="checkbox" checked={privacy.calendarAccess} onChange={() => togglePrivacy('calendarAccess')} />
+            <input
+              type="checkbox"
+              checked={Boolean(calendar?.connected)}
+              disabled={calendarBusy || calendarUnavailable || calendar?.configured === false}
+              onChange={toggleCalendar}
+            />
             <span className="sd-toggle-slider" />
           </label>
         </div>
@@ -532,6 +742,89 @@ const Settings: React.FC = () => {
           )}
 
           {githubMessage && <p className="github-message">{githubMessage}</p>}
+        </div>
+
+        {/* Google Calendar — the real control. One switch turns collection on
+            (opens Google consent) and off (deletes the stored token). */}
+        <div className="calendar-integration">
+          <div className="integration-row calendar-integration-header">
+            <div className="integration-icon" style={{ background: '#4285F4' }}>📅</div>
+            <div className="integration-info">
+              <strong>Google Calendar</strong>
+              <span
+                className={`integration-status ${calendarHealthy ? '' : 'integration-status--muted'}`}
+              >
+                {calendarSummary}
+              </span>
+              {calendar?.connected && (
+                <span className="integration-detail">
+                  {calendar.event_count} events · last sync {calendarLastSync} · auto-sync every{' '}
+                  {calendar.sync_interval_min} min
+                </span>
+              )}
+              {calendar?.state === 'not_configured' && (
+                <span className="integration-detail">
+                  Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to backend/.env, or drop a
+                  credentials.json into backend/calendar_store/, then restart the backend.
+                </span>
+              )}
+            </div>
+
+            <label className="sd-toggle calendar-toggle">
+              <input
+                type="checkbox"
+                checked={Boolean(calendar?.connected)}
+                disabled={calendarBusy || calendarUnavailable || calendar?.configured === false}
+                onChange={toggleCalendar}
+              />
+              <span className="sd-toggle-slider" />
+            </label>
+          </div>
+
+          {/* Reconnect is a separate, explicit action: the switch is already on
+              (a token exists) so flipping it would read as "turn off". */}
+          {calendar?.needs_reconnect && (
+            <div className="calendar-alert">
+              <strong>Collection has stopped.</strong>
+              <p>{calendar.reconnect_reason || 'Google access expired. Reconnect to resume.'}</p>
+              <button className="sd-btn sd-btn--primary" onClick={connectCalendar} disabled={calendarBusy}>
+                Reconnect
+              </button>
+            </div>
+          )}
+
+          {calendar?.connected && !calendar.needs_reconnect && (
+            <div className="calendar-actions">
+              <button className="sd-btn" onClick={syncCalendar} disabled={calendarBusy}>
+                Sync now
+              </button>
+              <button className="sd-btn" onClick={turnOffCalendar} disabled={calendarBusy}>
+                Turn off
+              </button>
+              {calendar.last_error && (
+                <span className="calendar-error-note">Last error: {calendar.last_error}</span>
+              )}
+            </div>
+          )}
+
+          {calendarMessage && <p className="github-message">{calendarMessage}</p>}
+
+          {/* Manual escape hatch. Selectable so it can be copied even if the
+              clipboard call is unavailable. */}
+          {manualAuthUrl && (
+            <div className="calendar-manual-url">
+              <code>{manualAuthUrl}</code>
+              <button
+                className="sd-btn"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(manualAuthUrl);
+                  setCalendarMessage('Link copied. Open it in your browser to finish connecting.');
+                }}
+              >
+                Copy link
+              </button>
+            </div>
+          )}
         </div>
 
         {integrations.map((int, i) => (

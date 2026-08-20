@@ -12,6 +12,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openGitHubExternal: (url: string) => ipcRenderer.invoke('open-github-external', url),
 
   /**
+   * Open the Google consent screen in the system browser.
+   *
+   * Google refuses to render its OAuth screen inside an embedded webview, so
+   * this cannot be a BrowserWindow — the handler validates the host and hands
+   * it to the OS.
+   */
+  openCalendarExternal: (url: string) => ipcRenderer.invoke('open-calendar-external', url),
+
+  /**
    * Open the break countdown overlay.
    *
    * The main process also suppresses notifications for the duration, so the

@@ -717,10 +717,85 @@ class TestReportNarrative(unittest.TestCase):
         self.assertEqual(len(sections), 1)
         self.assertEqual(sections[0].key, "empty")
 
-    def test_quality_section_is_always_present(self):
+    def test_report_describes_what_happened_and_nothing_else(self):
+        """No advice, no meta-commentary.
+
+        "For next time" duplicated the Recommendations tab, and "How solid this
+        is" described the collection pipeline rather than the period. Both were
+        removed from the narrative builder rather than hidden in the UI, so the
+        markdown and PDF exports match the screen.
+        """
         from app.services.report.narrative import build_sections
         keys = [s.key for s in build_sections(self._facts())]
-        self.assertIn("quality", keys)
+        self.assertNotIn("quality", keys)
+        self.assertNotIn("plan", keys)
+
+
+class TestWeeklyBaseline(unittest.TestCase):
+    """Medians over whole prior weeks, for the weekly report's totals.
+
+    Weekly totals previously carried no comparison at all, because BaselineSet
+    holds daily samples and a week's total cannot be held against a daily
+    median. These pin the two exclusions that decide whether the median means
+    anything.
+    """
+
+    def _days(self, start: str, count: int, active=60.0, deep=30.0, stop_hour=None):
+        from datetime import datetime, timedelta
+        from app.services.recommendations.periods import DaySummary
+        first = datetime.fromisoformat(f"{start}T00:00:00")
+        return [
+            DaySummary(
+                date=(first + timedelta(days=i)).strftime("%Y-%m-%d"),
+                weekday=(first + timedelta(days=i)).weekday(),
+                active_min=active, deep_min=deep, distraction_min=0.0,
+                learn_min=0.0, focus=0.5, meeting_min=0.0,
+                latest_stop_hour=stop_hour, category_min={},
+            )
+            for i in range(count)
+        ]
+
+    def test_no_baseline_below_the_minimum_week_count(self):
+        from datetime import datetime
+        from app.services.recommendations.periods import (
+            WEEK_BASELINE_MIN_WEEKS, weekly_baseline,
+        )
+        # Two complete prior weeks, one short of the minimum.
+        days = self._days("2026-08-03", 14)
+        result = weekly_baseline(days, datetime(2026, 8, 17))
+        self.assertEqual(WEEK_BASELINE_MIN_WEEKS, 3)
+        self.assertEqual(result, {})
+
+    def test_the_reported_week_is_excluded_from_its_own_baseline(self):
+        """Including it drags the median toward the value being compared."""
+        from datetime import datetime
+        from app.services.recommendations.periods import weekly_baseline
+        # Three prior weeks at 60 min/day, then a wild week being reported.
+        days = self._days("2026-07-27", 21) + self._days("2026-08-17", 7, active=600.0)
+        result = weekly_baseline(days, datetime(2026, 8, 17))
+        # 7 days x 60 min. The 600-a-day week must not move this at all.
+        self.assertAlmostEqual(result["baseline.week_active_min.p50"], 420.0)
+        self.assertEqual(result["baseline.week.n"], 3.0)
+
+    def test_weeks_before_recording_began_are_not_counted_as_quiet_weeks(self):
+        """A bucket predating the first recorded day is absent data, not a zero."""
+        from datetime import datetime
+        from app.services.recommendations.periods import weekly_baseline
+        days = self._days("2026-07-27", 21)
+        result = weekly_baseline(days, datetime(2026, 8, 17))
+        # Exactly three whole weeks are covered; the lookback reaches further
+        # back but must stop rather than averaging in empty buckets.
+        self.assertEqual(result["baseline.week.n"], 3.0)
+        self.assertAlmostEqual(result["baseline.week_active_min.p50"], 420.0)
+
+    def test_late_nights_are_counted_per_week(self):
+        from datetime import datetime
+        from app.services.recommendations.periods import (
+            LATE_NIGHT_HOUR, weekly_baseline,
+        )
+        days = self._days("2026-07-27", 21, stop_hour=LATE_NIGHT_HOUR + 1)
+        result = weekly_baseline(days, datetime(2026, 8, 17))
+        self.assertAlmostEqual(result["baseline.late_night_count.p50"], 7.0)
 
 
 class TestSpanLabel(unittest.TestCase):

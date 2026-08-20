@@ -43,6 +43,21 @@ WEEKDAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
 #: fitted through so few points that its sign is close to arbitrary.
 TREND_MIN_WEEKS = 4
 
+#: How far back the weekly baseline looks for comparable weeks. Longer than the
+#: trend window on purpose: the trend wants the *recent* shape, the baseline
+#: wants as many complete weeks as it can get.
+WEEK_BASELINE_LOOKBACK_WEEKS = 12
+
+#: Complete prior weeks required before a weekly total is compared to anything.
+#:
+#: Deliberately lower than baselines.MIN_SAMPLES (8), which governs daily
+#: percentiles feeding robust z-scores in the rule engine. This does a smaller
+#: job: it puts a median beside a number on a report tile. Requiring eight weeks
+#: would mean two months of recording before the weekly report compared
+#: anything at all, and three complete weeks is enough for a median to be
+#: informative even though it is not enough to call something an anomaly.
+WEEK_BASELINE_MIN_WEEKS = 3
+
 #: A session ending past this hour on the continuous scale counts as late
 #: night. 24.0 is literally "after midnight", which is the thing being counted.
 LATE_NIGHT_HOUR = 24.0
@@ -227,6 +242,72 @@ def spearman(xs: list[float], ys: list[float]) -> float | None:
 # Weekly                                                                   #
 # ---------------------------------------------------------------------- #
 
+def weekly_baseline(
+    days: list[DaySummary], week_start: datetime
+) -> dict[str, float]:
+    """Median of the user's previous whole weeks, per weekly metric.
+
+    Weekly totals had no comparison at all: BaselineSet is built from *daily*
+    samples, and holding a week's total against a daily median is a category
+    error, so the report's Active time / Deep work / Active days / late-night
+    tiles simply passed no baseline and rendered "Not enough history to
+    compare" forever.
+
+    Built here rather than in BaselineSet so the buckets are summed from the
+    very same ``DaySummary`` fields that produce ``week_active_min`` and the
+    rest a few lines below — a baseline computed by a second, subtly different
+    route would be worse than none.
+
+    Two exclusions matter:
+
+    * **The reported week itself.** Including it drags the median toward the
+      value being compared, shrinking every delta.
+    * **Weeks before recording began.** A bucket that predates the first
+      recorded day is absent data, not a zero-activity week, and averaging
+      those in would understate the norm badly for a new user.
+    """
+    if not days:
+        return {}
+
+    first_recorded = min(d.date for d in days)
+    by_date = {d.date: d for d in days}
+
+    buckets: list[list[DaySummary]] = []
+    for index in range(1, WEEK_BASELINE_LOOKBACK_WEEKS + 1):
+        bucket_end = week_start - timedelta(days=7 * (index - 1))
+        bucket_start = bucket_end - timedelta(days=7)
+        if bucket_start.strftime("%Y-%m-%d") < first_recorded:
+            # Ran off the start of history — every earlier bucket will too.
+            break
+        buckets.append([
+            by_date[key] for i in range(7)
+            if (key := (bucket_start + timedelta(days=i)).strftime("%Y-%m-%d")) in by_date
+        ])
+
+    # A week with no recorded day at all is a gap in collection, not a week off.
+    weeks = [b for b in buckets if b]
+    if len(weeks) < WEEK_BASELINE_MIN_WEEKS:
+        return {}
+
+    return {
+        "baseline.week_active_min.p50":
+            percentile([sum(d.active_min for d in w) for w in weeks], 0.50),
+        "baseline.week_deep_min.p50":
+            percentile([sum(d.deep_min for d in w) for w in weeks], 0.50),
+        "baseline.week_active_days.p50":
+            percentile([float(len(w)) for w in weeks], 0.50),
+        "baseline.late_night_count.p50": percentile([
+            float(sum(
+                1 for d in w
+                if d.latest_stop_hour is not None
+                and d.latest_stop_hour >= LATE_NIGHT_HOUR
+            ))
+            for w in weeks
+        ], 0.50),
+        "baseline.week.n": float(len(weeks)),
+    }
+
+
 def build_weekly_context(
     db: Session,
     user_id: str,
@@ -236,8 +317,11 @@ def build_weekly_context(
     """Snapshot describing the seven completed days ending at ``week_end``."""
     week_end = week_end.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = week_end - timedelta(days=7)
-    # Four weeks of history so the trend has something to fit.
-    history_start = week_end - timedelta(days=7 * TREND_MIN_WEEKS)
+    # Far enough back for the weekly baseline; the four-week trend below reads
+    # the recent tail of the same pass, so this stays one query either way.
+    history_start = week_end - timedelta(
+        days=7 * max(TREND_MIN_WEEKS, WEEK_BASELINE_LOOKBACK_WEEKS + 1)
+    )
 
     days = summarise_days(db, user_id, history_start, week_end, baselines)
     this_week = [d for d in days if d.date >= week_start.strftime("%Y-%m-%d")]
@@ -426,6 +510,9 @@ def build_weekly_context(
     data["late_night_count"] = float(len(late))
 
     data.update(baselines.flatten())
+    # After the daily flatten, so a week-scoped key always wins over a
+    # same-named daily one rather than depending on dict ordering.
+    data.update(weekly_baseline(days, week_start))
     return FeatureContext(
         data, as_of=week_end, user_id=user_id,
         days_of_history=baselines.days_of_history,
