@@ -28,6 +28,12 @@ from app.services.liveness import get_last_heartbeat
 from app.services.liveness import reconcile_open_sessions
 from app.services.os_collector import OSCollector
 from app.services.recommendation_job import RecommendationJob
+from app.services.github_relay_handler import process_github_relay_notification
+from app.services.github_effort_inference_service import (
+    ModelArtifactError,
+    initialize_github_effort_inference,
+)
+from app.services.relay_client import RelayClientService
 from app.services.session_timeout_job import SessionTimeoutJob
 from app.services.work_period_scheduler import WorkPeriodScheduler
 
@@ -43,12 +49,27 @@ _activity_segment_builder = ActivitySegmentBuilder(
     device_id=settings.DEVICE_ID,
 )
 _recommendation_job = RecommendationJob(user_id=settings.DEFAULT_USER_ID)
+_relay_client = RelayClientService(
+    settings, notification_handler=process_github_relay_notification
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging(level=settings.LOG_LEVEL)
     logger.info("SmartDesk backend started.")
+
+    try:
+        app.state.github_effort_readiness = initialize_github_effort_inference()
+        logger.info(
+            "GitHub effort models ready with %s features.",
+            app.state.github_effort_readiness["feature_count"],
+        )
+    except ModelArtifactError as exc:
+        app.state.github_effort_readiness = {"ready": False, "error": str(exc)}
+        # Prediction remains unavailable rather than fabricating an estimate;
+        # unrelated SmartDesk services can still start.
+        logger.error("GitHub effort model readiness failed: %s", exc)
 
     # Close sessions orphaned by the previous process BEFORE the collector runs.
     # Its first tick always emits 'focused' (_last_app is None), which would
@@ -70,11 +91,13 @@ async def lifespan(app: FastAPI):
     _calendar_sync_job.start()
     _activity_segment_builder.start()
     _recommendation_job.start()
+    _relay_client.start()
 
     yield
 
     # Graceful shutdown
     emotion.stop_emotion_service_if_running()
+    await _relay_client.stop()
     _recommendation_job.stop()
     _activity_segment_builder.stop()
     _calendar_sync_job.stop()

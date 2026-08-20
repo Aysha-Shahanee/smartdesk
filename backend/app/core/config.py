@@ -1,6 +1,6 @@
 import socket
 from pathlib import Path
-from typing import List
+from typing import List, Literal
 
 from pydantic_settings import BaseSettings
 
@@ -133,10 +133,24 @@ class Settings(BaseSettings):
     SMARTDESK_GITHUB_USER_CALLBACK_URL: str = ""
     SMARTDESK_FRONTEND_URL: str = ""
     SMARTDESK_GITHUB_WEBHOOK_SECRET: str = ""
-    SMARTDESK_GITHUB_MONITOR_MODE: str = "webhook"
-    SMARTDESK_GITHUB_MODEL_ARTIFACT_DIR: str = str(
-        BACKEND_ROOT / "model_artifacts" / "github_effort"
-    )
+    SMARTDESK_GITHUB_MONITOR_MODE: Literal["webhook", "relay"] = "webhook"
+    # Stable root for bundled GitHub resources. A packager may point this at
+    # its extracted/read-only resource directory without depending on cwd.
+    SMARTDESK_GITHUB_RESOURCE_ROOT: str = str(BACKEND_ROOT)
+    # Empty uses <resource-root>/model_artifacts/github_effort. Absolute paths
+    # and resource-root-relative overrides are also supported.
+    SMARTDESK_GITHUB_MODEL_ARTIFACT_DIR: str = ""
+
+    # Production relay client. Disabled by default so local webhook/tunnel
+    # development behaves exactly as before.
+    # Deprecated compatibility field. Transport startup is controlled only by
+    # SMARTDESK_GITHUB_MONITOR_MODE so contradictory flags cannot enable relay.
+    SMARTDESK_RELAY_ENABLED: bool = False
+    SMARTDESK_RELAY_URL: str = ""
+    SMARTDESK_RELAY_CLIENT_AUTH_SECRET: str = ""
+    SMARTDESK_RELAY_CONNECT_TIMEOUT_SECONDS: float = 10.0
+    SMARTDESK_RELAY_RECONNECT_MIN_SECONDS: float = 1.0
+    SMARTDESK_RELAY_RECONNECT_MAX_SECONDS: float = 30.0
 
     class Config:
         env_file = ".env"

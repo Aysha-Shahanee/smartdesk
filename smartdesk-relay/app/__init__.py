@@ -1,0 +1,2 @@
+"""SmartDesk GitHub relay service."""
+

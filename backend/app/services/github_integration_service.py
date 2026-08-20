@@ -283,5 +283,37 @@ class GitHubIntegrationService:
             ),
         )
 
+    def process_relay_notification(
+        self,
+        *,
+        installation_id: int,
+        project_item_node_id: str,
+        project_node_id: str | None,
+        content_node_id: str | None,
+        action: str,
+    ) -> bool:
+        """Adapt a validated relay identifier notification to the webhook path."""
+        connection = self.repository.get_connection(settings.DEFAULT_USER_ID)
+        if (
+            connection is None
+            or connection.connection_status != "connected"
+            or connection.installation_id != installation_id
+            or not connection.selected_project_id
+            or connection.selected_project_id != project_node_id
+        ):
+            return False
+        self.process_webhook(
+            {
+                "action": action,
+                "projects_v2_item": {
+                    "node_id": project_item_node_id,
+                    "project_node_id": project_node_id,
+                    "content_node_id": content_node_id,
+                },
+            },
+            {"X-GitHub-Event": "projects_v2_item"},
+        )
+        return True
+
     def disconnect(self, user_id: str) -> None:
         self.repository.disconnect(user_id)

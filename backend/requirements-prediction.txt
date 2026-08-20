@@ -8,3 +8,8 @@
 -e ../github_data_collection
 lightgbm>=4.0,<5.0
 pandas>=2.0
+# Imported directly by inference and required to unpickle the fitted text
+# preprocessing pipeline. Also present in the full core requirements, repeated
+# here so the component-specific runtime inventory is self-describing.
+numpy>=1.24.0
+scikit-learn>=1.3.0

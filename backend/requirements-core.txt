@@ -20,6 +20,9 @@ sqlalchemy
 tzdata
 psutil
 requests
+# Outbound production relay connection (the server extras also install it,
+# but it is explicit because application code imports it directly).
+websockets>=15,<18
 
 # Google Calendar (read-only sync) and the shared-sheet export.
 google-api-python-client

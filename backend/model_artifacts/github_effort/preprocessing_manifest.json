@@ -30,6 +30,7 @@
     "model_high.txt": "ffbd17cc4c43941913b1f22ff1b184940abb0dd06e49958578f6cb1b9a0247b3",
     "tfidf_vectorizer.pkl": "92dbb8f8349900440a1b543cb6b9952209a1df75caa6e155caa4c8fb97d871d7",
     "svd_reducer.pkl": "9e651b5759972b019c0779918d7c655bd867ea52a21463727acd9e49905d551f",
+    "inference_fallbacks.json": "824d9ae9e20d9d0d722fe5f7a1b3ac919293efa344684251a0f5b0f43646817c",
     "repo_stats.json": "01251cd7451853b1af1cea3249b52e04718cc656ebfd0e227593e66176f0e82b",
     "repo_label_stats.json": "d11f893807cdceba33d3c9376337a77bb6e5d557d4c146ff224dd9aaa1ea8c9a",
     "label_categories.json": "da0d7a4377ddad6f081a0b93e19c4e80b8be48a45498bf08b70c10f8a7727da0"

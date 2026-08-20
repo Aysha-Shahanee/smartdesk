@@ -4,17 +4,21 @@ import tempfile
 import unittest
 import math
 from pathlib import Path
+from unittest.mock import patch
 
-from app.core.config import settings
+from app.core.config import BACKEND_ROOT, settings
 from app.services.github_effort_inference_service import (
+    EXPECTED_FEATURE_COUNT,
     GitHubEffortInferenceService,
     ModelArtifactError,
     get_github_effort_inference_service,
+    initialize_github_effort_inference,
+    resolve_github_effort_artifact_dir,
 )
 
 
 def test_required_artifact_hashes_match_and_lightgbm_models_are_lf_only():
-    artifact_dir = Path(settings.SMARTDESK_GITHUB_MODEL_ARTIFACT_DIR)
+    artifact_dir = resolve_github_effort_artifact_dir()
     preprocessing = json.loads(
         (artifact_dir / "preprocessing_manifest.json").read_text(encoding="utf-8")
     )
@@ -55,6 +59,27 @@ class GitHubEffortInferenceTests(unittest.TestCase):
     def test_models_are_cached_and_return_real_quantiles(self):
         self.assertIs(self.service, get_github_effort_inference_service())
         self.assert_prediction(self.service.predict(self.metadata()))
+        self.assertEqual(len(self.service.feature_columns), EXPECTED_FEATURE_COUNT)
+        self.assertTrue(all(
+            model.num_feature() == EXPECTED_FEATURE_COUNT
+            for model in self.service.models.values()
+        ))
+
+    def test_internal_readiness_reports_all_three_models(self):
+        readiness = initialize_github_effort_inference()
+        self.assertEqual(readiness["feature_count"], 56)
+        self.assertEqual(
+            readiness["models_loadable"],
+            {"low": True, "typical": True, "high": True},
+        )
+        self.assertTrue(readiness["artifacts_found"])
+
+    def test_runtime_never_calls_lightgbm_training(self):
+        with patch(
+            "app.services.github_effort_inference_service.lgb.train",
+            side_effect=AssertionError("runtime must not train"),
+        ):
+            self.assert_prediction(self.service.predict(self.metadata()))
 
     def test_unknown_repository_uses_missing_category_and_training_fallbacks(self):
         features = self.service.build_features(self.metadata(repository="new/example"))
@@ -77,6 +102,17 @@ class GitHubEffortInferenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ModelArtifactError, "Missing model artifact"):
                 GitHubEffortInferenceService(Path(directory))
+
+
+def test_default_and_explicit_artifact_path_resolution(tmp_path):
+    assert resolve_github_effort_artifact_dir("", "") == (
+        BACKEND_ROOT / "model_artifacts" / "github_effort"
+    ).resolve()
+    explicit = tmp_path / "absolute-artifacts"
+    assert resolve_github_effort_artifact_dir(str(explicit), "ignored") == explicit.resolve()
+    assert resolve_github_effort_artifact_dir(
+        "bundled/github-effort", tmp_path
+    ) == (tmp_path / "bundled" / "github-effort").resolve()
 
 
 if __name__ == "__main__":

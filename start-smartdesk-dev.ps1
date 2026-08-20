@@ -255,9 +255,17 @@ try {
         Pop-Location
     }
 
-    $backendProcess = Start-LoggedProcess -Role 'backend' -FilePath $python `
-        -ArgumentList @('-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8000') `
-        -WorkingDirectory $backendDir
+    $oldMonitorMode = [Environment]::GetEnvironmentVariable('SMARTDESK_GITHUB_MONITOR_MODE', 'Process')
+    try {
+        # The development launcher always uses direct webhook delivery through
+        # its Quick Tunnel, regardless of a user-level production setting.
+        [Environment]::SetEnvironmentVariable('SMARTDESK_GITHUB_MONITOR_MODE', 'webhook', 'Process')
+        $backendProcess = Start-LoggedProcess -Role 'backend' -FilePath $python `
+            -ArgumentList @('-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8000') `
+            -WorkingDirectory $backendDir
+    } finally {
+        [Environment]::SetEnvironmentVariable('SMARTDESK_GITHUB_MONITOR_MODE', $oldMonitorMode, 'Process')
+    }
 
     $nodeDir = Split-Path -Parent $npm
     $oldPath = $env:PATH
