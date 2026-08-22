@@ -326,7 +326,11 @@ export const disconnectCalendar = (): Promise<CalendarStatus> =>
 
 export interface EmotionStatus {
   running?: boolean;
-  latest_emotion?: string | null;
+  latest_state?: string | null;
+  latest_engagement?: string | null;
+  latest_engagement_confidence?: number;
+  latest_engagement_block_start_time?: string | null;
+  latest_engagement_block_end_time?: string | null;
   session_id?: string | null;
   session_start_time?: string | null;
   model_ready?: boolean;
@@ -337,9 +341,11 @@ export interface EmotionStatus {
 export interface EmotionBlock {
   block_start_time?: string;
   block_end_time?: string;
-  dominant_emotion?: string;
-  emotion_scores?: Record<string, number>;
+  dominant_state?: string;
+  state_scores?: Record<string, number>;
+  final_state_block_count?: number;
   processed_frame_count?: number;
+  ready?: boolean;
 }
 
 export interface CurrentEmotionSession {
@@ -348,7 +354,7 @@ export interface CurrentEmotionSession {
   session?: Record<string, unknown> | null;
   current_block?: {
     block_start_time?: string;
-    emotion_scores?: Record<string, number>;
+    state_scores?: Record<string, number>;
     processed_frame_count?: number;
   } | null;
   completed_blocks?: EmotionBlock[];
@@ -375,21 +381,23 @@ export const getCurrentEmotionSession = async (): Promise<CurrentEmotionSession>
 export interface StressPoint {
   block_start_time: string;
   block_end_time: string;
-  /** 0–100. Derived from the block's emotion mix — see emotion_stress_service.py. */
-  stress: number;
+  /** 0–100 workload risk derived from 15-minute SmartDesk state reporting blocks. */
+  workload_risk_score: number;
   /** 0–1, how much the block's frame count justifies trusting it. */
   confidence: number;
-  processed_frame_count: number;
+  final_state_block_count: number;
   duration_minutes: number;
-  dominant_emotion: string;
+  dominant_state: string;
+  state_scores: Record<string, number>;
+  ready: boolean;
 }
 
 export interface StressSummary {
   /** null when the window holds no observed blocks — render an empty state, not a zero. */
-  score: number | null;
+  workload_risk_score: number | null;
   observed_minutes: number;
   block_count: number;
-  driver: string | null;
+  driver_state: string | null;
 }
 
 export interface StressResponse {

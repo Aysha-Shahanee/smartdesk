@@ -6,7 +6,7 @@ import {
 } from 'recharts';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDateContext } from '../contexts/DateContext';
-import { getCategoryColor, getEmotionColor, getChartChrome } from '../theme/chartTheme';
+import { getCategoryColor, getChartChrome } from '../theme/chartTheme';
 import {
   CurrentEmotionSession,
   EmotionStatus,
@@ -47,16 +47,8 @@ type InsightTab = 'Focus Insights' | 'Stress Insights' | 'Pattern Detection';
 /* Days behind the Focus Insights tab, ending on the selected date. */
 const FOCUS_TREND_DAYS = 7;
 
-const DETECTOR_EMOTIONS = ['Angry', 'Happy', 'Neutral', 'Surprise'];
 const WORK_STATE_ORDER = ['Focused', 'Struggling', 'Disengaged', 'Fatigued', 'Overloaded'] as const;
 type WorkState = typeof WORK_STATE_ORDER[number];
-
-const RAW_EMOTION_TO_WORK_STATE: Record<string, WorkState> = {
-  Happy: 'Focused',
-  Neutral: 'Struggling',
-  Surprise: 'Disengaged',
-  Angry: 'Fatigued',
-};
 
 const WORK_STATE_COLORS: Record<WorkState, string> = {
   Focused: '#22c55e',
@@ -222,9 +214,9 @@ const formatSessionTime = (value?: string | null) => {
   });
 };
 
-const mapEmotionToWorkState = (emotion?: string | null) => {
-  if (!emotion || emotion === 'Unknown') return 'Unknown';
-  return RAW_EMOTION_TO_WORK_STATE[emotion] || emotion;
+const formatEngagementLabel = (label?: string | null) => {
+  if (!label || label === 'pending') return 'Unknown';
+  return label.charAt(0).toUpperCase() + label.slice(1);
 };
 
 const dominantWorkState = (scores?: Record<string, number>) => {
@@ -232,9 +224,8 @@ const dominantWorkState = (scores?: Record<string, number>) => {
   let dominant: WorkState | null = null;
   let highest = 0;
 
-  DETECTOR_EMOTIONS.forEach(emotion => {
-    const state = RAW_EMOTION_TO_WORK_STATE[emotion];
-    const value = Number(scores[emotion] || 0);
+  WORK_STATE_ORDER.forEach(state => {
+    const value = Number(scores[state] || 0);
     if (value > highest) {
       highest = value;
       dominant = state;
@@ -244,45 +235,44 @@ const dominantWorkState = (scores?: Record<string, number>) => {
   return dominant;
 };
 
-/**
- * Frame-weighted mean of each work state across a session's emotion blocks.
- * A short warmup/tail block should not count the same as a full block.
- */
 const averageWorkStateScores = (session: CurrentEmotionSession | null) => {
-  const weighted = WORK_STATE_ORDER.reduce<Record<WorkState, number>>((acc, state) => {
+  const totals = WORK_STATE_ORDER.reduce<Record<WorkState, number>>((acc, state) => {
     acc[state] = 0;
     return acc;
   }, {} as Record<WorkState, number>);
 
   const blocks = session?.completed_blocks || session?.blocks || [];
-  let totalFrames = 0;
-
   blocks.forEach(block => {
-    const frames = Number(block.processed_frame_count || 0);
-    if (frames <= 0) return;
-    totalFrames += frames;
-    DETECTOR_EMOTIONS.forEach(emotion => {
-      weighted[RAW_EMOTION_TO_WORK_STATE[emotion]] += Number(block.emotion_scores?.[emotion] || 0) * frames;
+    WORK_STATE_ORDER.forEach(state => {
+      totals[state] += Number(block.state_scores?.[state] || 0);
     });
   });
 
-  if (session?.current_block?.processed_frame_count && session.current_block.processed_frame_count > 0) {
-    const frames = Number(session.current_block.processed_frame_count || 0);
-    totalFrames += frames;
-    DETECTOR_EMOTIONS.forEach(emotion => {
-      weighted[RAW_EMOTION_TO_WORK_STATE[emotion]] += Number(session.current_block?.emotion_scores?.[emotion] || 0) * frames;
+  if (session?.current_block) {
+    WORK_STATE_ORDER.forEach(state => {
+      totals[state] += Number(session.current_block?.state_scores?.[state] || 0);
     });
   }
 
-  if (totalFrames === 0) return weighted;
-
-  WORK_STATE_ORDER.forEach(state => {
-    weighted[state] /= totalFrames;
-  });
-
-  return weighted;
+  return totals;
 };
-const buildWorkStateDaySlots = (session: CurrentEmotionSession | null, selectedDate: string) => {
+
+type WorkStateGridBlock = {
+  block_start_time?: string;
+  block_end_time?: string;
+  state_scores?: Record<string, number>;
+  final_state_block_count?: number;
+  ready?: boolean;
+};
+
+const isCompletedReportingBlock = (block: WorkStateGridBlock) =>
+  block.ready === true && Number(block.final_state_block_count || 0) >= 3;
+
+const buildWorkStateDaySlots = (
+  session: CurrentEmotionSession | null,
+  selectedDate: string,
+  stressPoints: WorkStateGridBlock[] = [],
+) => {
   const dayStart = new Date(`${selectedDate}T00:00:00`);
   const slotMs = 15 * 60 * 1000;
   const slots = Array.from({ length: 96 }, (_, index) => {
@@ -295,18 +285,13 @@ const buildWorkStateDaySlots = (session: CurrentEmotionSession | null, selectedD
     };
   });
 
-  const blocks = [...(session?.completed_blocks || session?.blocks || [])];
-  if (session?.current_block?.processed_frame_count && session.current_block.processed_frame_count > 0) {
-    blocks.push({
-      block_start_time: session.current_block.block_start_time,
-      block_end_time: new Date().toISOString(),
-      emotion_scores: session.current_block.emotion_scores,
-      processed_frame_count: session.current_block.processed_frame_count,
-    });
-  }
+  const blocks: WorkStateGridBlock[] = [
+    ...(session?.completed_blocks || session?.blocks || []),
+    ...stressPoints,
+  ].filter(isCompletedReportingBlock);
 
   blocks.forEach(block => {
-    const state = dominantWorkState(block.emotion_scores);
+    const state = dominantWorkState(block.state_scores);
     if (!state || !block.block_start_time) return;
 
     const start = new Date(block.block_start_time).getTime();
@@ -314,7 +299,8 @@ const buildWorkStateDaySlots = (session: CurrentEmotionSession | null, selectedD
     if (Number.isNaN(start) || Number.isNaN(end)) return;
 
     const startIndex = Math.max(0, Math.floor((start - dayStart.getTime()) / slotMs));
-    const endIndex = Math.min(95, Math.max(startIndex, Math.floor((end - dayStart.getTime()) / slotMs)));
+    const exclusiveEnd = Math.max(start, end - 1);
+    const endIndex = Math.min(95, Math.max(startIndex, Math.floor((exclusiveEnd - dayStart.getTime()) / slotMs)));
     for (let index = startIndex; index <= endIndex; index += 1) {
       slots[index].state = state;
     }
@@ -322,7 +308,6 @@ const buildWorkStateDaySlots = (session: CurrentEmotionSession | null, selectedD
 
   return slots;
 };
-
 const Insights: React.FC = () => {
   const { theme } = useTheme();
   const { selectedDate, refreshCount } = useDateContext();
@@ -341,19 +326,32 @@ const Insights: React.FC = () => {
     setIsEmotionLoading(true);
     setEmotionError(null);
     try {
-      const [status, session, consent, stressResponse] = await Promise.all([
+      const [statusResult, sessionResult, consentResult, stressResult] = await Promise.allSettled([
         getEmotionStatus(),
         getCurrentEmotionSession(),
         getEmotionConsent(),
         getStress(selectedDate),
       ]);
-      setEmotionStatus(status);
-      setCurrentEmotionSession(session);
-      setWebcamConsent(consent.webcam_enabled);
-      setStress(stressResponse);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Emotion backend is unavailable.';
-      setEmotionError(message);
+
+      if (statusResult.status === 'fulfilled') {
+        setEmotionStatus(statusResult.value);
+      }
+      if (sessionResult.status === 'fulfilled') {
+        setCurrentEmotionSession(sessionResult.value);
+      }
+      if (consentResult.status === 'fulfilled') {
+        setWebcamConsent(consentResult.value.webcam_enabled);
+      }
+      if (stressResult.status === 'fulfilled') {
+        setStress(stressResult.value);
+      }
+
+      const failed = [statusResult, sessionResult, consentResult, stressResult]
+        .find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failed) {
+        const reason = failed.reason;
+        setEmotionError(reason instanceof Error ? reason.message : 'Emotion backend is unavailable.');
+      }
     } finally {
       setIsEmotionLoading(false);
     }
@@ -364,19 +362,6 @@ const Insights: React.FC = () => {
       refreshEmotionData();
     }
   }, [activeTab, refreshEmotionData]);
-
-  /* One point per recorded 15-minute block. Empty until detection has run on
-     the selected day — the chart says so rather than drawing a flat zero. */
-  const stressThroughDay = useMemo(
-    () =>
-      (stress?.points || []).map(point => ({
-        time: blockClockLabel(point.block_start_time),
-        level: point.stress,
-        confidence: point.confidence,
-        dominant: point.dominant_emotion,
-      })),
-    [stress]
-  );
 
   useEffect(() => {
     if (activeTab !== 'Stress Insights' || !emotionStatus?.running) return;
@@ -431,14 +416,14 @@ const Insights: React.FC = () => {
     };
   });
   const workStateDaySlots = useMemo(
-    () => buildWorkStateDaySlots(currentEmotionSession, selectedDate),
-    [currentEmotionSession, selectedDate],
+    () => buildWorkStateDaySlots(currentEmotionSession, selectedDate, stress?.points || []),
+    [currentEmotionSession, selectedDate, stress],
   );
   const workStateHours = useMemo(
     () => Array.from({ length: 24 }, (_, hour) => workStateDaySlots.slice(hour * 4, hour * 4 + 4)),
     [workStateDaySlots],
   );
-  const currentWorkState = mapEmotionToWorkState(emotionStatus?.latest_emotion);
+  const currentEngagement = formatEngagementLabel(emotionStatus?.latest_engagement);
 
   const statusLabel = emotionError
     ? 'Error'
@@ -946,7 +931,7 @@ const Insights: React.FC = () => {
                   disabled={
                     Boolean(emotionStatus?.running) ||
                     isStartingEmotion ||
-                    webcamConsent !== true
+                    webcamConsent === false
                   }
                   title={
                     webcamConsent === false
@@ -1009,8 +994,8 @@ const Insights: React.FC = () => {
                   <strong>{formatSessionTime(emotionStatus?.session_start_time)}</strong>
                 </div>
                 <div>
-                  <span>Current State</span>
-                  <strong>{currentWorkState}</strong>
+                  <span>Current Engagement</span>
+                  <strong>{currentEngagement}</strong>
                 </div>
                 <div>
                   <span>Model</span>
@@ -1699,4 +1684,5 @@ const Insights: React.FC = () => {
 };
 
 export default Insights;
+
 

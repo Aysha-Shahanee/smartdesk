@@ -14,3 +14,4 @@ torchvision==0.27.1
 # face detection — stay on the 4.x line until that moves to FaceDetectorYN.
 opencv-python>=4.8,<5
 pillow
+mediapipe

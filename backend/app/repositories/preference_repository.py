@@ -60,6 +60,7 @@ SENSITIVITY_MAX = 2.0
 class PreferenceRepository:
     def __init__(self, db: Session):
         self.db = db
+        UserPreferenceRecord.__table__.create(bind=self.db.get_bind(), checkfirst=True)
 
     def get_bool(self, user_id: str, key: str, default: bool = False) -> bool:
         row = self.db.get(UserPreferenceRecord, (user_id, key))

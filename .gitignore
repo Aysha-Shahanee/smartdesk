@@ -76,3 +76,7 @@ backend/model_store/
 # Cached embeddings of activity segments. Derived data, regenerable, and
 # computed from window titles and URLs — not something to keep in git.
 backend/features/
+
+# SmartDesk v2 keeps the active MediaPipe fallback model under emotion-recognition/smartdesk_v2/models.
+backend/models/face_landmarker.task
+
