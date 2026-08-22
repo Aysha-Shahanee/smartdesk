@@ -16,6 +16,11 @@ BACKEND_ROOT = Path(__file__).resolve().parent
 DB_PATH = BACKEND_ROOT / "smartdesk.db"
 LOG_PATH = BACKEND_ROOT / "logs" / "refresh_windows_nightly.log"
 
+# logs/ holds only ignored *.log files, so it is absent from a fresh checkout.
+# FileHandler will not create it, and this runs at import: without the mkdir the
+# script dies before main() and takes the whole nightly chain down with it.
+LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,

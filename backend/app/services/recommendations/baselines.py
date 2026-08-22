@@ -17,6 +17,8 @@ Computed nightly and cached. No live rule ever sorts an array; it reads a
 
 from __future__ import annotations
 
+import math
+
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -26,6 +28,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.time import local_now
+from app.repositories.preference_repository import PreferenceRepository
 from app.models.db import UserBaselineRecord
 
 logger = logging.getLogger("smartdesk.recommendations.baselines")
@@ -38,6 +41,21 @@ BASELINE_WINDOW_DAYS = 30
 #: A percentile drawn from fewer samples than this is noise wearing a number's
 #: clothes. Rules requiring such a baseline are gated out instead.
 MIN_SAMPLES = 8
+
+#: Scales the median absolute deviation into an estimate of sigma.
+#:
+#: 1 / Phi-inverse(0.75). Without it the MAD is about two thirds of the
+#: standard deviation it stands in for, so a deviation of "three MADs" is
+#: really 2.02 sigma — around the 96th percentile, which happens most months —
+#: while the wording promises something rare. The constant is what makes the
+#: robust z comparable to a normal-theory one, and therefore what makes the
+#: language attached to it defensible. Rousseeuw & Croux (1993); Leys et al.
+#: (2013) for the applied recommendation.
+MAD_TO_SIGMA = 1.4826
+
+#: Scales the interquartile range the same way, for the fallback below.
+#: 1 / (2 * Phi-inverse(0.75)).
+IQR_TO_SIGMA = 0.7413
 
 #: Wall-clock gap between two active segments that a single block may span.
 #:
@@ -82,7 +100,16 @@ def percentile(values: list[float], p: float) -> float:
     low = int(position)
     high = min(low + 1, len(ordered) - 1)
     weight = position - low
-    return ordered[low] * (1 - weight) + ordered[high] * weight
+    # Interpolated as an offset from the lower value rather than as a weighted
+    # sum of both. Algebraically identical, numerically not: `v*(1-w) + v*w`
+    # rounds twice and can land a hair off `v`, so two identical observations
+    # produced a p10 fractionally *above* their p90. Percentile ordering is
+    # assumed everywhere downstream — a rule comparing against p10 and p90 of a
+    # near-constant metric would compare against a range that ran backwards.
+    # This form returns the lower value exactly whenever the two agree, because
+    # the difference is then exactly zero.
+    low_value = ordered[low]
+    return low_value + (ordered[high] - low_value) * weight
 
 
 @dataclass
@@ -114,16 +141,55 @@ class Stat:
         )
 
     @property
+    def sigma(self) -> float:
+        """Robust estimate of the standard deviation.
+
+        The MAD scaled to be comparable with sigma, falling back to the
+        interquartile range when the MAD collapses.
+
+        That collapse is not exotic. The MAD is zero whenever more than half
+        the observations tie, which for a count that is usually zero — meetings
+        on a given day, say — is the normal state rather than a corner case.
+        The rules answer that by staying silent, so precisely the metrics with
+        the clearest signal (four meetings when the median is none) are the
+        ones nothing can be said about. The IQR survives up to a quarter of the
+        sample tying at each end, which covers most of them.
+
+        Zero only when the distribution really is flat, which callers still
+        have to handle: no spread means no way to call anything unusual.
+        """
+        if self.mad > 0:
+            return self.mad * MAD_TO_SIGMA
+        iqr = self.p75 - self.p25
+        if iqr > 0:
+            return iqr * IQR_TO_SIGMA
+        return 0.0
+
+    @property
     def usable(self) -> bool:
         return self.n >= MIN_SAMPLES
 
     def robust_z(self, value: float) -> float:
-        """How many MADs from the median. Zero MAD means a flat distribution,
-        where any deviation at all is the whole signal — reported as a large
-        z rather than a division by zero."""
-        if self.mad <= 0:
-            return 0.0 if value == self.p50 else (3.0 if value > self.p50 else -3.0)
-        return (value - self.p50) / self.mad
+        """How many robust standard deviations from the median.
+
+        Scaled by :data:`MAD_TO_SIGMA`, so the result sits on the same footing
+        as an ordinary z-score and the words attached to it in
+        :func:`narrative.magnitude` mean what they say. No usable spread at all
+        means a flat distribution, where any deviation is the whole signal —
+        reported as a large z rather than a division by zero.
+        """
+        spread = self.sigma
+        if spread > 0:
+            z = (value - self.p50) / spread
+            # A spread can be positive and still too small to divide by. A
+            # subnormal one — which arises whenever a metric is constant to
+            # within the last representable bit — passes the check above and
+            # then overflows, handing every caller an infinite z: `magnitude`
+            # reads it as "sharply", and any rule multiplying by it produces
+            # nan. Treated as the flat distribution it effectively is.
+            if math.isfinite(z):
+                return z
+        return 0.0 if value == self.p50 else (3.0 if value > self.p50 else -3.0)
 
 
 @dataclass
@@ -155,6 +221,7 @@ class BaselineSet:
             out[f"baseline.{metric}.p75"] = stat.p75
             out[f"baseline.{metric}.p90"] = stat.p90
             out[f"baseline.{metric}.mad"] = stat.mad
+            out[f"baseline.{metric}.sigma"] = stat.sigma
             out[f"baseline.{metric}.n"] = float(stat.n)
         return out
 
@@ -375,6 +442,21 @@ class BaselineBuilder:
     ) -> BaselineSet:
         as_of = as_of or local_now()
         window_start = as_of - timedelta(days=BASELINE_WINDOW_DAYS)
+
+        # A user who has reset their baselines is asking not to be compared
+        # against who they were before a job change or a new project. Honoured
+        # by moving the window forward, not by deleting anything: the activity
+        # is still recorded, still in the timeline, and clearing the epoch
+        # restores every comparison.
+        epoch = PreferenceRepository(db).baseline_epoch(user_id)
+        if epoch:
+            try:
+                boundary = datetime.fromisoformat(f"{epoch}T00:00:00")
+                if boundary > window_start:
+                    window_start = boundary
+            except ValueError:
+                logger.warning("Ignoring unparseable baseline epoch %r", epoch)
+
         segments = fetch_segments(db, user_id, window_start, as_of)
 
         result = BaselineSet(computed_at=as_of.isoformat())

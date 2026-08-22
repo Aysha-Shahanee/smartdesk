@@ -522,8 +522,8 @@ const Dashboard: React.FC = () => {
                 <div className="score-head">
                   <span className="metric-label">Stress Score</span>
                   <span className="metric-value">
-                    {stress?.score !== null && stress?.score !== undefined
-                      ? `${stress.score}/100`
+                    {stress?.workload_risk_score !== null && stress?.workload_risk_score !== undefined
+                      ? `${stress.workload_risk_score}/100`
                       : '—'}
                   </span>
                 </div>
@@ -531,17 +531,17 @@ const Dashboard: React.FC = () => {
                   <div
                     className="sd-progress-fill"
                     style={{
-                      width: `${stress?.score ?? 0}%`,
+                      width: `${stress?.workload_risk_score ?? 0}%`,
                       background: 'var(--color-warning)',
                     }}
                   />
                 </div>
                 <div className="split-bar-labels">
-                  {stress?.score !== null && stress?.score !== undefined ? (
+                  {stress?.workload_risk_score !== null && stress?.workload_risk_score !== undefined ? (
                     <span>
                       {stress.observed_minutes} min observed
-                      {stress.driver && stress.driver !== 'Happy'
-                        ? ` • mostly ${stress.driver.toLowerCase()}`
+                      {stress.driver_state
+                        ? ` • mostly ${stress.driver_state.toLowerCase()}`
                         : ''}
                     </span>
                   ) : (

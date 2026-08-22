@@ -132,6 +132,7 @@ def post_meeting_buffer(ctx: FeatureContext) -> Finding | None:
             basis="matched_pairs", n=int(ctx["post_meeting_n"]),
             effect=abs(relative) * 5,
             comparison="the same hour-of-week on meeting-free days",
+            p_value=ctx.get("post_meeting_p"),
         ),
     )
 

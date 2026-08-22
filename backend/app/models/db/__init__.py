@@ -13,6 +13,10 @@ from app.models.db.preference import UserPreferenceRecord
 from app.models.db.recommendation import RecommendationEventRecord
 from app.models.db.recommendation import RecommendationRecord
 from app.models.db.service_heartbeat import ServiceHeartbeatRecord
+from app.models.db.smartdesk_detection import SmartDeskDetectionSessionRecord
+from app.models.db.smartdesk_detection import SmartDeskFinalStateBlockRecord
+from app.models.db.smartdesk_detection import SmartDeskReportingBlockRecord
+from app.models.db.smartdesk_detection import SmartDeskSignalBlockRecord
 from app.models.db.sessions import BrowserSessionRecord
 from app.models.db.sessions import IDESessionRecord
 from app.models.db.sessions import OSSessionRecord
@@ -39,6 +43,10 @@ __all__ = [
     "RecommendationEventRecord",
     "RecommendationRecord",
     "ServiceHeartbeatRecord",
+    "SmartDeskDetectionSessionRecord",
+    "SmartDeskFinalStateBlockRecord",
+    "SmartDeskReportingBlockRecord",
+    "SmartDeskSignalBlockRecord",
     "UserBaselineRecord",
     "UserPreferenceRecord",
     "WorkPeriodRecord",

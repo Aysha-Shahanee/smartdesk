@@ -2,6 +2,9 @@ venv/
 **pycache**/
 *.pth
 *.pt
+!smartdesk_v2/models/
+!smartdesk_v2/models/emotion/
+!smartdesk_v2/models/emotion/best_3class_model.pth
 *.download
 pending_emotion_blocks.jsonl
 pending_emotion_sessions.jsonl
@@ -14,3 +17,4 @@ data/
 *.pyc
 .env
 RAF-DB-improvement/test_emotion_service.py
+

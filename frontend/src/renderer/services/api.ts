@@ -7,8 +7,10 @@ const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
 
 export interface GitHubConnectionStatus {
   user_id: string;
-  connection_status: 'connected' | 'disconnected';
+  connection_status: 'connected' | 'disconnected' | 'pending_user_authorization' | 'reauthorization_required';
   github_login?: string;
+  installation_account_login?: string;
+  installation_account_type?: 'User' | 'Organization';
   selected_project_id?: string;
   selected_project_number?: number;
   selected_project_title?: string;
@@ -263,12 +265,72 @@ export const getCalendarEvents = async (from?: string, to?: string) => {
 };
 
 /* ---------------------------------------------------------- */
+/* Google Calendar connection                                  */
+/* ---------------------------------------------------------- */
+
+const CALENDAR_API = `${API_BASE}/api/v1/calendar`;
+
+/**
+ * `state` is the one field the UI should branch on.
+ *
+ * - `not_configured` — no OAuth client on this machine; connecting is impossible.
+ * - `disconnected`   — nobody has consented, or the user switched it off.
+ * - `needs_reconnect`— a token exists but Google rejects it. Only re-consent fixes it.
+ * - `degraded`       — connected and retrying after a transient failure.
+ * - `collecting`     — syncing normally.
+ */
+export type CalendarState =
+  | 'not_configured'
+  | 'disconnected'
+  | 'needs_reconnect'
+  | 'degraded'
+  | 'collecting';
+
+export interface CalendarStatus {
+  configured: boolean;
+  connected: boolean;
+  last_sync?: string | null;
+  event_count: number;
+  state: CalendarState;
+  collecting: boolean;
+  needs_reconnect: boolean;
+  reconnect_reason?: string | null;
+  last_error?: string | null;
+  last_error_at?: string | null;
+  last_attempt_at?: string | null;
+  consecutive_failures: number;
+  connected_at?: string | null;
+  sync_interval_min: number;
+  last_sync_stats?: Record<string, number> | null;
+  stale_hours?: number | null;
+}
+
+const calendarQuery = () => new URLSearchParams({ user_id: 'local_user' }).toString();
+
+export const getCalendarStatus = (): Promise<CalendarStatus> =>
+  fetchJson(`${CALENDAR_API}/status?${calendarQuery()}`);
+
+/** Returns the Google consent URL; the caller opens it in the system browser. */
+export const beginCalendarConnection = (): Promise<{ auth_url: string }> =>
+  fetchJson(`${CALENDAR_API}/connect/url?${calendarQuery()}`);
+
+export const syncCalendarNow = (): Promise<Record<string, number>> =>
+  fetchJson(`${CALENDAR_API}/sync?${calendarQuery()}`, { method: 'POST' });
+
+export const disconnectCalendar = (): Promise<CalendarStatus> =>
+  fetchJson(`${CALENDAR_API}/disconnect?${calendarQuery()}`, { method: 'POST' });
+
+/* ---------------------------------------------------------- */
 /* Emotion detection                                           */
 /* ---------------------------------------------------------- */
 
 export interface EmotionStatus {
   running?: boolean;
-  latest_emotion?: string | null;
+  latest_state?: string | null;
+  latest_engagement?: string | null;
+  latest_engagement_confidence?: number;
+  latest_engagement_block_start_time?: string | null;
+  latest_engagement_block_end_time?: string | null;
   session_id?: string | null;
   session_start_time?: string | null;
   model_ready?: boolean;
@@ -279,9 +341,11 @@ export interface EmotionStatus {
 export interface EmotionBlock {
   block_start_time?: string;
   block_end_time?: string;
-  dominant_emotion?: string;
-  emotion_scores?: Record<string, number>;
+  dominant_state?: string;
+  state_scores?: Record<string, number>;
+  final_state_block_count?: number;
   processed_frame_count?: number;
+  ready?: boolean;
 }
 
 export interface CurrentEmotionSession {
@@ -289,7 +353,8 @@ export interface CurrentEmotionSession {
   status?: EmotionStatus;
   session?: Record<string, unknown> | null;
   current_block?: {
-    emotion_scores?: Record<string, number>;
+    block_start_time?: string;
+    state_scores?: Record<string, number>;
     processed_frame_count?: number;
   } | null;
   completed_blocks?: EmotionBlock[];
@@ -316,21 +381,23 @@ export const getCurrentEmotionSession = async (): Promise<CurrentEmotionSession>
 export interface StressPoint {
   block_start_time: string;
   block_end_time: string;
-  /** 0–100. Derived from the block's emotion mix — see emotion_stress_service.py. */
-  stress: number;
+  /** 0–100 workload risk derived from 15-minute SmartDesk state reporting blocks. */
+  workload_risk_score: number;
   /** 0–1, how much the block's frame count justifies trusting it. */
   confidence: number;
-  processed_frame_count: number;
+  final_state_block_count: number;
   duration_minutes: number;
-  dominant_emotion: string;
+  dominant_state: string;
+  state_scores: Record<string, number>;
+  ready: boolean;
 }
 
 export interface StressSummary {
   /** null when the window holds no observed blocks — render an empty state, not a zero. */
-  score: number | null;
+  workload_risk_score: number | null;
   observed_minutes: number;
   block_count: number;
-  driver: string | null;
+  driver_state: string | null;
 }
 
 export interface StressResponse {
@@ -411,6 +478,233 @@ export const getRecommendations = async (
   if (refresh) queryParams.append('refresh', 'true');
   return fetchJson(`${API_BASE}/api/v1/recommendations?${queryParams.toString()}`);
 };
+
+/* ---------------------------------------------------------- */
+/* Rule health — per-rule telemetry over recorded feedback     */
+/* ---------------------------------------------------------- */
+
+/**
+ * One rule's record. `verdict` compares the rule against *this user's own*
+ * acceptance rate rather than a fixed bar, because acceptance in this class
+ * of system varies enormously between people — a constant would measure
+ * temperament rather than rule quality.
+ *
+ *  - `below`    the whole confidence interval sits under the user's average
+ *  - `above`    the whole interval sits over it
+ *  - `typical`  the interval straddles it, i.e. no evidence of a difference
+ *  - `unproven` fired, but too few judged cards to rate
+ *  - `silent`   never fired in the window; says nothing about quality
+ */
+export interface RuleHealth {
+  rule_id: string;
+  scope: string | null;
+  section: string | null;
+  severity: string | null;
+  known: boolean;
+  fired: number;
+  applied: number;
+  dismissed: number;
+  snoozed: number;
+  expired: number;
+  still_active: number;
+  judged: number;
+  acceptance: number | null;
+  acceptance_low: number | null;
+  acceptance_high: number | null;
+  ppv: number | null;
+  response_rate: number | null;
+  median_seconds_to_apply: number | null;
+  median_seconds_to_dismiss: number | null;
+  first_fired: string | null;
+  last_fired: string | null;
+  verdict: 'below' | 'typical' | 'unproven' | 'above' | 'silent';
+  muted: boolean;
+}
+
+/** The scrutability controls and their current settings. */
+export interface RecommendationPreferences {
+  baseline_epoch: string | null;
+  sensitivity: number;
+  muted: string[];
+  shadowed: string[];
+}
+
+/** One ordering strategy's offline scores. */
+export interface RankingMetrics {
+  strategy: string;
+  k: number;
+  days: number;
+  precision_at_k: number | null;
+  recall_at_k: number | null;
+  ndcg_at_k: number | null;
+  mrr: number | null;
+  hit_rate: number | null;
+  coverage: number | null;
+  diversity: number | null;
+  /**
+   * Self-normalised inverse-propensity estimate of this ordering's value.
+   *
+   * The only figure here about a policy the user never saw: the others score
+   * orderings of cards that were actually shown. Null unless exploration has
+   * produced the propensity variation the estimator needs.
+   */
+  off_policy_value: number | null;
+}
+
+/** One rule scored against days where the condition was planted or withheld. */
+export interface RuleAccuracy {
+  rule_id: string;
+  positives: number;
+  negatives: number;
+  true_positives: number;
+  false_positives: number;
+  false_negatives: number;
+  true_negatives: number;
+  gated: number;
+  errors: string[];
+  precision: number | null;
+  recall: number | null;
+  f1: number | null;
+}
+
+export interface SimulationReport {
+  seed: number;
+  rules: number;
+  true_positives: number;
+  false_positives: number;
+  false_negatives: number;
+  true_negatives: number;
+  precision: number | null;
+  recall: number | null;
+  gated: number;
+  errors: string[];
+  per_rule: Record<string, RuleAccuracy>;
+  /** Detection rate keyed by how many sigma the planted deviation was. */
+  sensitivity: Record<string, Record<string, number>>;
+}
+
+export interface EvaluationReport {
+  k: number;
+  days_evaluated: number;
+  labelled_cards: number;
+  relevant_cards: number;
+  beats_random: boolean | null;
+  ranker_helps: boolean | null;
+  strategies: Record<string, RankingMetrics>;
+  support: {
+    identified: boolean;
+    reason: string;
+    cards_with_propensity: number;
+    explored_cards: number;
+  };
+}
+
+export interface RuleHealthReport {
+  user_id: string;
+  since: string | null;
+  overall_acceptance: number | null;
+  overall_judged: number;
+  overall_fired: number;
+  muted_count: number;
+  rules: RuleHealth[];
+}
+
+/** Per-rule fire rate, acceptance, PPV and time-to-action. Worst rules first. */
+export const getRuleHealth = async (since?: string): Promise<RuleHealthReport> => {
+  const queryParams = new URLSearchParams();
+  queryParams.append('user_id', 'local_user');
+  if (since) queryParams.append('since', since);
+  return fetchJson(`${API_BASE}/api/v1/recommendations/rules/health?${queryParams.toString()}`);
+};
+
+/**
+ * Switch a rule off, or back on.
+ *
+ * Takes effect at generation: a muted rule stops producing cards rather than
+ * having its cards hidden. Cards it produced before are kept — the record of
+ * a rule doing badly is what justifies muting it.
+ */
+export const setRuleMuted = async (
+  ruleId: string,
+  muted: boolean,
+): Promise<{ rule_id: string; muted: boolean }> => {
+  const queryParams = new URLSearchParams({ user_id: 'local_user' });
+  return fetchJson(
+    `${API_BASE}/api/v1/recommendations/rules/${ruleId}/mute?${queryParams.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ muted }),
+    },
+  );
+};
+
+/** Run a rule silently: evaluated on real data, its output recorded, never shown. */
+export const setRuleShadow = async (
+  ruleId: string,
+  shadow: boolean,
+): Promise<{ rule_id: string; shadow: boolean }> => {
+  const queryParams = new URLSearchParams({ user_id: 'local_user' });
+  return fetchJson(
+    `${API_BASE}/api/v1/recommendations/rules/${ruleId}/shadow?${queryParams.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shadow }),
+    },
+  );
+};
+
+/** The scrutability controls and their current settings. */
+export const getRecommendationPreferences = async (): Promise<RecommendationPreferences> =>
+  fetchJson(`${API_BASE}/api/v1/recommendations/preferences?user_id=local_user`);
+
+/**
+ * Ignore recorded activity before `date` when computing baselines.
+ *
+ * Nothing is deleted — the activity stays in the timeline, only the baseline
+ * window moves. Passing null clears the epoch and restores every comparison.
+ */
+export const setBaselineEpoch = async (
+  date: string | null,
+): Promise<{ baseline_epoch: string | null }> =>
+  fetchJson(
+    `${API_BASE}/api/v1/recommendations/preferences/baseline-epoch?user_id=local_user`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date }),
+    },
+  );
+
+/** How far from usual a day must be before the engine mentions it. */
+export const setSensitivity = async (
+  value: number,
+): Promise<{ sensitivity: number }> =>
+  fetchJson(
+    `${API_BASE}/api/v1/recommendations/preferences/sensitivity?user_id=local_user`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value }),
+    },
+  );
+
+/** Offline evaluation of the ordering against its own ablations. */
+export const getEvaluation = async (k = 3): Promise<EvaluationReport> =>
+  fetchJson(
+    `${API_BASE}/api/v1/recommendations/evaluation?user_id=local_user&k=${k}`,
+  );
+
+/**
+ * Rule accuracy against synthetic days with planted conditions.
+ *
+ * The only measurement here that is precision and recall in the ordinary
+ * sense: the condition is put into the features on purpose, so the right
+ * answer is known before the rule runs.
+ */
+export const getSimulation = async (seed = 0): Promise<SimulationReport> =>
+  fetchJson(`${API_BASE}/api/v1/recommendations/simulation?seed=${seed}`);
 
 /** Record Applied / Not relevant / Snoozed. This is the ranker's training set. */
 export const sendRecommendationFeedback = async (

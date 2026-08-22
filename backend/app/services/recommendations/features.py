@@ -33,6 +33,11 @@ from app.services.recommendations.baselines import (
     fetch_segments,
 )
 from app.services.recommendations.effects import post_meeting_focus_effect
+from app.repositories.preference_repository import PreferenceRepository
+from app.services.recommendations.redaction import (
+    TITLE_FEATURES,
+    redact_features,
+)
 from app.services.recommendations.types import FeatureContext
 
 logger = logging.getLogger("smartdesk.recommendations.features")
@@ -382,6 +387,11 @@ def build_live_context(
     if as_of.hour in baselines.hour_focus:
         data["hour_focus_now"] = baselines.hour_focus[as_of.hour]
 
+    # Titles are free text written by software the user does not control, and
+    # they reach card copy and exported reports. Scrubbed here, at the one
+    # boundary every context passes through, rather than at each render site.
+    redact_features(data, TITLE_FEATURES)
+    data["pref.sensitivity"] = PreferenceRepository(db).sensitivity(user_id)
     return FeatureContext(
         data,
         as_of=as_of,
@@ -510,6 +520,30 @@ def _hygiene_features(db: Session, user_id: str, day_start: datetime, segments: 
     return data
 
 
+#: Cached ``(mtime, fields)`` from the categoriser artefact. The model is frozen
+#: once trained — the file's own module says so — yet the two scalars HY-09
+#: needs were being unpickled off disk on every daily context build, which is
+#: also every daily report request. Keyed on mtime so a retrain is picked up.
+_MODEL_META: tuple[float, dict] | None = None
+
+
+def _model_meta(path: Path) -> dict:
+    """The categoriser's self-reported quality, read at most once per retrain."""
+    global _MODEL_META
+    mtime = path.stat().st_mtime
+    if _MODEL_META is not None and _MODEL_META[0] == mtime:
+        return _MODEL_META[1]
+
+    payload = joblib.load(path)
+    fields: dict = {"model_basis": str(payload.get("holdout_basis") or "unknown")}
+    accuracy = payload.get("holdout_accuracy")
+    if accuracy is not None:
+        fields["model_holdout"] = float(accuracy)
+
+    _MODEL_META = (mtime, fields)
+    return fields
+
+
 def _model_health(db: Session) -> dict:
     """How stale the categoriser is against the labels it has not seen.
 
@@ -528,11 +562,9 @@ def _model_health(db: Session) -> dict:
             data["model_missing"] = 1.0
             return data
 
-        payload = joblib.load(path)
-        accuracy = payload.get("holdout_accuracy")
-        if accuracy is not None:
-            data["model_holdout"] = float(accuracy)
-        data["model_basis"] = str(payload.get("holdout_basis") or "unknown")
+        # The label count below is deliberately *not* cached: corrections arrive
+        # continuously, and that number moving is the whole signal HY-09 reads.
+        data.update(_model_meta(path))
     except Exception:
         logger.debug("Could not read the categoriser model for HY-09")
         return data
@@ -577,6 +609,8 @@ def build_daily_context(
     active = [s for s in segments if s["state"] == "active"]
     if not active:
         data.update(baselines.flatten())
+        redact_features(data, TITLE_FEATURES)
+        data["pref.sensitivity"] = PreferenceRepository(db).sensitivity(user_id)
         return FeatureContext(
             data, as_of=day_start, user_id=user_id,
             days_of_history=baselines.days_of_history,
@@ -735,6 +769,8 @@ def build_daily_context(
         data["control_focus"] = effect.control_median
         data["post_meeting_relative"] = effect.relative
         data["post_meeting_n"] = float(min(effect.n_treated, effect.n_control))
+        data["post_meeting_p"] = effect.pair_p
+        data["post_meeting_pairs"] = float(effect.n_pairs)
 
     # PL-08 — the app pair you bounce between most. Counted as an unordered
     # pair, because A->B and B->A are the same habit seen from two sides.
@@ -797,6 +833,8 @@ def build_daily_context(
         data["low_confidence_share"] = low / active_sec
 
     data.update(baselines.flatten())
+    redact_features(data, TITLE_FEATURES)
+    data["pref.sensitivity"] = PreferenceRepository(db).sensitivity(user_id)
     return FeatureContext(
         data,
         as_of=day_start,
