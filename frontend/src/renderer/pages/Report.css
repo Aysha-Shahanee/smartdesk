@@ -230,12 +230,6 @@
   vertical-align: 1px;
 }
 
-.narrative-finding-src {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
-  font-family: var(--font-mono, Consolas, monospace);
-}
-
 /* Expands the applications table past its top-5 cut. Indented to the table's
    own cell padding so it lines up under the first column. */
 .app-table-toggle {

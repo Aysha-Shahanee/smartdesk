@@ -58,13 +58,6 @@ const WORK_STATE_COLORS: Record<WorkState, string> = {
   Overloaded: '#991b1b',
 };
 
-/** Clock label for a 15-minute block, for the stress chart's X axis. */
-const blockClockLabel = (iso: string): string => {
-  const parsed = new Date(iso);
-  if (Number.isNaN(parsed.getTime())) return '';
-  return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-};
-
 const FOCUS_LEVEL_LABELS: Record<FocusLevel, string> = {
   high_focus: 'High Focus',
   low_focus: 'Low Focus',
