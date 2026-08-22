@@ -282,9 +282,6 @@ const Timeline: React.FC = () => {
     const focusTile: SummaryTile = {
       label: 'Avg Focus',
       value: focusSummary.score !== null ? `${focusOutOf100(focusSummary.score)}/100` : '—',
-      sub: focusSummary.score !== null
-        ? `Weighted by time • ${Math.round(focusSummary.coverage * 100)}% of it scored`
-        : 'No scored segments here',
     };
 
     if (activeTab === 'IDE') {
@@ -294,12 +291,7 @@ const Timeline: React.FC = () => {
         {
           label: 'Coding Time',
           value: formatDuration(idePanel?.coding_time_sec ?? 0),
-          /* The two tabs measure the editor differently and the numbers do not
-             match: OS / Apps counts every second its window held focus, this
-             counts only the seconds the IDE saw editor activity. Say which is
-             which on the tile rather than leaving two plausible "time in VS
-             Code" figures to be reconciled by guesswork. */
-          sub: 'Editor active — IDE-detected idle removed',
+          sub: '',
         },
         { label: 'Top Language', value: langs[0]?.name ? capitalize(langs[0].name) : '—' },
         { label: 'Top Project', value: projects[0]?.name ?? '—' },
@@ -310,7 +302,7 @@ const Timeline: React.FC = () => {
 
     if (activeTab === 'Browser') {
       return [
-        { label: 'Browsing Time', value: formatDuration(totalSec), sub: 'Browser window in focus' },
+        { label: 'Browsing Time', value: formatDuration(totalSec), sub: '' },
         { label: 'Top Domain', value: domainBreakdown[0]?.name ?? '—' },
         { label: 'Domains Visited', value: String(domainBreakdown.length) },
         { label: 'Segments', value: String(visibleSegments.length) },
@@ -320,7 +312,7 @@ const Timeline: React.FC = () => {
 
     const apps = new Set(visibleSegments.map(s => s.app_name).filter(Boolean));
     return [
-      { label: 'Active Time', value: formatDuration(totalSec), sub: 'Window in focus, input detected' },
+      { label: 'Active Time', value: formatDuration(totalSec), sub: '' },
       { label: 'Idle Time', value: formatDuration(osPanel?.idle_time_sec ?? 0) },
       { label: 'Apps Used', value: String(apps.size) },
       { label: 'Segments', value: String(visibleSegments.length) },
@@ -352,15 +344,13 @@ const Timeline: React.FC = () => {
     if (activeTab === 'Browser') {
       return {
         title: 'Time by Domain',
-        note: 'Derived from non-overlapping activity segments, so concurrent tabs are not double-counted.',
+        note: '',
         rows: domainBreakdown,
       };
     }
     return {
       title: 'Time by Application',
-      note: 'Derived from non-overlapping activity segments. This is window-focus '
-        + 'time, so an editor or browser reads higher here than on its own tab, '
-        + "which also subtracts that source's own idle detection.",
+      note: '',
       rows: appBreakdown,
     };
   }, [activeTab, idePanel, domainBreakdown, appBreakdown]);
@@ -510,17 +500,14 @@ const Timeline: React.FC = () => {
             <div className="sd-card metric-card">
               <span className="metric-card-label">Meetings</span>
               <span className="metric-card-value">{calendarForDay.timed.length}</span>
-              <span className="metric-card-sub">Scheduled on {date}</span>
             </div>
             <div className="sd-card metric-card">
               <span className="metric-card-label">Time in Meetings</span>
               <span className="metric-card-value">{formatDuration(calendarForDay.meetingSec)}</span>
-              <span className="metric-card-sub">Total scheduled duration</span>
             </div>
             <div className="sd-card metric-card">
               <span className="metric-card-label">All-day Events</span>
               <span className="metric-card-value">{calendarForDay.allDay.length}</span>
-              <span className="metric-card-sub">Not counted in meeting time</span>
             </div>
             <div className="sd-card metric-card">
               <span className="metric-card-label">Longest Meeting</span>
@@ -529,7 +516,6 @@ const Timeline: React.FC = () => {
                   ? formatDuration(Math.max(...calendarForDay.timed.map(e => e.duration_sec || 0)))
                   : '—'}
               </span>
-              <span className="metric-card-sub">Single longest block</span>
             </div>
           </div>
 
@@ -594,14 +580,7 @@ const Timeline: React.FC = () => {
                 </div>
               ))}
             </div>
-            {activeTab === 'IDE' && (
-              <p className="chart-note" style={{ marginTop: 'var(--space-lg)' }}>
-                Coding Time comes from the IDE extension and drops the stretches it
-                saw no editor activity for. The OS / Apps tab measures the same
-                editor by window focus instead, so its row for this app reads
-                higher — reading, reviewing and thinking count there, not here.
-              </p>
-            )}
+            {activeTab === 'IDE' && null}
           </div>
 
           {visibleSegments.length === 0 ? (
@@ -615,11 +594,6 @@ const Timeline: React.FC = () => {
               <div className="sd-grid-2" style={{ marginTop: 'var(--space-xl)' }}>
                 <div className="sd-card">
                   <h3>Activity by Hour</h3>
-                  <p className="chart-note">
-                    Bars are minutes on the left axis; the line is that hour's focus score on
-                    the right. Hours with under {HOUR_MIN_SCORED_SEC / 60} minutes of scored
-                    activity carry no point rather than a reading drawn from a glance.
-                  </p>
                   <ResponsiveContainer width="100%" height={250}>
                     <ComposedChart data={hourlyData} barGap={2}>
                       <CartesianGrid strokeDasharray="3 3" stroke={chrome.grid} />
@@ -737,10 +711,6 @@ const Timeline: React.FC = () => {
 
               <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
                 <h3>Timeline View</h3>
-                <p className="chart-note">
-                  The full day, 00:00 to 24:00. Empty stretches are hours with no
-                  recorded {activeTab} activity.
-                </p>
                 <div className="day-timeline">
                   <div className="day-timeline-track">
                     {GRID_HOURS.map(h => (

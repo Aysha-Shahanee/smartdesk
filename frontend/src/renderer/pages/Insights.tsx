@@ -728,19 +728,11 @@ const Insights: React.FC = () => {
                   ? `${focusOutOf100(focusHighlights.week.score)}/100`
                   : '—'}
               </span>
-              <span className="metric-card-sub">
-                Across {focusHighlights.week.segments} scored segments
-              </span>
             </div>
             <div className="sd-card metric-card">
               <span className="metric-card-label">Best Hour</span>
               <span className="metric-card-value" style={{ fontSize: 'var(--font-size-lg)' }}>
                 {focusHighlights.best ? hourLabel(focusHighlights.best.hour) : '—'}
-              </span>
-              <span className="metric-card-sub">
-                {focusHighlights.best
-                  ? `${focusOutOf100(focusHighlights.best.score)}/100 pooled across the week`
-                  : 'Not enough scored activity'}
               </span>
             </div>
             <div className="sd-card metric-card">
@@ -748,29 +740,17 @@ const Insights: React.FC = () => {
               <span className="metric-card-value" style={{ fontSize: 'var(--font-size-lg)' }}>
                 {focusHighlights.worst ? hourLabel(focusHighlights.worst.hour) : '—'}
               </span>
-              <span className="metric-card-sub">
-                {focusHighlights.worst
-                  ? `${focusOutOf100(focusHighlights.worst.score)}/100 pooled across the week`
-                  : 'Not enough scored activity'}
-              </span>
             </div>
             <div className="sd-card metric-card">
               <span className="metric-card-label">Deep Work</span>
               <span className="metric-card-value">
                 {Math.round(deepVsShallow.reduce((acc, d) => acc + d.deep, 0) / 60)}h
               </span>
-              <span className="metric-card-sub">
-                In blocks of {DEEP_WORK_MIN_SEC / 60} minutes or longer
-              </span>
             </div>
           </div>
 
           <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
             <h3>Focus Score Trend (Last {FOCUS_TREND_DAYS} Days)</h3>
-            <p className="pattern-description">
-              Each point is that day's focus, weighted by how long each segment ran. A day with
-              no scored activity has no point rather than a zero.
-            </p>
             <ResponsiveContainer width="100%" height={350}>
               <LineChart data={focusTrend}>
                 <CartesianGrid strokeDasharray="3 3" stroke={chrome.grid} />
@@ -796,11 +776,6 @@ const Insights: React.FC = () => {
 
           <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
             <h3>Deep Work vs Shallow Work (Minutes)</h3>
-            <p className="pattern-description">
-              Deep work is time inside an uninterrupted stretch of {DEEP_WORK_MIN_SEC / 60} minutes
-              or more; shallow is the rest of the active time. The two sum to the day's tracked
-              activity.
-            </p>
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={deepVsShallow} barGap={4}>
                 <CartesianGrid strokeDasharray="3 3" stroke={chrome.grid} />
@@ -824,13 +799,10 @@ const Insights: React.FC = () => {
               <div className="sd-alert-content">
                 <h4>Key Finding</h4>
                 <p>
-                  Your strongest hour is <strong>{hourLabel(focusHighlights.best.hour)}</strong>,
-                  averaging {focusOutOf100(focusHighlights.best.score)}/100 across the last{' '}
-                  {FOCUS_TREND_DAYS} days — against {focusOutOf100(focusHighlights.week.score)}/100
-                  for the week overall, and {focusOutOf100(focusHighlights.worst.score)}/100 at your
-                  weakest hour, {hourLabel(focusHighlights.worst.hour)}. Hours with under{' '}
-                  {HOUR_MIN_SCORED_SEC / 60} minutes of scored activity are left out of this
-                  comparison.
+                  Your best focus window is <strong>{hourLabel(focusHighlights.best.hour)}</strong> ({focusOutOf100(focusHighlights.best.score)}/100). 
+                  This is when you're most productive — plan your important tasks for this time. 
+                  Your focus drops significantly at <strong>{hourLabel(focusHighlights.worst.hour)}</strong> ({focusOutOf100(focusHighlights.worst.score)}/100), 
+                  so save routine work for then.
                 </p>
               </div>
             </div>
@@ -1007,7 +979,6 @@ const Insights: React.FC = () => {
                       : 'No emotion scores are available for this session.'}
                 </div>
               )}
-              <p className="chart-note">Based on completed 15-minute blocks from the current emotion session.</p>
             </div>
           </div>
 
@@ -1018,21 +989,18 @@ const Insights: React.FC = () => {
                 <span className="privacy-dot" style={{ background: 'var(--color-success)' }} />
                 <div>
                   <strong>No Face Images Stored</strong>
-                  <p>Only emotion labels are saved</p>
                 </div>
               </div>
               <div className="privacy-item">
                 <span className="privacy-dot" style={{ background: 'var(--color-success)' }} />
                 <div>
                   <strong>No Raw Camera Feed</strong>
-                  <p>Processing happens locally</p>
                 </div>
               </div>
               <div className="privacy-item">
                 <span className="privacy-dot" style={{ background: 'var(--color-success)' }} />
                 <div>
                   <strong>Data Stays Local First</strong>
-                  <p>Only session and 15-minute block summaries are sent when backend sync is enabled</p>
                 </div>
               </div>
             </div>
@@ -1112,14 +1080,12 @@ const Insights: React.FC = () => {
                     {patternSummary.counts.high_focus}
                   </span>
                   <span className="pattern-stat-label">High Focus Periods</span>
-                  <span className="pattern-stat-sub">{isDayAnalysis ? 'Strong focus on this day' : isHourAnalysis ? 'Strong focus across the selected date' : 'Strong focus in this scope'}</span>
                 </div>
                 <div className="pattern-stat-card">
                   <span className="pattern-stat-value" style={{ color: focusLevelColor('distracted', theme) }}>
                     {patternSummary.counts.distracted}
                   </span>
                   <span className="pattern-stat-label">Moderate Focus Periods</span>
-                  <span className="pattern-stat-sub">{isDayAnalysis ? 'Some focus on this day' : isHourAnalysis ? 'Some focus across the selected date' : 'Some focus, lighter consistency'}</span>
                 </div>
               </div>
 
@@ -1414,7 +1380,7 @@ const Insights: React.FC = () => {
                 <div className="sd-grid-2" style={{ marginTop: 'var(--space-xl)' }}>
                   <div className="sd-card">
                     <div className="pattern-selected-cluster">
-                      <span className="pattern-detail-label">Dominant Cluster for This Hour</span>
+                      <span className="pattern-detail-label">Dominant focus pattern in this hour</span>
                       <strong style={{ color: focusLevelColor(selectedBucket.focusLevel, theme) }}>
                         {FOCUS_LEVEL_LABELS[selectedBucket.focusLevel]}
                       </strong>
