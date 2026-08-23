@@ -22,7 +22,11 @@ from app.services.recommendations.types import (
 )
 
 DAILY = Scope.DAILY
+WEEKLY = Scope.WEEKLY
+MONTHLY = Scope.MONTHLY
 DAY = timedelta(hours=20)
+WEEK = timedelta(days=6)
+MONTH = timedelta(days=25)
 
 
 @rule(
@@ -226,4 +230,67 @@ def model_drift(ctx: FeatureContext) -> Finding | None:
             "basis": ctx.get("model_basis") or "unknown",
         },
         evidence=Evidence(basis="absolute", n=int(count)),
+    )
+
+
+# ---------------------------------------------------------------------- #
+# Empty periods                                                            #
+# ---------------------------------------------------------------------- #
+#
+# The rules above catch a layer that has gone quiet while the rest of the
+# pipeline still runs. These two catch the case where nothing ran at all.
+#
+# A period with no recorded days is the one situation where silence is the
+# wrong answer. The builders return early with baselines only, every rule in
+# scope gates out for want of features, and the report comes out clean and
+# empty -- indistinguishable from a genuinely quiet week rather than a
+# fortnight when the collector was down. These rules make the difference
+# visible. Both carry HY- ids on purpose: the report router files anything
+# HY- into the caveats footer rather than among the findings, which is where
+# a statement about the collector belongs.
+
+
+@rule(
+    id="HY-10", version=1, scope=WEEKLY, section=Section.INSIGHT,
+    severity=Severity.HIGH,
+    requires={"week_day_count"}, cooldown=WEEK,
+    title="No activity was recorded in the week to {week_end}",
+    why="The weekly report covers seven days and found none of them. Every "
+        "weekly comparison is missing rather than flat, and the figures above "
+        "describe an empty period, not a quiet one.",
+    action="Check that the SmartDesk collector was running for this week; if "
+           "it was stopped, treat this week's report as absent rather than as "
+           "a record of low activity.",
+)
+def week_is_empty(ctx: FeatureContext) -> Finding | None:
+    if ctx["week_day_count"] > 0:
+        return None
+    return Finding(
+        dedup_key="hygiene/week-empty",
+        facts={"week_end": ctx.get("week_end") or "this week"},
+        # Absolute: the claim is "there are no days here", which needs no
+        # sample to support it -- it *is* the absence of the sample.
+        evidence=Evidence(basis="absolute"),
+    )
+
+
+@rule(
+    id="HY-11", version=1, scope=MONTHLY, section=Section.INSIGHT,
+    severity=Severity.HIGH,
+    requires={"month_active_days"}, cooldown=MONTH,
+    title="No activity was recorded in the month to {month_end}",
+    why="The monthly report covers thirty days and found none of them. The "
+        "month-over-month comparisons are absent rather than unchanged, and "
+        "no trend, habit or erosion finding could be computed.",
+    action="Check that the SmartDesk collector was running for this month; if "
+           "it was stopped, treat this month's report as absent rather than "
+           "as a record of low activity.",
+)
+def month_is_empty(ctx: FeatureContext) -> Finding | None:
+    if ctx["month_active_days"] > 0:
+        return None
+    return Finding(
+        dedup_key="hygiene/month-empty",
+        facts={"month_end": ctx.get("month_end") or "this month"},
+        evidence=Evidence(basis="absolute"),
     )

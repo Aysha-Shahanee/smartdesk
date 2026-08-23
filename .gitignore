@@ -16,6 +16,11 @@ backend/.venv/
 cloudflared.yml
 cloudflared.yaml
 
+# Hypothesis keeps a database of falsifying examples it has found. Useful
+# locally — it replays a known failure first on the next run — and meaningless
+# to anyone else, since the examples are specific to one machine's run history.
+.hypothesis/
+
 # Python cache/compiled files
 __pycache__/
 *.py[cod]
@@ -71,3 +76,7 @@ backend/model_store/
 # Cached embeddings of activity segments. Derived data, regenerable, and
 # computed from window titles and URLs — not something to keep in git.
 backend/features/
+
+# SmartDesk v2 keeps the active MediaPipe fallback model under emotion-recognition/smartdesk_v2/models.
+backend/models/face_landmarker.task
+

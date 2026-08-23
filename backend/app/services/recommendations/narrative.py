@@ -32,18 +32,38 @@ def fmt_minutes(value: float | None) -> str:
     return f"{hours}h {minutes}m" if minutes else f"{hours}h"
 
 
+def _split_clock(value: float) -> tuple[int, int, int]:
+    """Continuous hours to ``(days_over, hour, minute)``, rounding before wrapping.
+
+    Order matters here and the obvious implementation gets it wrong. Rounding
+    the minutes *after* taking the hour modulo 24 lets the minute carry push the
+    time past midnight once the day has already been decided:
+
+    * ``fmt_hour(23.999)`` returned ``"23:60"`` — not a time at all.
+    * ``fmt_clock(23.999)`` returned ``"00:00"`` with no day qualifier, so a
+      stop-time percentile a thousandth of an hour short of midnight was
+      reported as the previous morning.
+
+    Converting to whole minutes first makes the carry happen once, in the right
+    place, and leaves the day count correct on the other side of it.
+    """
+    total_minutes = int(round(float(value) * 60))
+    days_over, remainder = divmod(total_minutes, 24 * 60)
+    hour, minute = divmod(remainder, 60)
+    return days_over, hour, minute
+
+
 def fmt_hour(value: float | None) -> str:
     if value is None:
         return "—"
-    hour = int(value) % 24
-    minutes = int(round((float(value) - int(value)) * 60))
-    return f"{hour:02d}:{minutes:02d}"
+    _days, hour, minute = _split_clock(value)
+    return f"{hour:02d}:{minute:02d}"
 
 
 def fmt_hour_range(value: float | None) -> str:
     if value is None:
         return "—"
-    hour = int(value) % 24
+    _days, hour, _minute = _split_clock(value)
     return f"{hour:02d}:00-{(hour + 1) % 24:02d}:00"
 
 
@@ -59,14 +79,16 @@ def fmt_clock(value: float | None) -> str:
     """
     if value is None:
         return "—"
-    next_day = value >= 24.0
-    wrapped = value % 24
-    hour = int(wrapped)
-    minutes = int(round((wrapped - hour) * 60))
-    if minutes == 60:
-        hour, minutes = hour + 1, 0
-    label = f"{hour % 24:02d}:{minutes:02d}"
-    return f"{label} the next morning" if next_day else label
+    days_over, hour, minute = _split_clock(value)
+    label = f"{hour:02d}:{minute:02d}"
+    if days_over <= 0:
+        return label
+    if days_over == 1:
+        # "the next morning" only when it actually is one. A session ending at
+        # 23:59 of the following day is still one day over, and calling that
+        # morning is simply wrong.
+        return f"{label} the next morning" if hour < 12 else f"{label} the next day"
+    return f"{label}, {days_over} days later"
 
 
 def fmt_pct(value: float | None) -> str:
@@ -83,11 +105,15 @@ def fmt_ratio(value: float | None) -> str:
 
 
 def magnitude(z: float) -> str:
-    """Word for how far from normal something sits, in MADs.
+    """Word for how far from normal something sits, in robust sigmas.
 
     Bucket edges are set where the language stops being defensible rather than
-    at round numbers: below 1 MAD is inside the ordinary spread and gets a
-    hedge, past 3 MADs is genuinely rare and can be stated plainly.
+    at round numbers: below 1 sigma is inside the ordinary spread and gets a
+    hedge, past 3 sigma is genuinely rare and can be stated plainly.
+
+    The input must be a *scaled* z — see :meth:`Stat.robust_z`. Fed a raw MAD
+    count these words overstate by about half: three raw MADs is 2.02 sigma,
+    which is a thing that happens most months, not the "sharply" this returns.
     """
     z = abs(z)
     if z < 1.0:

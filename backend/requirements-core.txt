@@ -9,6 +9,12 @@ pydantic>=2.9.0
 # tests/test_categorizer.py imports pytest; without it that module fails to
 # import and unittest discovery silently skips a quarter of the suite.
 pytest
+# Property-based tests for the recommendation engine's invariants. The rules
+# are pure functions over a feature dict, which is exactly the shape Hypothesis
+# searches well: it generates the odd inputs — a zero spread, a negative
+# duration, a percentile ordering nobody wrote a fixture for — that a
+# hand-written case list keeps missing.
+hypothesis
 python-dotenv
 sqlalchemy
 tzdata

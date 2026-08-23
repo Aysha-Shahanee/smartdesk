@@ -14,7 +14,9 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.services.calendar_service import CalendarNotConfiguredError
 from app.services.calendar_service import CalendarNotConnectedError
+from app.services.calendar_service import CalendarReconnectRequiredError
 from app.services.calendar_service import CalendarService
+from app.services.calendar_service import CalendarSyncTransientError
 
 router = APIRouter()
 logger = logging.getLogger("smartdesk.calendar_routes")
@@ -44,6 +46,22 @@ def calendar_connect(user_id: str = Query(default=None)):
     except CalendarNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return RedirectResponse(auth_url)
+
+
+@router.get("/connect/url")
+def calendar_connect_url(user_id: str = Query(default=None)):
+    """The same consent URL, as JSON.
+
+    The desktop app cannot follow the redirect above: the renderer fetches over
+    XHR and Google refuses to render its consent screen in an Electron window
+    anyway. Settings asks for the URL here and hands it to the system browser,
+    which is the flow GitHub already uses.
+    """
+    try:
+        auth_url = _service.build_auth_url(user_id or settings.DEFAULT_USER_ID)
+    except CalendarNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"auth_url": auth_url}
 
 
 @router.get("/oauth/callback")
@@ -87,19 +105,46 @@ def calendar_sync(
     user_id: str = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    """Manual sync — used by the dashboard Sync button."""
+    """Manual sync — used by the dashboard and Settings "Sync now" buttons."""
+    resolved = user_id or settings.DEFAULT_USER_ID
     try:
-        return _service.sync(user_id or settings.DEFAULT_USER_ID, db)
+        return _service.sync(resolved, db)
+    except CalendarReconnectRequiredError as exc:
+        # 409 with a distinct code so the UI can offer Reconnect rather than a
+        # generic error the user cannot act on.
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "reconnect_required", "message": str(exc)},
+        ) from exc
     except CalendarNotConnectedError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "not_connected", "message": str(exc)},
+        ) from exc
     except CalendarNotConfiguredError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "not_configured", "message": str(exc)},
+        ) from exc
+    except CalendarSyncTransientError as exc:
+        # The connection is intact; the attempt is not. Auto-sync retries on its
+        # own backoff, so this is informational rather than a broken state.
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "transient", "message": str(exc)},
+        ) from exc
 
 
 @router.post("/disconnect")
-def calendar_disconnect(user_id: str = Query(default=None)):
-    _service.disconnect(user_id or settings.DEFAULT_USER_ID)
-    return {"status": "disconnected"}
+def calendar_disconnect(
+    user_id: str = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """Stop collection. Deletes the stored token; keeps events already synced."""
+    resolved = user_id or settings.DEFAULT_USER_ID
+    _service.disconnect(resolved)
+    logger.info("Google Calendar disconnected for %s.", resolved)
+    return {"status": "disconnected", **_service.status(resolved, db)}
 
 
 @router.get("/events")

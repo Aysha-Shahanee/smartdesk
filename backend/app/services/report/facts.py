@@ -25,7 +25,6 @@ from app.services.recommendations.periods import (
     WEEKDAY_NAMES,
     build_monthly_context,
     build_weekly_context,
-    summarise_days,
 )
 from app.services.recommendations.types import FeatureContext, Scope
 
@@ -105,7 +104,10 @@ def _span_label(start: str, end: str) -> str:
     except ValueError:
         return f"{start} to {end}"
     if first.year != last.year:
-        return f"{first:%-d %B %Y} to {last:%-d %B %Y}".replace("%-d", "")
+        return (
+            f"{first.day} {first:%B} {first.year} to "
+            f"{last.day} {last:%B} {last.year}"
+        )
     if first.month != last.month:
         return f"{first.day} {first:%B} to {last.day} {last:%B} {last.year}"
     return f"{first.day}-{last.day} {last:%B} {last.year}"
@@ -160,6 +162,8 @@ def _load_findings(
             RecommendationRecord.scope.in_(scopes),
             RecommendationRecord.local_date.in_(local_dates),
             RecommendationRecord.status.in_(("active", "applied")),
+            # Never quote a card nobody was shown.
+            RecommendationRecord.shadow.isnot(True),
         )
         .order_by(RecommendationRecord.score.desc())
         .all()
@@ -183,6 +187,20 @@ def _load_findings(
             "score": row.score,
         })
     return grouped, notes
+
+
+def _days_in_period(ctx: FeatureContext, start: str, end: str) -> list:
+    """The period's days, sliced from what the context already reduced.
+
+    The period builders summarise more history than the report shows — four
+    weeks behind a weekly context, sixty days behind a monthly one — so the
+    reporting window is always a slice of work already done. Calling
+    ``summarise_days`` again here re-fetched the same segments and re-derived
+    the same blocks, and cost roughly a third of the request. It also left two
+    passes over different ranges free to disagree about a figure the report
+    prints once.
+    """
+    return [day for day in ctx.day_summaries if start <= day.date <= end]
 
 
 def _categories_from(mix: dict[str, float], active_min: float) -> list[CategorySlice]:
@@ -240,8 +258,10 @@ def _daily_facts(
         _metric("fragmentation", "Activities per hour", ctx.num("frag_index"),
                 "count", ctx.get("baseline.frag_index.p50"),
                 higher_is_better=False),
-        _metric("idle", "Idle time", ctx.num("idle_min"), "min", None,
-                higher_is_better=False),
+        # No idle tile. Idle is the absence of the thing the report is about,
+        # and it was the only metric here that was not a statement about the
+        # work. DY-13 still raises an unusually idle day on the Recommendations
+        # tab, where "this is off for you" is the actual point.
     ]
 
     mix = ctx.get("category_mix") or {}
@@ -291,24 +311,26 @@ def _weekly_facts(
         return facts
 
     day_count = max(ctx.num("week_day_count"), 1.0)
+    # Week-scoped baselines: the median of this user's previous whole weeks,
+    # from periods.weekly_baseline(). Absent until three complete weeks have
+    # been recorded, in which case these read as plain totals.
     facts.metrics = [
-        _metric("active", "Active time", ctx.num("week_active_min"), "min"),
-        _metric("deep", "Deep work", ctx.num("week_deep_min"), "min"),
-        _metric("active_days", "Active days", ctx.num("week_active_days"), "count"),
+        _metric("active", "Active time", ctx.num("week_active_min"), "min",
+                ctx.get("baseline.week_active_min.p50")),
+        _metric("deep", "Deep work", ctx.num("week_deep_min"), "min",
+                ctx.get("baseline.week_deep_min.p50")),
+        _metric("active_days", "Active days", ctx.num("week_active_days"),
+                "count", ctx.get("baseline.week_active_days.p50")),
         _metric("daily_average", "Daily average",
                 ctx.num("week_active_min") / day_count, "min",
                 ctx.get("baseline.daily_active_min.p50")),
         _metric("late_nights", "Sessions past midnight",
-                ctx.num("late_night_count"), "count", None,
+                ctx.num("late_night_count"), "count",
+                ctx.get("baseline.late_night_count.p50"),
                 higher_is_better=False),
     ]
 
-    days = summarise_days(
-        db, user_id,
-        datetime.fromisoformat(f"{start}T00:00:00"),
-        datetime.fromisoformat(f"{end}T00:00:00") + timedelta(days=1),
-        baselines,
-    )
+    days = _days_in_period(ctx, start, end)
     facts.days = [
         DayPoint(
             date=d.date,
@@ -360,26 +382,30 @@ def _monthly_facts(
         return facts
 
     active_days = max(ctx.num("month_active_days"), 1.0)
+    # No comparisons at this scope, by choice.
+    #
+    # Nothing here can be held against a like-for-like norm. A 30-day total is
+    # a single sample, so no baseline for it can exist; the daily average would
+    # have to borrow the *daily* median, and the typical-day figure the previous
+    # 30-day window — two different kinds of comparison sitting in one row of
+    # tiles, next to three that carry none at all. That mixture reads as a bug
+    # rather than as a distinction. The month reports what happened; the daily
+    # and weekly scopes, whose units do have comparable history, do the
+    # comparing.
     facts.metrics = [
         _metric("active", "Active time", ctx.num("month_active_min"), "min"),
         _metric("deep", "Deep work", ctx.num("month_deep_min"), "min"),
         _metric("active_days", "Active days", ctx.num("month_active_days"), "count"),
         _metric("daily_average", "Daily average",
-                ctx.num("month_active_min") / active_days, "min",
-                ctx.get("baseline.daily_active_min.p50")),
+                ctx.num("month_active_min") / active_days, "min"),
     ]
     if "mo_deep_now" in ctx:
         facts.metrics.append(
             _metric("deep_median", "Deep work on a typical day",
-                    ctx.num("mo_deep_now"), "min", ctx.get("mo_deep_prev"))
+                    ctx.num("mo_deep_now"), "min")
         )
 
-    days = summarise_days(
-        db, user_id,
-        datetime.fromisoformat(f"{start}T00:00:00"),
-        datetime.fromisoformat(f"{end}T00:00:00") + timedelta(days=1),
-        baselines,
-    )
+    days = _days_in_period(ctx, start, end)
     facts.days = [
         DayPoint(
             date=d.date, weekday=WEEKDAY_NAMES[d.weekday][:3],

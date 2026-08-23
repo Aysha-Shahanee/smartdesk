@@ -288,6 +288,14 @@ async function refresh() {
     if (!cal.configured) {
       document.getElementById("cal-msg").textContent =
         "Not configured: set GOOGLE_CLIENT_ID/SECRET in .env or add calendar_store/credentials.json";
+    } else if (cal.needs_reconnect) {
+      // Collection has stopped. Say so here, where "last sync" alone would
+      // just look like a quiet week.
+      document.getElementById("cal-msg").textContent =
+        "Collection stopped — " + (cal.last_error || "Google access expired") +
+        " Click Reconnect above.";
+    } else {
+      document.getElementById("cal-msg").textContent = "";
     }
     renderTable(document.getElementById("cal-table"), cal.recent, [
       { label: "title", fn: r => r.title },

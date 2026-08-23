@@ -151,7 +151,7 @@ function New-GitHubAppJwt {
     $jwtCode = @'
 import json, sys
 from github_data_collection.github_app import create_app_jwt
-config = json.load(sys.stdin)
+config = json.loads(sys.stdin.buffer.read().decode('utf-8-sig'))
 sys.stdout.write(create_app_jwt(config['app_id'], config['private_key']))
 '@
     try {
@@ -215,7 +215,7 @@ try {
     ) -CommandName 'cloudflared'
     $npm = Resolve-Executable -Description 'npm' -Candidates @(
         (Join-Path $projectRoot '.tools\node-v24.18.0-win-x64\npm.cmd')
-    ) -CommandName 'npm'
+    ) -CommandName 'npm.cmd'
 
     foreach ($port in 8000, 5173) {
         $listeners = @(

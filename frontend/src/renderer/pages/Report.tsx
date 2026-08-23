@@ -4,6 +4,7 @@ import {
   Legend, Cell,
 } from 'recharts';
 import {
+  getAllSegments,
   getSegmentsSummary,
   getReport,
   getReportMarkdown,
@@ -52,6 +53,46 @@ const TAB_SCOPE: Record<ReportTab, 'daily' | 'weekly' | 'monthly'> = {
   'Monthly Report': 'monthly',
 };
 
+/** One application's share of a day. */
+interface AppUsage {
+  app: string;
+  activeSec: number;
+  pct: number;
+}
+
+/** How many apps the table shows before "Show all". */
+const APP_ROWS_COLLAPSED = 5;
+
+/**
+ * Time per application for one day, from activity segments.
+ *
+ * **Active seconds only.** Idle time is discarded rather than ranked: an editor
+ * left open over lunch would otherwise outrank whatever the day was actually
+ * spent on. Apps that were only ever idle drop out entirely instead of sitting
+ * at the bottom on 0%.
+ *
+ * Segments with no app name are grouped as "Unknown" rather than dropped, so
+ * the column still sums to the active total the narrative quotes above it.
+ */
+const summariseApps = (segments: any[]): AppUsage[] => {
+  const byApp = new Map<string, number>();
+  for (const segment of segments) {
+    if (segment.state !== 'active') continue;
+    const app = (segment.app_name || '').trim() || 'Unknown';
+    byApp.set(app, (byApp.get(app) ?? 0) + (segment.duration_sec || 0));
+  }
+
+  const total = [...byApp.values()].reduce((sum, sec) => sum + sec, 0) || 1;
+  return [...byApp.entries()]
+    .filter(([, activeSec]) => activeSec > 0)
+    .map(([app, activeSec]) => ({
+      app,
+      activeSec,
+      pct: Math.round((activeSec / total) * 100),
+    }))
+    .sort((a, b) => b.activeSec - a.activeSec);
+};
+
 /* One marker per section key, so a reader can find "what went wrong" without
    reading the heading. Keys come from `build_sections` in the report service. */
 const SECTION_ICON: Record<string, string> = {
@@ -61,12 +102,7 @@ const SECTION_ICON: Record<string, string> = {
   broke: '⚠️',
   wins: '✅',
   watch: '💡',
-  plan: '📅',
-  quality: '🔍',
 };
-
-/** Sections that describe the report rather than the day. Rendered quieter. */
-const META_SECTIONS = new Set(['quality']);
 
 /** A metric in the same shape the prose uses, so the two never disagree. */
 const formatMetric = (value: number, unit: ReportMetric['unit']): string => {
@@ -79,9 +115,14 @@ const formatMetric = (value: number, unit: ReportMetric['unit']): string => {
 /**
  * One headline figure with its comparison against the user's own baseline.
  *
- * `baseline` is null whenever fewer than eight samples backed it, and in that
- * case nothing is claimed — the backend suppresses the comparison in the prose
- * for the same reason, so inventing one here would contradict the report.
+ * A null `baseline` means the backend has no comparison for this metric, and
+ * the tile then shows the figure alone. It used to say "Not enough history to
+ * compare", which was misleading in both directions: monthly totals have no
+ * baseline defined at all — a 30-day total is one sample, so no amount of
+ * recording would produce one — while metrics that *do* have baselines were
+ * reading as history problems when the argument had simply not been passed.
+ * Claiming nothing is the honest form, and the backend suppresses the
+ * comparison in the prose on the same condition.
  */
 const MetricTile: React.FC<{ metric: ReportMetric }> = ({ metric }) => {
   const { delta, baseline, unit, higher_is_better } = metric;
@@ -91,9 +132,7 @@ const MetricTile: React.FC<{ metric: ReportMetric }> = ({ metric }) => {
     <div className="narrative-metric">
       <span className="narrative-metric-label">{metric.label}</span>
       <span className="narrative-metric-value">{formatMetric(metric.value, unit)}</span>
-      {baseline === null ? (
-        <span className="narrative-metric-sub">Not enough history to compare</span>
-      ) : delta === null || delta === 0 ? (
+      {baseline === null ? null : delta === null || delta === 0 ? (
         <span className="narrative-metric-sub">Same as your usual</span>
       ) : (
         <span className="narrative-metric-sub">
@@ -138,9 +177,6 @@ const NarrativePanel: React.FC<{ report: NarrativeReport | null; loading: boolea
     <div className="sd-card narrative" style={{ marginBottom: 'var(--space-xl)' }}>
       <div className="card-header">
         <h3><span className="card-icon">📝</span> {report.period_label}</h3>
-        <span className="metric-card-sub">
-          {report.days_of_history} days of history behind the comparisons
-        </span>
       </div>
 
       {report.metrics.length > 0 && (
@@ -152,10 +188,7 @@ const NarrativePanel: React.FC<{ report: NarrativeReport | null; loading: boolea
       )}
 
       {report.sections.map(section => (
-        <section
-          key={section.key}
-          className={`narrative-section${META_SECTIONS.has(section.key) ? ' narrative-section--meta' : ''}`}
-        >
+        <section key={section.key} className="narrative-section">
           <h4 className="narrative-section-head">
             <span className="narrative-section-icon">{SECTION_ICON[section.key] ?? '•'}</span>
             {section.heading}
@@ -182,7 +215,6 @@ const NarrativePanel: React.FC<{ report: NarrativeReport | null; loading: boolea
                     <span className="narrative-finding-tag">Do this</span>
                     {item.action}
                   </p>
-                  <p className="narrative-finding-src">{item.based_on} • {item.rule_id}</p>
                 </article>
               ))}
             </div>
@@ -202,6 +234,9 @@ const Report: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [report, setReport] = useState<NarrativeReport | null>(null);
   const [reportLoading, setReportLoading] = useState(true);
+  const [apps, setApps] = useState<AppUsage[]>([]);
+  const [appsLoading, setAppsLoading] = useState(true);
+  const [showAllApps, setShowAllApps] = useState(false);
 
   // 30 days covers all three tabs, so switching tabs needs no extra fetch.
   // The previous version passed an empty dependency array, so the report kept
@@ -224,8 +259,29 @@ const Report: React.FC = () => {
     return () => { cancelled = true; };
   }, [activeTab, selectedDate, refreshCount]);
 
+  /* The day the app breakdown describes.
+   *
+   * Deliberately the report's own period, not `selectedDate`. A daily report
+   * asked for today describes yesterday — reports.py moves `as_of` back a day
+   * rather than measuring a partial day against full-day baselines — so keying
+   * this off the date picker would put a table for one day directly beneath
+   * prose about another, with nothing on screen saying they differ. */
+  const dailyDate = report?.scope === 'daily' ? report.period_start : selectedDate;
+
+  useEffect(() => {
+    if (activeTab !== 'Daily Report') return;
+    let cancelled = false;
+    setAppsLoading(true);
+    // Collapse again on a new day — "show all" is about this table, not a
+    // preference that should follow the user across dates.
+    setShowAllApps(false);
+    getAllSegments(dailyDate)
+      .then(rows => { if (!cancelled) { setApps(summariseApps(rows)); setAppsLoading(false); } })
+      .catch(() => { if (!cancelled) { setApps([]); setAppsLoading(false); } });
+    return () => { cancelled = true; };
+  }, [activeTab, dailyDate, refreshCount]);
+
   const today = days[days.length - 1];
-  const yesterday = days[days.length - 2];
   const week = useMemo(() => days.slice(-7), [days]);
 
   const dailyCategories = useMemo(() => {
@@ -312,22 +368,10 @@ const Report: React.FC = () => {
     };
   }, [days]);
 
-  /** Signed change vs the previous day, as a real computed delta. */
-  const delta = (curr?: number, prev?: number) => {
-    if (curr === undefined || prev === undefined) return null;
-    return curr - prev;
-  };
-
-  const DeltaBadge: React.FC<{ value: number | null; unit?: 'time' | 'count' }> = ({ value, unit = 'time' }) => {
-    if (value === null || value === 0) return <span className="metric-card-sub">No change from previous day</span>;
-    const positive = value > 0;
-    const text = unit === 'time' ? formatDuration(Math.abs(value)) : String(Math.abs(value));
-    return (
-      <span className={`sd-badge ${positive ? 'sd-badge--success' : 'sd-badge--danger'}`}>
-        {positive ? '+' : '−'}{text} vs previous day
-      </span>
-    );
-  };
+  /* `delta()` and `DeltaBadge` were removed with the Daily tab's metric grid,
+     which was their only caller. The narrative's own MetricTile carries the
+     comparison against the user's baseline, which is a stronger statement than
+     a one-day difference. */
 
   const handleExport = () => {
     if (!today) return;
@@ -415,65 +459,53 @@ const Report: React.FC = () => {
       {activeTab === 'Daily Report' && (
         <div className="report-content sd-fade-in">
           <NarrativePanel report={report} loading={reportLoading} />
-          <div className="sd-grid-4">
-            <div className="sd-card metric-card">
-              <span className="metric-card-label">Tracked Active Time</span>
-              <span className="metric-card-value">{formatDuration(today?.total_duration_sec ?? 0)}</span>
-              <DeltaBadge value={delta(today?.total_duration_sec, yesterday?.total_duration_sec)} />
-            </div>
-            <div className="sd-card metric-card">
-              <span className="metric-card-label">Segments</span>
-              <span className="metric-card-value">{today?.total_segments ?? 0}</span>
-              <DeltaBadge value={delta(today?.total_segments, yesterday?.total_segments)} unit="count" />
-            </div>
-            <div className="sd-card metric-card">
-              <span className="metric-card-label">Top Category</span>
-              <span className="metric-card-value" style={{ fontSize: 'var(--font-size-lg)' }}>
-                {dailyCategories[0]?.name ?? '—'}
-              </span>
-              <span className="metric-card-sub">
-                {dailyCategories[0] ? `${formatDuration(dailyCategories[0].seconds)} (${dailyCategories[0].pct}%)` : 'No activity'}
-              </span>
-            </div>
-            <div className="sd-card metric-card">
-              <span className="metric-card-label">Categories Active</span>
-              <span className="metric-card-value">{dailyCategories.length}</span>
-              <span className="metric-card-sub">Distinct categories recorded</span>
-            </div>
-          </div>
 
           <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
-            <h3>Category Breakdown</h3>
-            {dailyCategories.length > 0 ? (
-              <table className="report-table">
-                <thead>
-                  <tr>
-                    <th>Category</th><th>Segments</th><th>Duration</th><th>% of Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {dailyCategories.map(c => (
-                    <tr key={c.key}>
-                      <td>
-                        <span className="legend-dot" style={{ background: c.color, display: 'inline-block', marginRight: 8 }} />
-                        {c.name}
-                      </td>
-                      <td>{c.count}</td>
-                      <td>{formatDuration(c.seconds)}</td>
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <div className="sd-progress" style={{ width: 80 }}>
-                            <div className="sd-progress-fill" style={{ width: `${c.pct}%`, background: c.color }} />
-                          </div>
-                          {c.pct}%
-                        </div>
-                      </td>
+            <h3>Applications used</h3>
+            {appsLoading ? (
+              <p className="dash-empty">Loading…</p>
+            ) : apps.length > 0 ? (
+              <>
+                <table className="report-table">
+                  <thead>
+                    <tr>
+                      <th>Application</th><th>Active</th><th>% of Active</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {(showAllApps ? apps : apps.slice(0, APP_ROWS_COLLAPSED)).map(a => (
+                      <tr key={a.app}>
+                        <td>{a.app}</td>
+                        <td>{formatDuration(a.activeSec)}</td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <div className="sd-progress" style={{ width: 80 }}>
+                              <div
+                                className="sd-progress-fill"
+                                style={{ width: `${a.pct}%`, background: 'var(--color-primary)' }}
+                              />
+                            </div>
+                            {a.pct}%
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                {apps.length > APP_ROWS_COLLAPSED && (
+                  <button
+                    className="sd-btn app-table-toggle"
+                    onClick={() => setShowAllApps(v => !v)}
+                  >
+                    {showAllApps
+                      ? 'Show top 5'
+                      : `Show all ${apps.length} apps`}
+                  </button>
+                )}
+              </>
             ) : (
-              <p className="dash-empty">No activity recorded on {selectedDate}.</p>
+              <p className="dash-empty">No activity recorded on {dailyDate}.</p>
             )}
           </div>
         </div>

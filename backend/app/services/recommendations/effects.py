@@ -15,6 +15,7 @@ which is the difference between this and the hardcoded claim it replaces.
 from __future__ import annotations
 
 import logging
+from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -22,6 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.services.recommendations.baselines import percentile
+from app.services.recommendations.stats import sign_test
 
 logger = logging.getLogger("smartdesk.recommendations.effects")
 
@@ -34,6 +36,24 @@ MIN_ARM_SAMPLES = 8
 RECOVERY_MINUTES = 60
 
 
+def _merge_spans(
+    spans: list[tuple[datetime, datetime]],
+) -> list[tuple[datetime, datetime]]:
+    """Sort and coalesce overlapping intervals into a disjoint, ordered list.
+
+    Back-to-back meetings produce recovery windows that overlap, and merging
+    them first is what lets the membership test below be a binary search
+    instead of a scan over every meeting for every window.
+    """
+    merged: list[tuple[datetime, datetime]] = []
+    for start, stop in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], stop))
+        else:
+            merged.append((start, stop))
+    return merged
+
+
 @dataclass
 class MatchedEffect:
     """A paired comparison, with everything needed to judge it."""
@@ -44,6 +64,18 @@ class MatchedEffect:
     n_control: int
     #: Relative change, negative meaning the treatment arm scored lower.
     relative: float
+    #: Two-sided p from a sign test over the matched pairs.
+    #:
+    #: The pairing is what makes this rule the strongest claim the engine
+    #: makes, and it is also what makes an effect size on its own misleading:
+    #: eleven pairs that mostly moved down look identical to eleven that split
+    #: six-five, once you take the median. The sign test asks the only
+    #: question the design supports — did the differences fall on one side
+    #: more often than a coin would explain — without assuming anything about
+    #: their shape.
+    pair_p: float = 1.0
+    #: How many matched slots the p-value is computed over.
+    n_pairs: int = 0
 
     @property
     def credible(self) -> bool:
@@ -111,6 +143,17 @@ def post_meeting_focus_effect(
     if not recovery_spans:
         return None
 
+    # Merged once, then binary-searched per window. The obvious `any(...)` over
+    # every span inside the window loop is O(windows x meetings), and with a
+    # 30-day window against a full calendar that scan was the most expensive
+    # thing in the daily feature build.
+    merged = _merge_spans(recovery_spans)
+    span_starts = [start for start, _ in merged]
+
+    def in_recovery(when: datetime) -> bool:
+        index = bisect_right(span_starts, when) - 1
+        return index >= 0 and when < merged[index][1]
+
     treated: dict[tuple[int, int], list[float]] = {}
     control: dict[tuple[int, int], list[float]] = {}
 
@@ -122,7 +165,7 @@ def post_meeting_focus_effect(
         focus = float(row["avg_focus_score"] or 0.0)
         key = (when.weekday(), when.hour)
 
-        if any(start <= when < stop for start, stop in recovery_spans):
+        if in_recovery(when):
             treated.setdefault(key, []).append(focus)
         elif when.strftime("%Y-%m-%d") not in meeting_days:
             # Controls are drawn only from days with no meeting at all. A
@@ -158,6 +201,8 @@ def post_meeting_focus_effect(
             (treated_overall - control_overall) / control_overall
             if control_overall > 0 else 0.0
         ),
+        pair_p=sign_test(differences),
+        n_pairs=len(differences),
     )
     if not effect.credible:
         logger.debug(

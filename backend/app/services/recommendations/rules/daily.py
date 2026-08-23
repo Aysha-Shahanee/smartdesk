@@ -17,6 +17,7 @@ from app.services.recommendations.narrative import (
     fmt_pct,
     magnitude,
 )
+from app.services.recommendations.baselines import MAD_TO_SIGMA
 from app.services.recommendations.registry import rule
 from app.services.recommendations.types import (
     Evidence,
@@ -30,12 +31,37 @@ from app.services.recommendations.types import (
 DAILY = Scope.DAILY
 DAY = timedelta(hours=20)
 
+#: Feature carrying the user's sensitivity preference, when they have set one.
+#: Absent means 1.0, which is the shipped behaviour.
+SENSITIVITY_KEY = "pref.sensitivity"
+
+
+def _bar(ctx: FeatureContext) -> float:
+    """The deviation bar, after the user's sensitivity preference.
+
+    Read from the context rather than the database because rules are pure —
+    a rule that opened a session would be untestable and would put a query on
+    the hot path of every tick.
+    """
+    return ORDINARY_SPREAD * ctx.num(SENSITIVITY_KEY, 1.0)
+
+
+#: The bar these rules have always used — one median absolute deviation above
+#: the median — restated in the scaled units the baselines now report.
+#:
+#: 1 MAD is 0.6745 sigma, so the trigger point is numerically exactly where it
+#: was. Only the z-scores the cards quote have changed, and only because they
+#: are now real z-scores rather than raw MAD counts. Moving the bar as well
+#: would have buried a calibration fix inside a silent change to how often
+#: every one of these rules fires.
+ORDINARY_SPREAD = 1.0 / MAD_TO_SIGMA
+
 
 def _stat_evidence(ctx: FeatureContext, metric: str, value: float) -> Evidence:
     """Evidence comparing a measurement against its own baseline."""
     median = ctx.num(f"baseline.{metric}.p50")
-    mad = ctx.num(f"baseline.{metric}.mad")
-    z = (value - median) / mad if mad > 0 else 0.0
+    sigma = ctx.num(f"baseline.{metric}.sigma")
+    z = (value - median) / sigma if sigma > 0 else 0.0
     return Evidence(
         basis=f"personal_{metric}",
         n=int(ctx.num(f"baseline.{metric}.n")),
@@ -122,13 +148,13 @@ def worst_hour(ctx: FeatureContext) -> Finding | None:
 def deep_work_vs_baseline(ctx: FeatureContext) -> Finding | None:
     actual = ctx["deep_work_min"]
     median = ctx["baseline.deep_work_min.p50"]
-    mad = ctx.num("baseline.deep_work_min.mad")
-    if mad <= 0:
+    sigma = ctx.num("baseline.deep_work_min.sigma")
+    if sigma <= 0:
         return None
-    z = (actual - median) / mad
-    # Inside one MAD is an ordinary day, and saying so every day would train
-    # the user to ignore the panel.
-    if abs(z) < 1.0:
+    z = (actual - median) / sigma
+    # Inside the ordinary spread is an ordinary day, and saying so every day
+    # would train the user to ignore the panel.
+    if abs(z) < _bar(ctx):
         return None
     up = z > 0
     return Finding(
@@ -165,8 +191,8 @@ def deep_work_vs_baseline(ctx: FeatureContext) -> Finding | None:
 def fragmentation(ctx: FeatureContext) -> Finding | None:
     index = ctx["frag_index"]
     median = ctx["baseline.frag_index.p50"]
-    mad = ctx.num("baseline.frag_index.mad")
-    if mad <= 0 or index <= median + mad:
+    sigma = ctx.num("baseline.frag_index.sigma")
+    if sigma <= 0 or index <= median + _bar(ctx) * sigma:
         return None
     return Finding(
         dedup_key="insight/fragmentation",
@@ -218,8 +244,8 @@ def longest_block(ctx: FeatureContext) -> Finding | None:
 def distraction_share(ctx: FeatureContext) -> Finding | None:
     share = ctx["distraction_share"]
     median = ctx["baseline.distraction_share.p50"]
-    mad = ctx.num("baseline.distraction_share.mad")
-    if mad <= 0 or share <= median + mad:
+    sigma = ctx.num("baseline.distraction_share.sigma")
+    if sigma <= 0 or share <= median + _bar(ctx) * sigma:
         return None
     return Finding(
         dedup_key="insight/distraction",
@@ -227,7 +253,7 @@ def distraction_share(ctx: FeatureContext) -> Finding | None:
             "share": fmt_pct(share),
             "mins_text": fmt_minutes(ctx["distraction_min"]),
             "median": fmt_pct(median),
-            "magnitude": magnitude((share - median) / mad),
+            "magnitude": magnitude((share - median) / sigma),
         },
         evidence=_stat_evidence(ctx, "distraction_share", share),
     )
@@ -396,8 +422,8 @@ def uncategorised(ctx: FeatureContext) -> Finding | None:
 def idle_share(ctx: FeatureContext) -> Finding | None:
     share = ctx["idle_share"]
     median = ctx["baseline.idle_share.p50"]
-    mad = ctx.num("baseline.idle_share.mad")
-    if mad <= 0 or share <= median + mad:
+    sigma = ctx.num("baseline.idle_share.sigma")
+    if sigma <= 0 or share <= median + _bar(ctx) * sigma:
         return None
     return Finding(
         dedup_key="insight/idle",
@@ -450,6 +476,7 @@ def post_meeting_recovery(ctx: FeatureContext) -> Finding | None:
             basis="matched_pairs", n=int(ctx["post_meeting_n"]),
             effect=abs(relative) * 5,
             comparison="the same hour-of-week on meeting-free days",
+            p_value=ctx.get("post_meeting_p"),
         ),
         severity=Severity.MEDIUM if down else Severity.LOW,
     )

@@ -6,7 +6,7 @@ import {
 } from 'recharts';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDateContext } from '../contexts/DateContext';
-import { getCategoryColor, getEmotionColor, getChartChrome } from '../theme/chartTheme';
+import { getCategoryColor, getChartChrome } from '../theme/chartTheme';
 import {
   CurrentEmotionSession,
   EmotionStatus,
@@ -47,13 +47,15 @@ type InsightTab = 'Focus Insights' | 'Stress Insights' | 'Pattern Detection';
 /* Days behind the Focus Insights tab, ending on the selected date. */
 const FOCUS_TREND_DAYS = 7;
 
-const DETECTOR_EMOTIONS = ['Angry', 'Happy', 'Neutral', 'Surprise'];
+const WORK_STATE_ORDER = ['Focused', 'Struggling', 'Disengaged', 'Fatigued', 'Overloaded'] as const;
+type WorkState = typeof WORK_STATE_ORDER[number];
 
-/** Clock label for a 15-minute block, for the stress chart's X axis. */
-const blockClockLabel = (iso: string): string => {
-  const parsed = new Date(iso);
-  if (Number.isNaN(parsed.getTime())) return '';
-  return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+const WORK_STATE_COLORS: Record<WorkState, string> = {
+  Focused: '#22c55e',
+  Struggling: '#f59e0b',
+  Disengaged: '#8b5cf6',
+  Fatigued: '#ef4444',
+  Overloaded: '#991b1b',
 };
 
 const FOCUS_LEVEL_LABELS: Record<FocusLevel, string> = {
@@ -205,41 +207,100 @@ const formatSessionTime = (value?: string | null) => {
   });
 };
 
-/**
- * Frame-weighted mean of each emotion across a session's blocks.
- *
- * Each block stores a mean probability, so blocks are directly comparable but
- * not equally informative — a block with 900 processed frames says far more
- * than one with 40. Weighting by `processed_frame_count` on the way back up
- * keeps a short block from counting as much as a full one.
- */
-const averageEmotionScores = (session: CurrentEmotionSession | null) => {
-  const weighted = DETECTOR_EMOTIONS.reduce<Record<string, number>>((acc, emotion) => {
-    acc[emotion] = 0;
+const formatEngagementLabel = (label?: string | null) => {
+  if (!label || label === 'pending') return 'Unknown';
+  return label.charAt(0).toUpperCase() + label.slice(1);
+};
+
+const dominantWorkState = (scores?: Record<string, number>) => {
+  if (!scores) return null;
+  let dominant: WorkState | null = null;
+  let highest = 0;
+
+  WORK_STATE_ORDER.forEach(state => {
+    const value = Number(scores[state] || 0);
+    if (value > highest) {
+      highest = value;
+      dominant = state;
+    }
+  });
+
+  return dominant;
+};
+
+const averageWorkStateScores = (session: CurrentEmotionSession | null) => {
+  const totals = WORK_STATE_ORDER.reduce<Record<WorkState, number>>((acc, state) => {
+    acc[state] = 0;
     return acc;
-  }, {});
+  }, {} as Record<WorkState, number>);
 
   const blocks = session?.completed_blocks || session?.blocks || [];
-  let totalFrames = 0;
-
   blocks.forEach(block => {
-    const frames = Number(block.processed_frame_count || 0);
-    if (frames <= 0) return;
-    totalFrames += frames;
-    DETECTOR_EMOTIONS.forEach(emotion => {
-      weighted[emotion] += Number(block.emotion_scores?.[emotion] || 0) * frames;
+    WORK_STATE_ORDER.forEach(state => {
+      totals[state] += Number(block.state_scores?.[state] || 0);
     });
   });
 
-  if (totalFrames === 0) return weighted;
+  if (session?.current_block) {
+    WORK_STATE_ORDER.forEach(state => {
+      totals[state] += Number(session.current_block?.state_scores?.[state] || 0);
+    });
+  }
 
-  DETECTOR_EMOTIONS.forEach(emotion => {
-    weighted[emotion] /= totalFrames;
-  });
-
-  return weighted;
+  return totals;
 };
 
+type WorkStateGridBlock = {
+  block_start_time?: string;
+  block_end_time?: string;
+  state_scores?: Record<string, number>;
+  final_state_block_count?: number;
+  ready?: boolean;
+};
+
+const isCompletedReportingBlock = (block: WorkStateGridBlock) =>
+  block.ready === true && Number(block.final_state_block_count || 0) >= 3;
+
+const buildWorkStateDaySlots = (
+  session: CurrentEmotionSession | null,
+  selectedDate: string,
+  stressPoints: WorkStateGridBlock[] = [],
+) => {
+  const dayStart = new Date(`${selectedDate}T00:00:00`);
+  const slotMs = 15 * 60 * 1000;
+  const slots = Array.from({ length: 96 }, (_, index) => {
+    const slotStart = new Date(dayStart.getTime() + index * slotMs);
+    const slotEnd = new Date(slotStart.getTime() + slotMs);
+    return {
+      index,
+      label: `${slotStart.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${slotEnd.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+      state: null as WorkState | null,
+    };
+  });
+
+  const blocks: WorkStateGridBlock[] = [
+    ...(session?.completed_blocks || session?.blocks || []),
+    ...stressPoints,
+  ].filter(isCompletedReportingBlock);
+
+  blocks.forEach(block => {
+    const state = dominantWorkState(block.state_scores);
+    if (!state || !block.block_start_time) return;
+
+    const start = new Date(block.block_start_time).getTime();
+    const end = block.block_end_time ? new Date(block.block_end_time).getTime() : start + slotMs;
+    if (Number.isNaN(start) || Number.isNaN(end)) return;
+
+    const startIndex = Math.max(0, Math.floor((start - dayStart.getTime()) / slotMs));
+    const exclusiveEnd = Math.max(start, end - 1);
+    const endIndex = Math.min(95, Math.max(startIndex, Math.floor((exclusiveEnd - dayStart.getTime()) / slotMs)));
+    for (let index = startIndex; index <= endIndex; index += 1) {
+      slots[index].state = state;
+    }
+  });
+
+  return slots;
+};
 const Insights: React.FC = () => {
   const { theme } = useTheme();
   const { selectedDate, refreshCount } = useDateContext();
@@ -258,19 +319,32 @@ const Insights: React.FC = () => {
     setIsEmotionLoading(true);
     setEmotionError(null);
     try {
-      const [status, session, consent, stressResponse] = await Promise.all([
+      const [statusResult, sessionResult, consentResult, stressResult] = await Promise.allSettled([
         getEmotionStatus(),
         getCurrentEmotionSession(),
         getEmotionConsent(),
         getStress(selectedDate),
       ]);
-      setEmotionStatus(status);
-      setCurrentEmotionSession(session);
-      setWebcamConsent(consent.webcam_enabled);
-      setStress(stressResponse);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Emotion backend is unavailable.';
-      setEmotionError(message);
+
+      if (statusResult.status === 'fulfilled') {
+        setEmotionStatus(statusResult.value);
+      }
+      if (sessionResult.status === 'fulfilled') {
+        setCurrentEmotionSession(sessionResult.value);
+      }
+      if (consentResult.status === 'fulfilled') {
+        setWebcamConsent(consentResult.value.webcam_enabled);
+      }
+      if (stressResult.status === 'fulfilled') {
+        setStress(stressResult.value);
+      }
+
+      const failed = [statusResult, sessionResult, consentResult, stressResult]
+        .find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failed) {
+        const reason = failed.reason;
+        setEmotionError(reason instanceof Error ? reason.message : 'Emotion backend is unavailable.');
+      }
     } finally {
       setIsEmotionLoading(false);
     }
@@ -282,22 +356,9 @@ const Insights: React.FC = () => {
     }
   }, [activeTab, refreshEmotionData]);
 
-  /* One point per recorded 15-minute block. Empty until detection has run on
-     the selected day — the chart says so rather than drawing a flat zero. */
-  const stressThroughDay = useMemo(
-    () =>
-      (stress?.points || []).map(point => ({
-        time: blockClockLabel(point.block_start_time),
-        level: point.stress,
-        confidence: point.confidence,
-        dominant: point.dominant_emotion,
-      })),
-    [stress]
-  );
-
   useEffect(() => {
     if (activeTab !== 'Stress Insights' || !emotionStatus?.running) return;
-    const intervalId = window.setInterval(refreshEmotionData, 15 * 60 * 1000);
+    const intervalId = window.setInterval(refreshEmotionData, 3000);
     return () => window.clearInterval(intervalId);
   }, [activeTab, emotionStatus?.running, refreshEmotionData]);
 
@@ -331,27 +392,31 @@ const Insights: React.FC = () => {
     }
   };
 
-  const emotionTotals = useMemo(
-    () => averageEmotionScores(currentEmotionSession),
+  const workStateTotals = useMemo(
+    () => averageWorkStateScores(currentEmotionSession),
     [currentEmotionSession],
   );
-  const emotionTotalValue = Object.values(emotionTotals).reduce((sum, value) => sum + value, 0);
-  const detectorEmotionDistribution = DETECTOR_EMOTIONS.map(emotion => {
-    const value = emotionTotals[emotion] || 0;
-    const percent = emotionTotalValue > 0 ? Math.round((value / emotionTotalValue) * 100) : 0;
-    const color =
-      emotion === 'Angry' ? getCategoryColor('meetings', theme) :
-      emotion === 'Happy' ? getCategoryColor('learn', theme) :
-      emotion === 'Surprise' ? getCategoryColor('documentation', theme) :
-      getEmotionColor('neutral', theme);
+  const workStateTotalValue = Object.values(workStateTotals).reduce((sum, value) => sum + value, 0);
+  const detectorWorkStateDistribution = WORK_STATE_ORDER.map(state => {
+    const value = workStateTotals[state] || 0;
+    const percent = workStateTotalValue > 0 ? Math.round((value / workStateTotalValue) * 100) : 0;
 
     return {
-      name: emotion,
+      name: state,
       value,
       percent,
-      color,
+      color: WORK_STATE_COLORS[state],
     };
   });
+  const workStateDaySlots = useMemo(
+    () => buildWorkStateDaySlots(currentEmotionSession, selectedDate, stress?.points || []),
+    [currentEmotionSession, selectedDate, stress],
+  );
+  const workStateHours = useMemo(
+    () => Array.from({ length: 24 }, (_, hour) => workStateDaySlots.slice(hour * 4, hour * 4 + 4)),
+    [workStateDaySlots],
+  );
+  const currentEngagement = formatEngagementLabel(emotionStatus?.latest_engagement);
 
   const statusLabel = emotionError
     ? 'Error'
@@ -823,7 +888,7 @@ const Insights: React.FC = () => {
         <div className="insights-content sd-fade-in">
           <div className="sd-card">
             <div className="stress-chart-header">
-              <h3>Stress Level Throughout Day</h3>
+              <h3>Developer Work State Throughout the Day</h3>
               <div className="emotion-actions stress-chart-actions">
                 <button
                   className="sd-btn sd-btn--primary"
@@ -831,7 +896,7 @@ const Insights: React.FC = () => {
                   disabled={
                     Boolean(emotionStatus?.running) ||
                     isStartingEmotion ||
-                    webcamConsent !== true
+                    webcamConsent === false
                   }
                   title={
                     webcamConsent === false
@@ -850,48 +915,41 @@ const Insights: React.FC = () => {
                 </button>
               </div>
             </div>
-            {stressThroughDay.length === 0 ? (
-              <div className="stress-empty">
-                <h4>No emotion data for {selectedDate}</h4>
-                <p>
-                  {webcamConsent === false
-                    ? 'Webcam detection is turned off. Enable it under Settings › Privacy Controls, then start a session to record stress for this day.'
-                    : 'Start webcam detection above and leave it running — the first block is recorded after 5 minutes, and complete blocks every 15.'}
-                </p>
+            <div className="work-state-day-grid" aria-label="Developer work state throughout the selected day">
+              {workStateHours.map((hourSlots, hour) => (
+                <div className="work-state-hour" key={hour}>
+                  <div className="work-state-hour-slots">
+                    {hourSlots.map(slot => (
+                      <span
+                        className={`work-state-slot ${slot.state ? 'work-state-slot--filled' : ''}`}
+                        key={slot.index}
+                        style={{ background: slot.state ? WORK_STATE_COLORS[slot.state] : undefined }}
+                        title={`${slot.label}: ${slot.state || 'No data'}`}
+                      />
+                    ))}
+                  </div>
+                  <span className="work-state-hour-label">{hour % 3 === 0 ? `${String(hour).padStart(2, '0')}:00` : ''}</span>
+                </div>
+              ))}
+            </div>
+            <div className="work-state-legend">
+              {WORK_STATE_ORDER.map(state => (
+                <div className="legend-item" key={state}>
+                  <span className="legend-dot" style={{ background: WORK_STATE_COLORS[state] }} />
+                  <span className="legend-name">{state}</span>
+                </div>
+              ))}
+              <div className="legend-item">
+                <span className="legend-dot work-state-empty-dot" />
+                <span className="legend-name">No data</span>
               </div>
-            ) : (
-              <>
-                <ResponsiveContainer width="100%" height={350}>
-                  <LineChart data={stressThroughDay}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={chrome.grid} />
-                    <XAxis dataKey="time" tick={{ fontSize: 13, fill: chrome.axisText }} />
-                    <YAxis domain={[0, 100]} tick={{ fontSize: 13, fill: chrome.axisText }} />
-                    <Tooltip
-                      contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }}
-                      formatter={(value: number, _name, entry: any) => [
-                        `${value}/100 · mostly ${entry?.payload?.dominant ?? 'Unknown'}`,
-                        'Stress level',
-                      ]}
-                    />
-                    <Line type="monotone" dataKey="level" name="Stress level" stroke={getEmotionColor('stressed', theme)} strokeWidth={2.5} dot={{ r: 4, fill: getEmotionColor('stressed', theme) }} />
-                  </LineChart>
-                </ResponsiveContainer>
-                <p className="chart-footnote">
-                  One point per recorded 15-minute block, from the webcam detector. Anger
-                  raises the score, visible happiness lowers it, and blocks that saw few
-                  frames are pulled toward the calm baseline rather than trusted outright.
-                  {stress?.summary.score !== null && stress?.summary
-                    ? ` Day average ${stress.summary.score}/100 over ${stress.summary.observed_minutes} observed minutes.`
-                    : ''}
-                </p>
-              </>
-            )}
+            </div>
           </div>
 
           <div className="sd-grid-2" style={{ marginTop: 'var(--space-xl)' }}>
             <div className="sd-card">
               <div className="emotion-card-header">
-                <h3>Webcam Emotion Detection Status</h3>
+                <h3>Work State Analysis Status</h3>
                 <span className={`sd-badge ${statusBadgeClass}`}>{statusLabel}</span>
               </div>
 
@@ -901,8 +959,8 @@ const Insights: React.FC = () => {
                   <strong>{formatSessionTime(emotionStatus?.session_start_time)}</strong>
                 </div>
                 <div>
-                  <span>Latest emotion</span>
-                  <strong>{emotionStatus?.latest_emotion || 'Unknown'}</strong>
+                  <span>Current Engagement</span>
+                  <strong>{currentEngagement}</strong>
                 </div>
                 <div>
                   <span>Model</span>
@@ -943,17 +1001,17 @@ const Insights: React.FC = () => {
             </div>
 
             <div className="sd-card">
-              <h3>Emotion Distribution Current Session</h3>
-              {emotionTotalValue > 0 ? (
+              <h3>Work State Distribution – Current Session</h3>
+              {workStateTotalValue > 0 ? (
                 <div className="donut-container">
                   <ResponsiveContainer width="50%" height={200}>
                     <PieChart>
-                      <Pie data={detectorEmotionDistribution} dataKey="value" cx="50%" cy="50%" innerRadius={45} outerRadius={80} paddingAngle={2} strokeWidth={0}>
-                        {detectorEmotionDistribution.map((e, i) => <Cell key={i} fill={e.color} />)}
+                      <Pie data={detectorWorkStateDistribution} dataKey="value" cx="50%" cy="50%" innerRadius={45} outerRadius={80} paddingAngle={2} strokeWidth={0}>
+                        {detectorWorkStateDistribution.map((e, i) => <Cell key={i} fill={e.color} />)}
                       </Pie>
                       <Tooltip
                         formatter={(value: number, name: string) => {
-                          const item = detectorEmotionDistribution.find(emotion => emotion.name === name);
+                          const item = detectorWorkStateDistribution.find(state => state.name === name);
                           return [`${item?.percent || 0}%`, name];
                         }}
                         contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }}
@@ -961,7 +1019,7 @@ const Insights: React.FC = () => {
                     </PieChart>
                   </ResponsiveContainer>
                   <div className="donut-legend">
-                    {detectorEmotionDistribution.map((item, i) => (
+                    {detectorWorkStateDistribution.map((item, i) => (
                       <div className="legend-item" key={i}>
                         <span className="legend-dot" style={{ background: item.color }} />
                         <span className="legend-name">{item.name}</span>
@@ -973,10 +1031,10 @@ const Insights: React.FC = () => {
               ) : (
                 <div className="dash-empty emotion-empty">
                   {emotionStatus?.running
-                    ? 'Detection is running. The first completed 15-minute block will appear here.'
+                    ? 'Detection is running. Work state scores will appear here after the first live predictions.'
                     : completedBlocks.length === 0
-                      ? 'No completed emotion blocks for the current session yet.'
-                      : 'No emotion scores are available for this session.'}
+                      ? 'No completed work state blocks for the current session yet.'
+                      : 'No work state scores are available for this session.'}
                 </div>
               )}
             </div>
@@ -1585,3 +1643,5 @@ const Insights: React.FC = () => {
 };
 
 export default Insights;
+
+

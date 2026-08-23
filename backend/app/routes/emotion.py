@@ -1,6 +1,6 @@
-"""Emotion detection routes.
+"""SmartDesk detection routes.
 
-These endpoints control the local webcam emotion service. The service itself
+These endpoints control the local webcam SmartDesk detection service. The service itself
 keeps webcam/model/session state in memory, so every route uses the same shared
 instance for the lifetime of the backend process.
 """
@@ -22,12 +22,14 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.database import SessionLocal
 from app.core.database import get_db
 from app.core.time import local_day_start, parse_iso
-from app.repositories.emotion_repository import EmotionRepository
 from app.repositories.preference_repository import PreferenceRepository
 from app.repositories.preference_repository import WEBCAM_EMOTION_CONSENT
-from app.services import emotion_stress_service
+from app.services import smartdesk_detection_endpoint_service
+from app.services import smartdesk_detection_response_builder
+from app.services.smartdesk_detection_sql_store import SmartDeskSqlBlockStore
 
 logger = logging.getLogger("smartdesk.emotion_routes")
 router = APIRouter()
@@ -36,19 +38,19 @@ router = APIRouter()
 class EmotionConsentUpdate(BaseModel):
     webcam_enabled: bool
 
-EMOTION_PROJECT_DIR = (
+SMARTDESK_V2_DIR = (
     Path(__file__).resolve().parents[3]
     / "emotion-recognition"
-    / "RAF-DB-improvement"
+    / "smartdesk_v2"
 )
 
-if str(EMOTION_PROJECT_DIR) not in sys.path:
-    sys.path.insert(0, str(EMOTION_PROJECT_DIR))
+if str(SMARTDESK_V2_DIR) not in sys.path:
+    sys.path.insert(0, str(SMARTDESK_V2_DIR))
 
 try:
-    from emotion_service import EmotionRecognitionService
+    from src.service import SmartDeskEmotionService
 except Exception as exc:  # pragma: no cover - exercised only when local deps are missing
-    EmotionRecognitionService = None  # type: ignore[assignment]
+    SmartDeskEmotionService = None  # type: ignore[assignment]
     _IMPORT_ERROR: Exception | None = exc
 else:
     _IMPORT_ERROR = None
@@ -57,24 +59,25 @@ _emotion_service: Any | None = None
 
 
 def _get_emotion_service() -> Any:
-    """Return the single emotion service instance for this backend process."""
+    """Return the single SmartDesk v2 service instance for this backend process."""
     global _emotion_service
 
-    if _IMPORT_ERROR is not None or EmotionRecognitionService is None:
+    if _IMPORT_ERROR is not None or SmartDeskEmotionService is None:
         raise HTTPException(
             status_code=503,
             detail={
                 "ok": False,
                 "stage": "module_import",
-                "message": f"Emotion recognition module is unavailable: {_IMPORT_ERROR}",
+                "message": f"SmartDesk v2 detection module is unavailable: {_IMPORT_ERROR}",
             },
         )
 
     if _emotion_service is None:
-        _emotion_service = EmotionRecognitionService(
-            project_dir=EMOTION_PROJECT_DIR,
+        store = SmartDeskSqlBlockStore(
             user_id=settings.DEFAULT_USER_ID,
+            session_factory=SessionLocal,
         )
+        _emotion_service = SmartDeskEmotionService(store=store)
 
     return _emotion_service
 
@@ -100,9 +103,9 @@ def get_stress(
     user_id: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Stress derived from recorded emotion blocks over a window.
+    """Workload risk derived from SmartDesk v2 reporting blocks over a window.
 
-    Defaults to today in the application timezone. `summary.score` is null when
+    Defaults to today in the application timezone. `summary.workload_risk_score` is null when
     the window holds no observed blocks — the caller should say so rather than
     render a zero.
     """
@@ -121,16 +124,12 @@ def get_stress(
             detail={"ok": False, "message": "to must not be earlier than from"},
         )
 
-    blocks = EmotionRepository(db).blocks_between(
-        user_id or settings.DEFAULT_USER_ID, start, end
+    return smartdesk_detection_endpoint_service.workload_risk_response(
+        db,
+        user_id=user_id or settings.DEFAULT_USER_ID,
+        start=start,
+        end=end,
     )
-
-    return {
-        "from": start.isoformat(),
-        "to": end.isoformat(),
-        "summary": emotion_stress_service.stress_summary(blocks).to_dict(),
-        "points": [point.to_dict() for point in emotion_stress_service.stress_series(blocks)],
-    }
 
 
 @router.get("/consent")
@@ -183,7 +182,7 @@ def start_emotion_detection(db: Session = Depends(get_db)) -> dict[str, Any]:
     service = _get_emotion_service()
 
     try:
-        result = service.start(show_window=False)
+        service.start(show_window=False)
         status = _wait_for_startup_status(service)
     except Exception as exc:
         logger.exception("Failed to start emotion recognition.")
@@ -197,15 +196,15 @@ def start_emotion_detection(db: Session = Depends(get_db)) -> dict[str, Any]:
             },
         ) from exc
 
-    ok = not bool(status.get("last_error"))
-    message = result.get("message", "Emotion recognition started.")
+    ok = not bool(status.get("last_error")) and bool(status.get("running", True))
+    message = "SmartDesk detection started."
     if not ok:
-        message = status.get("last_error") or "Emotion recognition failed to start."
+        message = status.get("last_error") or "SmartDesk detection failed to start."
 
     return {
         "ok": ok,
         "message": message,
-        "status": status,
+        "status": smartdesk_detection_response_builder.status_to_api_status(status),
     }
 
 
@@ -214,7 +213,7 @@ def stop_emotion_detection() -> dict[str, Any]:
     service = _get_emotion_service()
 
     try:
-        result = service.stop(wait=True)
+        status = service.stop(wait=True)
     except Exception as exc:
         logger.exception("Failed to stop emotion recognition.")
         raise HTTPException(
@@ -228,12 +227,13 @@ def stop_emotion_detection() -> dict[str, Any]:
         ) from exc
 
     history = service.get_session_history()
+    normalized_status = smartdesk_detection_response_builder.status_to_api_status(status)
     return {
         # A timed-out join leaves the capture thread alive; say so rather than
         # reporting a stop that did not happen.
-        "ok": bool(result.get("ok", False)),
-        "message": result.get("message", "Emotion recognition stopped."),
-        "status": result.get("status", service.get_status()),
+        "ok": not bool(status.get("running", False)),
+        "message": "SmartDesk detection stopped.",
+        "status": normalized_status,
         "session_history": history,
     }
 
@@ -241,13 +241,18 @@ def stop_emotion_detection() -> dict[str, Any]:
 @router.get("/status")
 def get_emotion_status() -> dict[str, Any]:
     service = _get_emotion_service()
-    return service.get_status()
+    return smartdesk_detection_response_builder.status_to_api_status(service.get_status())
 
 
 @router.get("/sessions/current")
-def get_current_emotion_session() -> dict[str, Any]:
-    service = _get_emotion_service()
-    return service.get_session_history()
+def get_current_emotion_session(
+    user_id: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return smartdesk_detection_endpoint_service.current_session_response(
+        db,
+        user_id=user_id or settings.DEFAULT_USER_ID,
+    )
 
 
 def stop_emotion_service_if_running() -> None:
@@ -266,3 +271,4 @@ def stop_emotion_service_if_running() -> None:
             logger.warning("Emotion capture thread still running at shutdown.")
     except Exception:
         logger.exception("Failed to stop emotion recognition during shutdown.")
+
