@@ -132,12 +132,6 @@ const Recommendations: React.FC = () => {
     <div className="recommendations-page sd-fade-in">
       <div className="sd-page-header">
         <h1>Recommendations</h1>
-        <p className="subtitle">
-          {data?.total ?? 0} findings from the local rule engine
-          {data?.daily_date && data.daily_date !== data.date
-            ? ` • daily findings cover ${data.daily_date}`
-            : ''}
-        </p>
       </div>
 
       {/* ---- Immediate ---- */}
