@@ -182,7 +182,7 @@ def _emotion_label(block: StoredBlock) -> str:
     state = str(summary.get("state", "")).lower()
     if top_class in {"happy", "neutral", "confusion"}:
         return top_class
-    if state == "needs_help":
+    if state in {"needs_help", "confusion"}:
         return "confusion"
     if state in {"happy", "neutral"}:
         return state
@@ -210,3 +210,4 @@ def _count_sleepiness(blocks: Iterable[StoredBlock], label: SleepinessLabel) -> 
 def _summary_from_dict(summary_type, data: dict):
     allowed = {field.name for field in fields(summary_type)}
     return summary_type(**{key: value for key, value in data.items() if key in allowed})
+

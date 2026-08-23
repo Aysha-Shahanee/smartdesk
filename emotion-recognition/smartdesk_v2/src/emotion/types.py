@@ -19,12 +19,12 @@ class EmotionState(str, Enum):
 
     HAPPY = "happy"
     NEUTRAL = "neutral"
-    NEEDS_HELP = "needs_help"
+    CONFUSION = "confusion"
     UNCERTAIN = "uncertain"
 
 
 class DifficultySublabel(str, Enum):
-    """Optional detail when the app-facing state is Needs Help."""
+    """Optional detail for emotion states that need extra explanation."""
 
     NONE = "none"
     CONFUSION = "confusion"
@@ -34,8 +34,9 @@ class DifficultySublabel(str, Enum):
 class EmotionRuleConfig:
     """Thresholds for converting raw emotion probabilities to app state."""
 
-    difficulty_threshold: float = 0.60
-    min_direct_confidence: float = 0.40
+    happy_threshold: float = 0.80
+    confusion_threshold: float = 0.80
+    neutral_threshold: float = 0.50
 
 
 @dataclass(frozen=True)

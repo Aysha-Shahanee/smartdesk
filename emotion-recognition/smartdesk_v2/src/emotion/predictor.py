@@ -1,4 +1,4 @@
-"""Frame-level emotion prediction with practical Needs Help interpretation."""
+"""Frame-level emotion prediction with practical emotion-state interpretation."""
 
 from __future__ import annotations
 
@@ -70,11 +70,14 @@ def prediction_to_plain_dict(prediction: EmotionPrediction) -> dict[str, object]
             EmotionClass.CONFUSION.value: prediction.probability(EmotionClass.CONFUSION),
         },
         "thresholds": {
-            "difficulty_threshold": prediction.thresholds.difficulty_threshold,
-            "min_direct_confidence": prediction.thresholds.min_direct_confidence,
+            "happy_threshold": prediction.thresholds.happy_threshold,
+            "confusion_threshold": prediction.thresholds.confusion_threshold,
+            "neutral_threshold": prediction.thresholds.neutral_threshold,
         },
     }
 
 
 def _default_device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
