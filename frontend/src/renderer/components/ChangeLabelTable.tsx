@@ -70,7 +70,7 @@ export const ChangeLabelTable: React.FC = () => {
         <h3>Change Label for {selectedDate}</h3>
         <span className="label-count">{segments.length} segments</span>
       </div>
-      <p className="label-description">Correct AI predictions to improve future accuracy. Changes save immediately.</p>
+      <p className="label-description">Help SmartDesk get it right: review or correct your activity labels below.</p>
       
       <div className="label-table-wrapper">
         <table className="label-table">

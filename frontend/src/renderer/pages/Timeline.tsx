@@ -16,6 +16,7 @@ import {
   todayString,
 } from '../utils/time';
 import { focusByHour, focusOutOf100, summarizeFocus, HOUR_MIN_SCORED_SEC } from '../utils/focus';
+import { getTimelineSecondaryPanel } from '../utils/timelinePanels';
 import './Timeline.css';
 
 const SUB_TABS = ['IDE', 'Browser', 'OS / Apps', 'Calendar'] as const;
@@ -282,9 +283,6 @@ const Timeline: React.FC = () => {
     const focusTile: SummaryTile = {
       label: 'Avg Focus',
       value: focusSummary.score !== null ? `${focusOutOf100(focusSummary.score)}/100` : '—',
-      sub: focusSummary.score !== null
-        ? `Weighted by time • ${Math.round(focusSummary.coverage * 100)}% of it scored`
-        : 'No scored segments here',
     };
 
     if (activeTab === 'IDE') {
@@ -294,12 +292,7 @@ const Timeline: React.FC = () => {
         {
           label: 'Coding Time',
           value: formatDuration(idePanel?.coding_time_sec ?? 0),
-          /* The two tabs measure the editor differently and the numbers do not
-             match: OS / Apps counts every second its window held focus, this
-             counts only the seconds the IDE saw editor activity. Say which is
-             which on the tile rather than leaving two plausible "time in VS
-             Code" figures to be reconciled by guesswork. */
-          sub: 'Editor active — IDE-detected idle removed',
+          sub: '',
         },
         { label: 'Top Language', value: langs[0]?.name ? capitalize(langs[0].name) : '—' },
         { label: 'Top Project', value: projects[0]?.name ?? '—' },
@@ -310,7 +303,7 @@ const Timeline: React.FC = () => {
 
     if (activeTab === 'Browser') {
       return [
-        { label: 'Browsing Time', value: formatDuration(totalSec), sub: 'Browser window in focus' },
+        { label: 'Browsing Time', value: formatDuration(totalSec), sub: '' },
         { label: 'Top Domain', value: domainBreakdown[0]?.name ?? '—' },
         { label: 'Domains Visited', value: String(domainBreakdown.length) },
         { label: 'Segments', value: String(visibleSegments.length) },
@@ -320,7 +313,7 @@ const Timeline: React.FC = () => {
 
     const apps = new Set(visibleSegments.map(s => s.app_name).filter(Boolean));
     return [
-      { label: 'Active Time', value: formatDuration(totalSec), sub: 'Window in focus, input detected' },
+      { label: 'Active Time', value: formatDuration(totalSec), sub: '' },
       { label: 'Idle Time', value: formatDuration(osPanel?.idle_time_sec ?? 0) },
       { label: 'Apps Used', value: String(apps.size) },
       { label: 'Segments', value: String(visibleSegments.length) },
@@ -352,18 +345,21 @@ const Timeline: React.FC = () => {
     if (activeTab === 'Browser') {
       return {
         title: 'Time by Domain',
-        note: 'Derived from non-overlapping activity segments, so concurrent tabs are not double-counted.',
+        note: '',
         rows: domainBreakdown,
       };
     }
     return {
       title: 'Time by Application',
-      note: 'Derived from non-overlapping activity segments. This is window-focus '
-        + 'time, so an editor or browser reads higher here than on its own tab, '
-        + "which also subtracts that source's own idle detection.",
+      note: '',
       rows: appBreakdown,
     };
   }, [activeTab, idePanel, domainBreakdown, appBreakdown]);
+
+  const secondaryPanel = useMemo(
+    () => getTimelineSecondaryPanel(activeTab as Exclude<SubTab, 'Calendar'>, breakdown.rows.length > 0),
+    [activeTab, breakdown.rows.length],
+  );
 
   /**
    * Timeline View: one 00:00–24:00 track for the selected day.
@@ -510,17 +506,14 @@ const Timeline: React.FC = () => {
             <div className="sd-card metric-card">
               <span className="metric-card-label">Meetings</span>
               <span className="metric-card-value">{calendarForDay.timed.length}</span>
-              <span className="metric-card-sub">Scheduled on {date}</span>
             </div>
             <div className="sd-card metric-card">
               <span className="metric-card-label">Time in Meetings</span>
               <span className="metric-card-value">{formatDuration(calendarForDay.meetingSec)}</span>
-              <span className="metric-card-sub">Total scheduled duration</span>
             </div>
             <div className="sd-card metric-card">
               <span className="metric-card-label">All-day Events</span>
               <span className="metric-card-value">{calendarForDay.allDay.length}</span>
-              <span className="metric-card-sub">Not counted in meeting time</span>
             </div>
             <div className="sd-card metric-card">
               <span className="metric-card-label">Longest Meeting</span>
@@ -529,7 +522,6 @@ const Timeline: React.FC = () => {
                   ? formatDuration(Math.max(...calendarForDay.timed.map(e => e.duration_sec || 0)))
                   : '—'}
               </span>
-              <span className="metric-card-sub">Single longest block</span>
             </div>
           </div>
 
@@ -594,14 +586,7 @@ const Timeline: React.FC = () => {
                 </div>
               ))}
             </div>
-            {activeTab === 'IDE' && (
-              <p className="chart-note" style={{ marginTop: 'var(--space-lg)' }}>
-                Coding Time comes from the IDE extension and drops the stretches it
-                saw no editor activity for. The OS / Apps tab measures the same
-                editor by window focus instead, so its row for this app reads
-                higher — reading, reviewing and thinking count there, not here.
-              </p>
-            )}
+            {activeTab === 'IDE' && null}
           </div>
 
           {visibleSegments.length === 0 ? (
@@ -615,11 +600,6 @@ const Timeline: React.FC = () => {
               <div className="sd-grid-2" style={{ marginTop: 'var(--space-xl)' }}>
                 <div className="sd-card">
                   <h3>Activity by Hour</h3>
-                  <p className="chart-note">
-                    Bars are minutes on the left axis; the line is that hour's focus score on
-                    the right. Hours with under {HOUR_MIN_SCORED_SEC / 60} minutes of scored
-                    activity carry no point rather than a reading drawn from a glance.
-                  </p>
                   <ResponsiveContainer width="100%" height={250}>
                     <ComposedChart data={hourlyData} barGap={2}>
                       <CartesianGrid strokeDasharray="3 3" stroke={chrome.grid} />
@@ -654,46 +634,90 @@ const Timeline: React.FC = () => {
                   </ResponsiveContainer>
                 </div>
 
-                <div className="sd-card">
-                  <h3>{distTitle[activeTab]}</h3>
-                  <div className="donut-container">
-                    <ResponsiveContainer width="45%" height={220}>
-                      <PieChart>
-                        <Pie
-                          data={categoryDistribution}
-                          dataKey="value"
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={48}
-                          outerRadius={85}
-                          paddingAngle={2}
-                          strokeWidth={0}
-                        >
-                          {categoryDistribution.map(e => <Cell key={e.key} fill={e.color} />)}
-                        </Pie>
-                        <Tooltip
-                          formatter={(value: number, _n, entry: any) => [
-                            `${formatDuration(value)} (${entry?.payload?.percent ?? 0}%)`,
-                            entry?.payload?.name,
-                          ]}
-                          contentStyle={tooltipStyle}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
-                    <div className="donut-legend">
-                      {categoryDistribution.map(item => (
-                        <div className="legend-item" key={item.key}>
-                          <span className="legend-dot" style={{ background: item.color }} />
-                          <span className="legend-name">{item.name}</span>
-                          <span className="legend-value">{formatDuration(item.value)}</span>
-                        </div>
-                      ))}
+                {secondaryPanel.primaryPanel === 'distribution' && (
+                  <div className="sd-card">
+                    <h3>{distTitle[activeTab]}</h3>
+                    <div className="donut-container">
+                      <ResponsiveContainer width="45%" height={220}>
+                        <PieChart>
+                          <Pie
+                            data={categoryDistribution}
+                            dataKey="value"
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={48}
+                            outerRadius={85}
+                            paddingAngle={2}
+                            strokeWidth={0}
+                          >
+                            {categoryDistribution.map(e => <Cell key={e.key} fill={e.color} />)}
+                          </Pie>
+                          <Tooltip
+                            formatter={(value: number, _n, entry: any) => [
+                              `${formatDuration(value)} (${entry?.payload?.percent ?? 0}%)`,
+                              entry?.payload?.name,
+                            ]}
+                            contentStyle={tooltipStyle}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div className="donut-legend">
+                        {categoryDistribution.map(item => (
+                          <div className="legend-item" key={item.key}>
+                            <span className="legend-dot" style={{ background: item.color }} />
+                            <span className="legend-name">{item.name}</span>
+                            <span className="legend-value">{formatDuration(item.value)}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
+
+                {secondaryPanel.primaryPanel === 'breakdown' && (
+                  <div className="sd-card">
+                    <h3>{breakdown.title}</h3>
+                    <p className="chart-note">{breakdown.note}</p>
+                    <ResponsiveContainer width="100%" height={Math.max(220, breakdown.rows.length * 40)}>
+                      <BarChart
+                        data={breakdown.rows}
+                        layout="vertical"
+                        margin={{ top: 8, right: 76, bottom: 8, left: 8 }}
+                      >
+                        <CartesianGrid horizontal={false} stroke={chrome.grid} />
+                        <XAxis
+                          type="number"
+                          tick={{ fontSize: 12, fill: chrome.axisText }}
+                          tickFormatter={(v: number) => formatDuration(v)}
+                        />
+                        <YAxis
+                          type="category"
+                          dataKey="name"
+                          width={150}
+                          tick={{ fontSize: 12, fill: chrome.axisText }}
+                          axisLine={false}
+                          tickLine={false}
+                        />
+                        <Tooltip
+                          cursor={{ fill: chrome.grid, fillOpacity: 0.4 }}
+                          formatter={(v: number) => [formatDuration(v), 'Time']}
+                          contentStyle={tooltipStyle}
+                        />
+                        <Bar dataKey="seconds" fill={getCategoryColor('work', theme)} radius={[0, 4, 4, 0]} maxBarSize={24}>
+                          <LabelList
+                            dataKey="seconds"
+                            position="right"
+                            formatter={(v: number) => formatDuration(v)}
+                            style={{ fill: chrome.axisText, fontSize: 12 }}
+                          />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
               </div>
 
-              {breakdown.rows.length > 0 && (
+              {secondaryPanel.showBreakdownBelow && (
                 <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
                   <h3>{breakdown.title}</h3>
                   <p className="chart-note">{breakdown.note}</p>
@@ -737,10 +761,6 @@ const Timeline: React.FC = () => {
 
               <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
                 <h3>Timeline View</h3>
-                <p className="chart-note">
-                  The full day, 00:00 to 24:00. Empty stretches are hours with no
-                  recorded {activeTab} activity.
-                </p>
                 <div className="day-timeline">
                   <div className="day-timeline-track">
                     {GRID_HOURS.map(h => (

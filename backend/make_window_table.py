@@ -26,14 +26,26 @@ exceed its own definition. Segments are now clipped to the window and their
 remainder carried into the following windows.
 """
 
+import sys
+import os
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# ----------------------------------------------------------------------
-# CONFIGURATION - change only if your column names differ in activity_segments
-# ----------------------------------------------------------------------
-DB_PATH = Path(__file__).resolve().with_name("smartdesk.db")
+BACKEND_ROOT = Path(__file__).resolve().parent
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from app.core.config import settings
+
+def get_db_path() -> Path:
+    db_url = settings.DATABASE_URL
+    if db_url.startswith("sqlite:///"):
+        path_str = db_url[len("sqlite:///"):].replace("/", os.sep)
+        return BACKEND_ROOT / path_str
+    return BACKEND_ROOT / "smartdesk.db"
+
+DB_PATH = get_db_path()
 SRC_TABLE = "activity_segments"
 DST_TABLE = "activity_window_10m"
 

@@ -504,15 +504,7 @@ const Dashboard: React.FC = () => {
                   />
                 </div>
                 <div className="split-bar-labels">
-                  {focus.score !== null ? (
-                    <>
-                      <span>{focus.segments} scored segments</span>
-                      {/* What the number rests on. A day whose segments are
-                          mostly unscored would otherwise quote a confident
-                          figure drawn from a sliver of it. */}
-                      <span>{Math.round(focus.coverage * 100)}% of active time scored</span>
-                    </>
-                  ) : (
+                  {focus.score === null && (
                     <span>No scored activity for {selectedDate}</span>
                   )}
                 </div>
@@ -551,12 +543,6 @@ const Dashboard: React.FC = () => {
               </div>
             </div>
 
-            <p className="card-footnote">
-              Focus is measured per segment and weighted by duration. Stress is derived from
-              recorded webcam emotion blocks — anger raises it, visible happiness lowers it,
-              and blocks that saw few frames count for less. Days without a detection session
-              show no score rather than a guess.
-            </p>
           </div>
 
           <div className="sd-card">
@@ -633,7 +619,6 @@ const Dashboard: React.FC = () => {
           ) : !predictionSummary ? (
             <div className="pred-panel-task pred-panel-message">
               <h4>No active GitHub tasks</h4>
-              <span>Move an issue into the mapped ACTIVE status to see its estimate.</span>
             </div>
           ) : (
             <>
@@ -688,11 +673,6 @@ const Dashboard: React.FC = () => {
             <span className="insight-panel-icon">❗</span>
             <div>
               <h3>Key Insights for Today</h3>
-              <p>
-                {insightTotal > insights.length
-                  ? `Top ${insights.length} of ${insightTotal} findings ranked by the local rule engine`
-                  : 'Ranked by the local rule engine from your recorded activity'}
-              </p>
             </div>
             <span className="sd-view-details" onClick={() => navigate('/recommendations')}>
               Recommendations →
@@ -764,7 +744,7 @@ const Dashboard: React.FC = () => {
               )}
             </div>
           ) : (
-            <p className="dash-empty">Pattern snapshots appear once clustering results are available.</p>
+            <p className="dash-empty">Your work patterns will appear here once we've analyzed your activity.</p>
           )}
         </div>
 
@@ -776,7 +756,6 @@ const Dashboard: React.FC = () => {
             <span className="metric-card-value" style={{ fontSize: 'var(--font-size-lg)' }}>
               {activityWindow}
             </span>
-            <span className="metric-card-sub">First to last recorded activity</span>
           </div>
           <div className="sd-card metric-card">
             <span className="metric-card-label">Most-Used App</span>
@@ -784,21 +763,18 @@ const Dashboard: React.FC = () => {
               {stats.topApp ?? '—'}
             </span>
             <span className="metric-card-sub">
-              {stats.topApp ? `${formatDuration(stats.topAppSec)} in the foreground` : 'No activity recorded'}
+              {stats.topApp ? `${formatDuration(stats.topAppSec)}` : 'No activity recorded'}
             </span>
           </div>
           <div className="sd-card metric-card">
             <span className="metric-card-label">Work Blocks</span>
             <span className="metric-card-value">{stats.blocks.length}</span>
-            <span className="metric-card-sub">
-              Continuous stretches from {summary?.total_segments ?? 0} segments
-            </span>
           </div>
           <div className="sd-card metric-card">
             <span className="metric-card-label">Files Modified</span>
             <span className="metric-card-value">{ide?.files_modified ?? 0}</span>
             <span className="metric-card-sub">
-              Across {ide?.top_projects?.length ?? 0} IDE project
+              {ide?.top_projects?.length ?? 0} project
               {(ide?.top_projects?.length ?? 0) === 1 ? '' : 's'}
             </span>
           </div>

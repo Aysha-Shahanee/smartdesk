@@ -13,8 +13,21 @@ import sqlite3
 import logging
 
 BACKEND_ROOT = Path(__file__).resolve().parent
-DB_PATH = BACKEND_ROOT / "smartdesk.db"
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from app.core.config import settings
+
+def get_db_path() -> Path:
+    db_url = settings.DATABASE_URL
+    if db_url.startswith("sqlite:///"):
+        path_str = db_url[len("sqlite:///"):].replace("/", os.sep)
+        return BACKEND_ROOT / path_str
+    return BACKEND_ROOT / "smartdesk.db"
+
+DB_PATH = get_db_path()
 LOG_PATH = BACKEND_ROOT / "logs" / "refresh_windows_nightly.log"
+LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # logs/ holds only ignored *.log files, so it is absent from a fresh checkout.
 # FileHandler will not create it, and this runs at import: without the mkdir the
