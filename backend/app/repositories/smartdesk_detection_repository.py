@@ -175,6 +175,21 @@ class SmartDeskDetectionRepository:
         )
         return self._session_to_dict(row) if row else None
 
+    def latest_session_with_final_state_blocks(self, user_id: str) -> dict[str, Any] | None:
+        row = (
+            self.db.query(SmartDeskDetectionSessionRecord)
+            .join(
+                SmartDeskFinalStateBlockRecord,
+                SmartDeskFinalStateBlockRecord.session_id == SmartDeskDetectionSessionRecord.id,
+            )
+            .filter(
+                SmartDeskDetectionSessionRecord.user_id == user_id,
+                SmartDeskFinalStateBlockRecord.user_id == user_id,
+            )
+            .order_by(SmartDeskDetectionSessionRecord.real_start_time.desc())
+            .first()
+        )
+        return self._session_to_dict(row) if row else None
     def session_by_id(self, session_id: str) -> dict[str, Any] | None:
         row = self.db.get(SmartDeskDetectionSessionRecord, session_id)
         return self._session_to_dict(row) if row else None

@@ -20,10 +20,12 @@ def current_session_response(
     """Build the `/sessions/current` payload from v2 SQL rows."""
     repo = SmartDeskDetectionRepository(db)
     live_session_id = None
-    if status:
+    if status and status.get("running"):
         live_session_id = status.get("current_session_id") or status.get("session_id")
 
     session = repo.session_by_id(live_session_id) if live_session_id else None
+    if session is None:
+        session = repo.latest_session_with_final_state_blocks(user_id)
     if session is None:
         session = repo.latest_session(user_id)
 

@@ -83,6 +83,61 @@ class SmartDeskEndpointServiceTests(unittest.TestCase):
         self.assertEqual(len(response["final_state_blocks"]), 1)
         self.assertEqual(response["final_state_blocks"][0]["dominant_state"], "Fatigued")
         self.assertEqual(response["completed_blocks"][0]["state_scores"]["Fatigued"], 1.0)
+    def test_current_session_falls_back_to_latest_session_with_final_state_blocks(self):
+        self._insert_session("useful-session", "2026-08-22T09:00:00+05:30")
+        self.repo.upsert_final_state_block({
+            "id": "final-useful-session-1",
+            "user_id": "test-user",
+            "session_id": "useful-session",
+            "summary": {
+                "block_start_time": "2026-08-22T09:00:00+05:30",
+                "block_end_time": "2026-08-22T09:05:00+05:30",
+                "window_seconds": 300.0,
+                "state": "overloaded",
+                "matched_rule": "high_load",
+                "ready": True,
+            },
+            "created_at": "2026-08-22T09:05:00+05:30",
+        })
+        self._insert_session("new-empty-session", "2026-08-22T10:00:00+05:30")
+
+        response = endpoint_service.current_session_response(
+            self.db,
+            user_id="test-user",
+        )
+
+        self.assertEqual(response["session"]["id"], "useful-session")
+        self.assertEqual(len(response["final_state_blocks"]), 1)
+        self.assertEqual(response["final_state_blocks"][0]["dominant_state"], "Overloaded")
+        self.assertEqual(response["completed_blocks"][0]["state_scores"]["Overloaded"], 1.0)
+    def test_stopped_empty_status_session_does_not_hide_latest_useful_session(self):
+        self._insert_session("useful-session", "2026-08-22T09:00:00+05:30")
+        self.repo.upsert_final_state_block({
+            "id": "final-useful-session-2",
+            "user_id": "test-user",
+            "session_id": "useful-session",
+            "summary": {
+                "block_start_time": "2026-08-22T09:00:00+05:30",
+                "block_end_time": "2026-08-22T09:05:00+05:30",
+                "window_seconds": 300.0,
+                "state": "focused",
+                "matched_rule": "focused",
+                "ready": True,
+            },
+            "created_at": "2026-08-22T09:05:00+05:30",
+        })
+        self._insert_session("new-empty-session", "2026-08-22T10:00:00+05:30")
+
+        response = endpoint_service.current_session_response(
+            self.db,
+            user_id="test-user",
+            status={"running": False, "current_session_id": "new-empty-session"},
+        )
+
+        self.assertEqual(response["session"]["id"], "useful-session")
+        self.assertEqual(len(response["final_state_blocks"]), 1)
+        self.assertEqual(response["final_state_blocks"][0]["dominant_state"], "Focused")
+        self.assertEqual(response["completed_blocks"][0]["state_scores"]["Focused"], 1.0)
     def test_workload_risk_response_uses_reporting_blocks_in_window(self):
         self._insert_session("latest-session", "2026-08-22T09:00:00+05:30")
         self._insert_reporting("latest-session")

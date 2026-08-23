@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, PieChart, Pie, Cell, Legend,
@@ -273,6 +273,9 @@ const averageWorkStateScores = (session: CurrentEmotionSession | null) => {
   return totals;
 };
 
+const hasWorkStateScores = (session: CurrentEmotionSession | null) =>
+  Object.values(averageWorkStateScores(session)).some(value => value > 0);
+
 type WorkStateDaySlot = {
   index: number;
   label: string;
@@ -320,6 +323,8 @@ const buildWorkStateDaySlots = (
   return slots;
 };
 
+const LAST_SESSION_LABEL_DELAY_MS = 5000;
+
 const slotTitle = (slot: WorkStateDaySlot) => {
   const labels = slot.parts.map((state, index) => `${index * 5}-${index * 5 + 5} min: ${state || 'No data'}`);
   return `${slot.label}: ${labels.join(' | ')}`;
@@ -331,12 +336,22 @@ const Insights: React.FC = () => {
   const [activeTab, setActiveTab] = useState<InsightTab>('Focus Insights');
   const [emotionStatus, setEmotionStatus] = useState<EmotionStatus | null>(null);
   const [currentEmotionSession, setCurrentEmotionSession] = useState<CurrentEmotionSession | null>(null);
+  const [lastSessionSnapshot, setLastSessionSnapshot] = useState<CurrentEmotionSession | null>(null);
+  const [pieDisplayMode, setPieDisplayMode] = useState<'current' | 'last'>('last');
+  const lastSessionLabelTimerRef = useRef<number | null>(null);
   const [emotionError, setEmotionError] = useState<string | null>(null);
   const [isEmotionLoading, setIsEmotionLoading] = useState(false);
   const [isStartingEmotion, setIsStartingEmotion] = useState(false);
   const [isStoppingEmotion, setIsStoppingEmotion] = useState(false);
   const [webcamConsent, setWebcamConsent] = useState<boolean | null>(null);
   const [stress, setStress] = useState<StressResponse | null>(null);
+
+  const clearLastSessionLabelTimer = useCallback(() => {
+    if (lastSessionLabelTimerRef.current !== null) {
+      window.clearTimeout(lastSessionLabelTimerRef.current);
+      lastSessionLabelTimerRef.current = null;
+    }
+  }, []);
 
   const refreshEmotionData = useCallback(async () => {
     setIsEmotionLoading(true);
@@ -379,6 +394,8 @@ const Insights: React.FC = () => {
     }
   }, [activeTab, refreshEmotionData]);
 
+  useEffect(() => clearLastSessionLabelTimer, [clearLastSessionLabelTimer]);
+
   useEffect(() => {
     if (activeTab !== 'Stress Insights' || !emotionStatus?.running) return;
     const intervalId = window.setInterval(refreshEmotionData, 3000);
@@ -386,6 +403,10 @@ const Insights: React.FC = () => {
   }, [activeTab, emotionStatus?.running, refreshEmotionData]);
 
   const handleStartEmotion = async () => {
+    clearLastSessionLabelTimer();
+    setLastSessionSnapshot(null);
+    setCurrentEmotionSession(null);
+    setPieDisplayMode('current');
     setIsStartingEmotion(true);
     setEmotionError(null);
     try {
@@ -401,12 +422,29 @@ const Insights: React.FC = () => {
   };
 
   const handleStopEmotion = async () => {
+    clearLastSessionLabelTimer();
+    setPieDisplayMode('current');
     setIsStoppingEmotion(true);
     setEmotionError(null);
     try {
       const result = await stopEmotionDetection();
       setEmotionStatus(result?.status || result);
+      const stoppedSession = await getCurrentEmotionSession().catch(() => null);
+      const snapshot = stoppedSession || currentEmotionSession;
+      if (snapshot) {
+        setCurrentEmotionSession(snapshot);
+        setLastSessionSnapshot(snapshot);
+      }
       await refreshEmotionData();
+      lastSessionLabelTimerRef.current = window.setTimeout(async () => {
+        const finalizedSession = await getCurrentEmotionSession().catch(() => null);
+        if (finalizedSession) {
+          setCurrentEmotionSession(finalizedSession);
+          setLastSessionSnapshot(finalizedSession);
+        }
+        setPieDisplayMode('last');
+        lastSessionLabelTimerRef.current = null;
+      }, LAST_SESSION_LABEL_DELAY_MS);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not stop webcam detection.';
       setEmotionError(message);
@@ -415,11 +453,19 @@ const Insights: React.FC = () => {
     }
   };
 
+  const pieEmotionSession = emotionStatus?.running
+    ? currentEmotionSession
+    : lastSessionSnapshot || currentEmotionSession;
   const workStateTotals = useMemo(
-    () => averageWorkStateScores(currentEmotionSession),
-    [currentEmotionSession],
+    () => averageWorkStateScores(pieEmotionSession),
+    [pieEmotionSession],
   );
   const workStateTotalValue = Object.values(workStateTotals).reduce((sum, value) => sum + value, 0);
+  const pieTitle = workStateTotalValue <= 0
+    ? 'Work State Distribution'
+    : emotionStatus?.running || pieDisplayMode === 'current'
+      ? 'Work State Distribution – Current Session'
+      : 'Work State Distribution – Last Session';
   const detectorWorkStateDistribution = WORK_STATE_ORDER.map(state => {
     const value = workStateTotals[state] || 0;
     const percent = workStateTotalValue > 0 ? Math.round((value / workStateTotalValue) * 100) : 0;
@@ -452,7 +498,7 @@ const Insights: React.FC = () => {
     statusLabel === 'Running' ? 'sd-badge--success' :
     statusLabel === 'Error' ? 'sd-badge--danger' :
     'sd-badge--warning';
-  const completedBlocks = currentEmotionSession?.completed_blocks || currentEmotionSession?.blocks || [];
+  const pieCompletedBlocks = pieEmotionSession?.completed_blocks || pieEmotionSession?.blocks || [];
   const [patternScope, setPatternScope] = useState<PatternScope>('day');
   const [patternWindows, setPatternWindows] = useState<WindowCluster[]>([]);
   const [patternLoading, setPatternLoading] = useState(false);
@@ -993,7 +1039,7 @@ const Insights: React.FC = () => {
             </div>
 
             <div className="sd-card">
-              <h3>Work State Distribution – Current Session</h3>
+              <h3>{pieTitle}</h3>
               {workStateTotalValue > 0 ? (
                 <div className="donut-container">
                   <ResponsiveContainer width="50%" height={200}>
@@ -1024,8 +1070,8 @@ const Insights: React.FC = () => {
                 <div className="dash-empty emotion-empty">
                   {emotionStatus?.running
                     ? 'Detection is running. Work state scores will appear here after the first live predictions.'
-                    : completedBlocks.length === 0
-                      ? 'No completed work state blocks for the current session yet.'
+                    : pieCompletedBlocks.length === 0
+                      ? 'No completed work state blocks for this session yet.'
                       : 'No work state scores are available for this session.'}
                 </div>
               )}
@@ -1053,14 +1099,6 @@ const Insights: React.FC = () => {
                   <strong>Data Stays Local First</strong>
                 </div>
               </div>
-            </div>
-          </div>
-
-          <div className="sd-alert sd-alert--warning" style={{ marginTop: 'var(--space-xl)' }}>
-            <span className="sd-alert-icon">!</span>
-            <div className="sd-alert-content">
-              <h4>Elevated Stress After Lunch</h4>
-              <p>Your stress levels increase by 40% between 1 PM - 3 PM. Consider scheduling less demanding tasks during this window.</p>
             </div>
           </div>
         </div>
