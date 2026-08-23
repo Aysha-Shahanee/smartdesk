@@ -23,48 +23,6 @@
   border-color: var(--color-primary);
 }
 
-/* Key Insights panel */
-.insight-panel {
-  background: var(--color-primary-light);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-2xl);
-}
-
-.insight-panel-header {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-md);
-  margin-bottom: var(--space-lg);
-}
-
-.insight-panel-header > div {
-  flex: 1;
-}
-
-.insight-panel-header h3 {
-  font-size: var(--font-size-lg);
-  font-weight: 700;
-  color: var(--color-text-primary);
-}
-
-.insight-panel-header p {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-}
-
-.insight-panel-icon {
-  flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: var(--color-surface);
-  font-size: var(--font-size-base);
-}
-
 /* Two findings per row. Four full-width rows of prose was most of a screen for
    four sentences; paired columns fit the same four in about half the height,
    and every row is the same height whatever the wording, so the panel reads as
@@ -85,7 +43,7 @@
   display: flex;
   align-items: flex-start;
   gap: var(--space-md);
-  background: var(--color-surface);
+  background: var(--color-bg);
   padding: var(--space-md) var(--space-lg);
   border-radius: var(--radius-md);
   /* The row is a link into Recommendations; a button keeps it keyboard
@@ -117,9 +75,11 @@
   color: var(--color-text-primary);
 }
 
-/* Clamped so one long finding cannot set the height of every row beside it.
-   The full text is on the Recommendations page, one click away. */
-.insight-row-why,
+/* The action line is clamped so one long finding cannot set the height of
+   every row beside it. Secondary text rather than primary: four accent-
+   coloured lines in one card read as four links, and matching the supporting
+   line in Pattern Snapshot keeps the two boxes consistent. The reasoning
+   behind a finding is the row tooltip and the Recommendations page. */
 .insight-row-action {
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -127,11 +87,6 @@
   overflow: hidden;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
-}
-
-.insight-row-action {
-  color: var(--color-primary);
-  -webkit-line-clamp: 1;
 }
 
 /* Three severities, three colours — the old marker only distinguished "low"

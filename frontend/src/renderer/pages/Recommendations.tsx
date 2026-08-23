@@ -190,63 +190,6 @@ const Recommendations: React.FC = () => {
         </div>
       </div>
 
-      {/* ---- Key insights ---- */}
-      <div className="rec-key-insights">
-        <div className="rec-key-insights-header">
-          <span className="rec-icon">!</span>
-          <div>
-            <h3>Key Insights</h3>
-            <span className="rec-subtitle">
-              {data?.daily_date
-                ? `From your recorded activity on ${data.daily_date}`
-                : 'From your recorded activity'}
-            </span>
-          </div>
-        </div>
-        <div className="rec-key-insights-body">
-          {insight.length === 0 && <p className="dash-empty">{SECTION_EMPTY.insight}</p>}
-          {insight.map(rec => (
-            <div className="rec-insight-row" key={rec.id}>
-              <span
-                className={`rec-icon-small ${rec.severity === 'high' ? 'red' : 'green'}`}
-              >
-                {rec.severity === 'high' ? '!' : '↗'}
-              </span>
-              <div>
-                <strong>{rec.title}</strong>
-                <p>{rec.why}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* ---- Planning ---- */}
-      <div className="rec-section">
-        <div className="rec-section-header">
-          <span className="rec-section-icon">📅</span>
-          <h2>Planning Suggestions</h2>
-        </div>
-        <div className="rec-card-list">
-          {planning.length === 0 && <p className="dash-empty">{SECTION_EMPTY.planning}</p>}
-          {planning.map(rec => (
-            <div className="rec-list-card" key={rec.id}>
-              <h4>{rec.title}</h4>
-              <div className="rec-list-details">
-                <div className="rec-detail-row">
-                  <span className="rec-detail-label">Why:</span>
-                  <span className="rec-detail-value">{rec.why}</span>
-                </div>
-                <div className="rec-detail-row">
-                  <span className="rec-detail-label">Action:</span>
-                  <span className="rec-detail-value">{rec.action}</span>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
       {/* ---- Behaviour ---- */}
       <div className="rec-section">
         <div className="rec-section-header">
@@ -289,6 +232,63 @@ const Recommendations: React.FC = () => {
                     </button>
                   </>
                 )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ---- Planning ---- */}
+      <div className="rec-section">
+        <div className="rec-section-header">
+          <span className="rec-section-icon">📅</span>
+          <h2>Planning Suggestions</h2>
+        </div>
+        <div className="rec-card-list">
+          {planning.length === 0 && <p className="dash-empty">{SECTION_EMPTY.planning}</p>}
+          {planning.map(rec => (
+            <div className="rec-list-card" key={rec.id}>
+              <h4>{rec.title}</h4>
+              <div className="rec-list-details">
+                <div className="rec-detail-row">
+                  <span className="rec-detail-label">Why:</span>
+                  <span className="rec-detail-value">{rec.why}</span>
+                </div>
+                <div className="rec-detail-row">
+                  <span className="rec-detail-label">Action:</span>
+                  <span className="rec-detail-value">{rec.action}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ---- Key insights ---- */}
+      <div className="rec-key-insights">
+        <div className="rec-key-insights-header">
+          <span className="rec-icon">!</span>
+          <div>
+            <h3>Key Insights</h3>
+            <span className="rec-subtitle">
+              {data?.daily_date
+                ? `From your recorded activity on ${data.daily_date}`
+                : 'From your recorded activity'}
+            </span>
+          </div>
+        </div>
+        <div className="rec-key-insights-body">
+          {insight.length === 0 && <p className="dash-empty">{SECTION_EMPTY.insight}</p>}
+          {insight.map(rec => (
+            <div className="rec-insight-row" key={rec.id}>
+              <span
+                className={`rec-icon-small ${rec.severity === 'high' ? 'red' : 'green'}`}
+              >
+                {rec.severity === 'high' ? '!' : '↗'}
+              </span>
+              <div>
+                <strong>{rec.title}</strong>
+                <p>{rec.why}</p>
               </div>
             </div>
           ))}

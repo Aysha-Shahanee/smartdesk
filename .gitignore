@@ -80,3 +80,10 @@ backend/features/
 # SmartDesk v2 keeps the active MediaPipe fallback model under emotion-recognition/smartdesk_v2/models.
 backend/models/face_landmarker.task
 
+
+# Scratch repos for prediction / IDE-activity testing. Each carries its own
+# .git pointing at the smartdesk-prediction-test org, so committing them would
+# record a broken gitlink. Kept on disk, out of this repo's history.
+smartdesk-backend-test/
+smartdesk-extension-test/
+smartdesk-frontend-test/

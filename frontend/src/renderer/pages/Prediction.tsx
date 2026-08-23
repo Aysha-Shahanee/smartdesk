@@ -130,10 +130,6 @@ const Prediction: React.FC = () => {
               </div>
 
               <div className="pred-detail-progress">
-                <div className="pred-detail-progress-label">
-                  <span>Lifecycle progress</span>
-                  <span>Not measured</span>
-                </div>
                 <div className="pred-progress-track large unavailable" />
               </div>
             </div>
