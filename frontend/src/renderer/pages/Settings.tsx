@@ -27,7 +27,6 @@ import './Settings.css';
    is the only thing that decides whether events are actually collected. */
 interface PrivacySettings {
   webcamEmotion: boolean;
-  cloudSync: boolean;
 }
 
 interface Integration {
@@ -55,7 +54,6 @@ const Settings: React.FC = () => {
      their own. */
   const [privacy, setPrivacy] = useState<PrivacySettings>({
     webcamEmotion: false,
-    cloudSync: false,
   });
   const [webcamBusy, setWebcamBusy] = useState(true);
   const [webcamError, setWebcamError] = useState('');
@@ -413,14 +411,6 @@ const Settings: React.FC = () => {
     return () => { cancelled = true; };
   }, []);
 
-  const togglePrivacy = (key: keyof PrivacySettings) => {
-    setPrivacy(prev => {
-      const updated = { ...prev, [key]: !prev[key] };
-      localStorage.setItem('smartdeskSettings', JSON.stringify(updated));
-      return updated;
-    });
-  };
-
   /* Webcam consent round-trips to the backend, which is what actually gates
      capture. Only reflect the new position once the server has accepted it, so
      the switch can never show a permission the backend has not granted. */
@@ -501,22 +491,6 @@ const Settings: React.FC = () => {
               disabled={calendarBusy || calendarUnavailable || calendar?.configured === false}
               onChange={toggleCalendar}
             />
-            <span className="sd-toggle-slider" />
-          </label>
-        </div>
-
-        <div className="setting-row">
-          <div className="setting-icon-wrap" style={{ background: '#EBF0FF' }}>☁️</div>
-          <div className="setting-info">
-            <strong>Cloud Sync</strong>
-            <p>Enable cloud sync for long-term AI insights and cross-device access. All data is encrypted.</p>
-            <div className="setting-tags">
-              <span>🔒 End-to-end encrypted</span>
-              <span>Optional feature</span>
-            </div>
-          </div>
-          <label className="sd-toggle">
-            <input type="checkbox" checked={privacy.cloudSync} onChange={() => togglePrivacy('cloudSync')} />
             <span className="sd-toggle-slider" />
           </label>
         </div>
@@ -843,15 +817,6 @@ const Settings: React.FC = () => {
             <button className="sd-btn">Disconnect</button>
           </div>
         ))}
-      </div>
-
-      {/* Privacy Footer */}
-      <div className="sd-alert sd-alert--success privacy-footer">
-        <span className="sd-alert-icon">🛡️</span>
-        <div className="sd-alert-content">
-          <h4>Privacy-First Design</h4>
-          <p>SmartDesk collects only metadata about your activity (app names, durations, timestamps). We never read file contents, URLs, or any sensitive information. All processing happens locally on your device unless you enable cloud sync.</p>
-        </div>
       </div>
     </div>
   );

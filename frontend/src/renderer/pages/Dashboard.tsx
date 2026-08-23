@@ -664,20 +664,27 @@ const Dashboard: React.FC = () => {
         </div>
 
         {/* ---- Key insights → Recommendations ----
-               Two per row rather than four stacked, and each row carries the
-               action as well as the finding: the same four items in roughly
-               half the height, and the half that tells you what to do about it
-               no longer requires opening the Recommendations page. ---- */}
-        <div className="insight-panel">
-          <div className="insight-panel-header">
-            <span className="insight-panel-icon">❗</span>
-            <div>
-              <h3>Key Insights for Today</h3>
-            </div>
+               An sd-card like every other panel on the page. It used to be a
+               tinted slab with its own header shape, which made the one box
+               that is only a preview look like the most important thing in the
+               column. Each row is now the finding and what to do about it; the
+               reasoning sits in the row tooltip and on the Recommendations
+               page, because four stacked paragraphs is more prose than a
+               dashboard preview can carry. ---- */}
+        <div className="sd-card">
+          <div className="card-header">
+            <h3><span className="card-icon">❗</span> Key Insights</h3>
             <span className="sd-view-details" onClick={() => navigate('/recommendations')}>
               Recommendations →
             </span>
           </div>
+          {insights.length > 0 && (
+            <p className="card-subtitle">
+              {insightTotal > insights.length
+                ? `Top ${insights.length} of ${insightTotal} findings for ${selectedDate}`
+                : `${insights.length} finding${insights.length === 1 ? '' : 's'} for ${selectedDate}`}
+            </p>
+          )}
 
           {insights.length > 0 ? (
             <div className="insight-rows">
@@ -687,14 +694,14 @@ const Dashboard: React.FC = () => {
                   className="insight-row"
                   key={item.id}
                   onClick={() => navigate('/recommendations')}
+                  title={item.why}
                 >
                   <span
                     className={`insight-severity ${item.severity}`}
-                    title={`${capitalize(item.severity)} severity`}
+                    aria-label={`${capitalize(item.severity)} severity`}
                   />
                   <span className="insight-row-body">
                     <strong>{item.title}</strong>
-                    <span className="insight-row-why">{item.why}</span>
                     <span className="insight-row-action">{item.action}</span>
                   </span>
                 </button>

@@ -334,8 +334,7 @@ const Timeline: React.FC = () => {
     if (activeTab === 'IDE') {
       return {
         title: 'Time by Language',
-        note: 'From IDE session records (ide_sessions.active_language), weighted by '
-          + 'active coding time — these add up to the Coding Time above.',
+        note: '',
         rows: (idePanel?.top_languages || []).map((r: any) => ({
           name: capitalize(r.name || 'unknown'),
           seconds: r.seconds,
@@ -677,7 +676,7 @@ const Timeline: React.FC = () => {
                 {secondaryPanel.primaryPanel === 'breakdown' && (
                   <div className="sd-card">
                     <h3>{breakdown.title}</h3>
-                    <p className="chart-note">{breakdown.note}</p>
+                    {breakdown.note && <p className="chart-note">{breakdown.note}</p>}
                     <ResponsiveContainer width="100%" height={Math.max(220, breakdown.rows.length * 40)}>
                       <BarChart
                         data={breakdown.rows}
@@ -720,7 +719,7 @@ const Timeline: React.FC = () => {
               {secondaryPanel.showBreakdownBelow && (
                 <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
                   <h3>{breakdown.title}</h3>
-                  <p className="chart-note">{breakdown.note}</p>
+                  {breakdown.note && <p className="chart-note">{breakdown.note}</p>}
                   <ResponsiveContainer width="100%" height={Math.max(160, breakdown.rows.length * 40)}>
                     <BarChart
                       data={breakdown.rows}
