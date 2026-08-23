@@ -1,0 +1,312 @@
+{
+  "summary": {
+    "manual_label": "Happy",
+    "seconds": 20.0,
+    "sample_fps": 2.0,
+    "valid_predictions": 32,
+    "no_face": 0,
+    "correct": 25,
+    "accuracy": 0.78125,
+    "prediction_counts": {
+      "Happy": 25,
+      "Neutral": 0,
+      "Confusion": 7,
+      "NO_FACE": 0
+    },
+    "average_probabilities": {
+      "Happy": 0.7545483352732845,
+      "Neutral": 0.00034761216392098504,
+      "Confusion": 0.24510406215995317
+    }
+  },
+  "samples": [
+    {
+      "sample": 1,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.8404679298400879,
+      "neutral": 0.0003208210691809654,
+      "confusion": 0.15921129286289215
+    },
+    {
+      "sample": 2,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.9836208820343018,
+      "neutral": 6.492240936495364e-05,
+      "confusion": 0.016314109787344933
+    },
+    {
+      "sample": 3,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.8339508175849915,
+      "neutral": 0.00011450397869339213,
+      "confusion": 0.16593466699123383
+    },
+    {
+      "sample": 4,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.9375484585762024,
+      "neutral": 3.131433550151996e-05,
+      "confusion": 0.06242024898529053
+    },
+    {
+      "sample": 5,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.9754143357276917,
+      "neutral": 0.0002284769288962707,
+      "confusion": 0.024357199668884277
+    },
+    {
+      "sample": 6,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.9852303862571716,
+      "neutral": 6.145038787508383e-05,
+      "confusion": 0.01470823772251606
+    },
+    {
+      "sample": 7,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.9641343355178833,
+      "neutral": 1.6108764611999504e-05,
+      "confusion": 0.03584953024983406
+    },
+    {
+      "sample": 8,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.9964039325714111,
+      "neutral": 4.407997948874254e-06,
+      "confusion": 0.0035917300265282393
+    },
+    {
+      "sample": 9,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.9275328516960144,
+      "neutral": 0.00011512274068081751,
+      "confusion": 0.07235205173492432
+    },
+    {
+      "sample": 10,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.8144550323486328,
+      "neutral": 0.0003298064402770251,
+      "confusion": 0.18521520495414734
+    },
+    {
+      "sample": 11,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.9804760813713074,
+      "neutral": 0.00017341860802844167,
+      "confusion": 0.019350528717041016
+    },
+    {
+      "sample": 12,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.9839538335800171,
+      "neutral": 8.620022526883986e-06,
+      "confusion": 0.01603754051029682
+    },
+    {
+      "sample": 13,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.9829209446907043,
+      "neutral": 0.00022923357028048486,
+      "confusion": 0.016849834471940994
+    },
+    {
+      "sample": 14,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.9963571429252625,
+      "neutral": 5.493020944413729e-05,
+      "confusion": 0.0035879015922546387
+    },
+    {
+      "sample": 15,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.9974076151847839,
+      "neutral": 7.162698602769524e-05,
+      "confusion": 0.002520785667002201
+    },
+    {
+      "sample": 16,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.9838382005691528,
+      "neutral": 0.0019715502858161926,
+      "confusion": 0.014190214686095715
+    },
+    {
+      "sample": 17,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.9431848526000977,
+      "neutral": 0.0018378052627667785,
+      "confusion": 0.05497733876109123
+    },
+    {
+      "sample": 18,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.912375271320343,
+      "neutral": 0.0001921388175105676,
+      "confusion": 0.08743260055780411
+    },
+    {
+      "sample": 19,
+      "face_detected": true,
+      "predicted": "Confusion",
+      "state": "uncertain",
+      "happy": 0.2866072654724121,
+      "neutral": 0.0008149752393364906,
+      "confusion": 0.712577760219574
+    },
+    {
+      "sample": 20,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "uncertain",
+      "happy": 0.708480715751648,
+      "neutral": 0.00126504001673311,
+      "confusion": 0.29025429487228394
+    },
+    {
+      "sample": 21,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.9679728746414185,
+      "neutral": 0.0004508672864176333,
+      "confusion": 0.0315762460231781
+    },
+    {
+      "sample": 22,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.8919439315795898,
+      "neutral": 0.000135944239445962,
+      "confusion": 0.1079200953245163
+    },
+    {
+      "sample": 23,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.968548595905304,
+      "neutral": 0.00031606591073796153,
+      "confusion": 0.03113536350429058
+    },
+    {
+      "sample": 24,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.9545047879219055,
+      "neutral": 0.0007303064339794219,
+      "confusion": 0.04476494714617729
+    },
+    {
+      "sample": 25,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.9910337328910828,
+      "neutral": 0.000258406886132434,
+      "confusion": 0.008707886561751366
+    },
+    {
+      "sample": 26,
+      "face_detected": true,
+      "predicted": "Happy",
+      "state": "happy",
+      "happy": 0.8161942958831787,
+      "neutral": 0.0002919385442510247,
+      "confusion": 0.1835137903690338
+    },
+    {
+      "sample": 27,
+      "face_detected": true,
+      "predicted": "Confusion",
+      "state": "confusion",
+      "happy": 0.15468730032444,
+      "neutral": 6.021460649208166e-05,
+      "confusion": 0.845252513885498
+    },
+    {
+      "sample": 28,
+      "face_detected": true,
+      "predicted": "Confusion",
+      "state": "confusion",
+      "happy": 0.05316406860947609,
+      "neutral": 3.747051960090175e-05,
+      "confusion": 0.9467985033988953
+    },
+    {
+      "sample": 29,
+      "face_detected": true,
+      "predicted": "Confusion",
+      "state": "uncertain",
+      "happy": 0.25519582629203796,
+      "neutral": 0.0005913775530643761,
+      "confusion": 0.744212806224823
+    },
+    {
+      "sample": 30,
+      "face_detected": true,
+      "predicted": "Confusion",
+      "state": "confusion",
+      "happy": 0.006221866235136986,
+      "neutral": 4.0402366721536964e-05,
+      "confusion": 0.9937376976013184
+    },
+    {
+      "sample": 31,
+      "face_detected": true,
+      "predicted": "Confusion",
+      "state": "confusion",
+      "happy": 0.01676635444164276,
+      "neutral": 0.00025817163987085223,
+      "confusion": 0.982975423336029
+    },
+    {
+      "sample": 32,
+      "face_detected": true,
+      "predicted": "Confusion",
+      "state": "confusion",
+      "happy": 0.034952208399772644,
+      "neutral": 4.614918725565076e-05,
+      "confusion": 0.96500164270401
+    }
+  ]
+}
