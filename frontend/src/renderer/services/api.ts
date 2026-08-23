@@ -359,6 +359,7 @@ export interface CurrentEmotionSession {
   } | null;
   completed_blocks?: EmotionBlock[];
   blocks?: EmotionBlock[];
+  final_state_blocks?: EmotionBlock[];
 }
 
 export const startEmotionDetection = async () => {
@@ -405,6 +406,7 @@ export interface StressResponse {
   to: string;
   summary: StressSummary;
   points: StressPoint[];
+  final_state_points?: EmotionBlock[];
 }
 
 /** Stress for a local day, derived from recorded emotion blocks. */
@@ -784,3 +786,4 @@ export const getWindowClusters = async (
   if (date) queryParams.append('date', date);
   return fetchJson(`${API_BASE}/api/v1/window-clusters?${queryParams.toString()}`);
 };
+

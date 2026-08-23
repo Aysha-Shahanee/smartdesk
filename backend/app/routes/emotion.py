@@ -249,9 +249,11 @@ def get_current_emotion_session(
     user_id: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    service = _get_emotion_service()
     return smartdesk_detection_endpoint_service.current_session_response(
         db,
         user_id=user_id or settings.DEFAULT_USER_ID,
+        status=service.get_status(),
     )
 
 

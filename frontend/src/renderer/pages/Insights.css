@@ -147,33 +147,55 @@
 
 .work-state-day-grid {
   display: grid;
-  grid-template-columns: repeat(24, minmax(0, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(24, 56px);
+  gap: 8px;
   overflow-x: auto;
   padding: var(--space-md) 0 var(--space-sm);
 }
 
 .work-state-hour {
-  min-width: 28px;
+  min-width: 56px;
 }
 
 .work-state-hour-slots {
   display: grid;
-  grid-template-rows: repeat(4, 12px);
-  gap: 4px;
+  grid-template-rows: repeat(4, 14px);
+  gap: 5px;
 }
 
 .work-state-slot {
-  display: block;
+  box-sizing: border-box;
+  display: flex;
+  align-items: stretch;
   width: 100%;
-  min-width: 12px;
-  border-radius: 3px;
+  min-width: 48px;
+  height: 14px;
+  overflow: hidden;
+  border-radius: 4px;
   background: var(--color-bg);
   border: 1px solid var(--color-border-light);
 }
 
 .work-state-slot--filled {
-  border-color: transparent;
+  border-color: var(--color-border-light);
+}
+
+.work-state-slot-part {
+  display: block;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  background: transparent;
+}
+
+.work-state-slot-part + .work-state-slot-part {
+  box-shadow: inset 1px 0 0 color-mix(in srgb, var(--color-border-light) 60%, transparent);
+}
+
+.work-state-slot-part--filled + .work-state-slot-part--filled,
+.work-state-slot-part--filled + .work-state-slot-part,
+.work-state-slot-part + .work-state-slot-part--filled {
+  box-shadow: inset 1px 0 0 color-mix(in srgb, #ffffff 28%, transparent);
 }
 
 .work-state-hour-label {
@@ -520,3 +542,4 @@
   color: var(--color-text-muted);
   line-height: 1.6;
 }
+

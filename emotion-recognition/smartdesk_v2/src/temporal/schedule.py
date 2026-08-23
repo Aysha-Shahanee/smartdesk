@@ -90,10 +90,24 @@ def build_full_system_schedule(start_time: datetime) -> BlockSchedule:
 
 def build_landmark_state_schedule(start_time: datetime) -> BlockSchedule:
     """Build the 5-minute landmark-side final-state schedule."""
-    return build_block_schedule(
-        start_time=start_time,
+    if start_time.tzinfo is None:
+        raise ValueError("start_time must be timezone-aware")
+
+    block_start = floor_to_block(start_time, LANDMARK_STATE_BLOCK_SECONDS)
+    block_end = block_start + timedelta(seconds=LANDMARK_STATE_BLOCK_SECONDS)
+    official_start = ceil_to_block(start_time, LANDMARK_STATE_BLOCK_SECONDS)
+    uses_current_block = official_start == start_time
+
+    return BlockSchedule(
+        requested_start=start_time,
+        current_block_start=block_start,
+        current_block_end=block_end,
+        official_start=official_start,
+        warmup_seconds=max(0.0, (official_start - start_time).total_seconds()),
+        uses_current_block=uses_current_block,
+        skipped_current_block=not uses_current_block,
         block_seconds=LANDMARK_STATE_BLOCK_SECONDS,
-        min_usable_remaining_seconds=LANDMARK_STATE_MIN_REMAINING_SECONDS,
+        min_usable_remaining_seconds=LANDMARK_STATE_BLOCK_SECONDS,
     )
 
 
@@ -104,6 +118,14 @@ def build_minute_alignment_schedule(start_time: datetime) -> BlockSchedule:
         block_seconds=MINUTE_ALIGNMENT_BLOCK_SECONDS,
         min_usable_remaining_seconds=MINUTE_ALIGNMENT_MIN_REMAINING_SECONDS,
     )
+
+
+def ceil_to_block(value: datetime, block_seconds: int) -> datetime:
+    """Return the current block start when exact, otherwise the next block start."""
+    block_start = floor_to_block(value, block_seconds)
+    if value == block_start:
+        return value
+    return block_start + timedelta(seconds=block_seconds)
 
 
 def floor_to_block(value: datetime, block_seconds: int) -> datetime:
@@ -131,3 +153,4 @@ def should_record(now: datetime, schedule: BlockSchedule) -> bool:
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
     return now >= schedule.official_start
+
