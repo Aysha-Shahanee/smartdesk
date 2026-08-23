@@ -16,6 +16,7 @@ import {
   todayString,
 } from '../utils/time';
 import { focusByHour, focusOutOf100, summarizeFocus, HOUR_MIN_SCORED_SEC } from '../utils/focus';
+import { getTimelineSecondaryPanel } from '../utils/timelinePanels';
 import './Timeline.css';
 
 const SUB_TABS = ['IDE', 'Browser', 'OS / Apps', 'Calendar'] as const;
@@ -365,6 +366,11 @@ const Timeline: React.FC = () => {
     };
   }, [activeTab, idePanel, domainBreakdown, appBreakdown]);
 
+  const secondaryPanel = useMemo(
+    () => getTimelineSecondaryPanel(activeTab as Exclude<SubTab, 'Calendar'>, breakdown.rows.length > 0),
+    [activeTab, breakdown.rows.length],
+  );
+
   /**
    * Timeline View: one 00:00–24:00 track for the selected day.
    *
@@ -654,46 +660,90 @@ const Timeline: React.FC = () => {
                   </ResponsiveContainer>
                 </div>
 
-                <div className="sd-card">
-                  <h3>{distTitle[activeTab]}</h3>
-                  <div className="donut-container">
-                    <ResponsiveContainer width="45%" height={220}>
-                      <PieChart>
-                        <Pie
-                          data={categoryDistribution}
-                          dataKey="value"
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={48}
-                          outerRadius={85}
-                          paddingAngle={2}
-                          strokeWidth={0}
-                        >
-                          {categoryDistribution.map(e => <Cell key={e.key} fill={e.color} />)}
-                        </Pie>
-                        <Tooltip
-                          formatter={(value: number, _n, entry: any) => [
-                            `${formatDuration(value)} (${entry?.payload?.percent ?? 0}%)`,
-                            entry?.payload?.name,
-                          ]}
-                          contentStyle={tooltipStyle}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
-                    <div className="donut-legend">
-                      {categoryDistribution.map(item => (
-                        <div className="legend-item" key={item.key}>
-                          <span className="legend-dot" style={{ background: item.color }} />
-                          <span className="legend-name">{item.name}</span>
-                          <span className="legend-value">{formatDuration(item.value)}</span>
-                        </div>
-                      ))}
+                {secondaryPanel.primaryPanel === 'distribution' && (
+                  <div className="sd-card">
+                    <h3>{distTitle[activeTab]}</h3>
+                    <div className="donut-container">
+                      <ResponsiveContainer width="45%" height={220}>
+                        <PieChart>
+                          <Pie
+                            data={categoryDistribution}
+                            dataKey="value"
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={48}
+                            outerRadius={85}
+                            paddingAngle={2}
+                            strokeWidth={0}
+                          >
+                            {categoryDistribution.map(e => <Cell key={e.key} fill={e.color} />)}
+                          </Pie>
+                          <Tooltip
+                            formatter={(value: number, _n, entry: any) => [
+                              `${formatDuration(value)} (${entry?.payload?.percent ?? 0}%)`,
+                              entry?.payload?.name,
+                            ]}
+                            contentStyle={tooltipStyle}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div className="donut-legend">
+                        {categoryDistribution.map(item => (
+                          <div className="legend-item" key={item.key}>
+                            <span className="legend-dot" style={{ background: item.color }} />
+                            <span className="legend-name">{item.name}</span>
+                            <span className="legend-value">{formatDuration(item.value)}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
+
+                {secondaryPanel.primaryPanel === 'breakdown' && (
+                  <div className="sd-card">
+                    <h3>{breakdown.title}</h3>
+                    <p className="chart-note">{breakdown.note}</p>
+                    <ResponsiveContainer width="100%" height={Math.max(220, breakdown.rows.length * 40)}>
+                      <BarChart
+                        data={breakdown.rows}
+                        layout="vertical"
+                        margin={{ top: 8, right: 76, bottom: 8, left: 8 }}
+                      >
+                        <CartesianGrid horizontal={false} stroke={chrome.grid} />
+                        <XAxis
+                          type="number"
+                          tick={{ fontSize: 12, fill: chrome.axisText }}
+                          tickFormatter={(v: number) => formatDuration(v)}
+                        />
+                        <YAxis
+                          type="category"
+                          dataKey="name"
+                          width={150}
+                          tick={{ fontSize: 12, fill: chrome.axisText }}
+                          axisLine={false}
+                          tickLine={false}
+                        />
+                        <Tooltip
+                          cursor={{ fill: chrome.grid, fillOpacity: 0.4 }}
+                          formatter={(v: number) => [formatDuration(v), 'Time']}
+                          contentStyle={tooltipStyle}
+                        />
+                        <Bar dataKey="seconds" fill={getCategoryColor('work', theme)} radius={[0, 4, 4, 0]} maxBarSize={24}>
+                          <LabelList
+                            dataKey="seconds"
+                            position="right"
+                            formatter={(v: number) => formatDuration(v)}
+                            style={{ fill: chrome.axisText, fontSize: 12 }}
+                          />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
               </div>
 
-              {breakdown.rows.length > 0 && (
+              {secondaryPanel.showBreakdownBelow && (
                 <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
                   <h3>{breakdown.title}</h3>
                   <p className="chart-note">{breakdown.note}</p>

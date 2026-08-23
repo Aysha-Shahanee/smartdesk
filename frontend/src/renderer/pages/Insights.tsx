@@ -22,7 +22,6 @@ import {
 } from '../services/api';
 import { formatSegmentTime, shiftDate } from '../utils/time';
 import { focusByHour, focusOutOf100, summarizeFocus, HOUR_MIN_SCORED_SEC } from '../utils/focus';
-import { deepWorkSplit, DEEP_WORK_MIN_SEC } from '../utils/blocks';
 import {
   buildCategoryMix,
   buildPatternTimeline,
@@ -487,22 +486,6 @@ const Insights: React.FC = () => {
     [focusDays],
   );
 
-  /* Deep work is time inside an uninterrupted block of at least 25 minutes;
-     shallow is the active remainder, so the two always sum to the day's active
-     time. See utils/blocks.ts for why there is no focus gate on top. */
-  const deepVsShallow = useMemo(
-    () => focusDays.map(({ date, segments }) => {
-      const { deepSec, shallowSec } = deepWorkSplit(segments);
-      return {
-        day: new Date(`${date}T00:00:00`).toLocaleDateString([], { weekday: 'short' }),
-        date,
-        deep: Math.round(deepSec / 60),
-        shallow: Math.round(shallowSec / 60),
-      };
-    }),
-    [focusDays],
-  );
-
   /* The week's best and worst hour of the day, pooled across every loaded day.
      This replaces a hardcoded "your best window is 10:00–12:00, averaging
      85/100" that no measurement stood behind. */
@@ -819,15 +802,6 @@ const Insights: React.FC = () => {
                   : 'Not enough scored activity'}
               </span>
             </div>
-            <div className="sd-card metric-card">
-              <span className="metric-card-label">Deep Work</span>
-              <span className="metric-card-value">
-                {Math.round(deepVsShallow.reduce((acc, d) => acc + d.deep, 0) / 60)}h
-              </span>
-              <span className="metric-card-sub">
-                In blocks of {DEEP_WORK_MIN_SEC / 60} minutes or longer
-              </span>
-            </div>
           </div>
 
           <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
@@ -856,30 +830,6 @@ const Insights: React.FC = () => {
                   connectNulls={false}
                 />
               </LineChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div className="sd-card" style={{ marginTop: 'var(--space-xl)' }}>
-            <h3>Deep Work vs Shallow Work (Minutes)</h3>
-            <p className="pattern-description">
-              Deep work is time inside an uninterrupted stretch of {DEEP_WORK_MIN_SEC / 60} minutes
-              or more; shallow is the rest of the active time. The two sum to the day's tracked
-              activity.
-            </p>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={deepVsShallow} barGap={4}>
-                <CartesianGrid strokeDasharray="3 3" stroke={chrome.grid} />
-                <XAxis dataKey="day" tick={{ fontSize: 13, fill: chrome.axisText }} />
-                <YAxis tick={{ fontSize: 13, fill: chrome.axisText }} unit="m" />
-                <Tooltip
-                  formatter={(value: number, name) => [`${value} min`, name]}
-                  labelFormatter={(_label, payload) => payload?.[0]?.payload?.date ?? ''}
-                  contentStyle={{ borderRadius: 8, border: `1px solid ${chrome.tooltipBorder}`, background: chrome.tooltipBg, color: chrome.tooltipText }}
-                />
-                <Legend wrapperStyle={{ fontSize: 12, color: 'var(--color-text-secondary)' }} />
-                <Bar dataKey="deep" fill={getCategoryColor('learn', theme)} radius={[4, 4, 0, 0]} name="Deep Work" />
-                <Bar dataKey="shallow" fill={getCategoryColor('communication', theme)} radius={[4, 4, 0, 0]} name="Shallow Work" />
-              </BarChart>
             </ResponsiveContainer>
           </div>
 
