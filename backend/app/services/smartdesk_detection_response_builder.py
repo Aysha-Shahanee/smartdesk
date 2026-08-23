@@ -134,6 +134,7 @@ def build_current_session_response(
         "current_block": None,
         "completed_blocks": completed_blocks,
         "blocks": completed_blocks,
+        "final_state_blocks": [final_state_block_to_api_block(block) for block in final_state_blocks],
     }
 
 
@@ -209,6 +210,7 @@ def build_workload_risk_response(
     from_time: str,
     to_time: str,
     reporting_blocks: list[dict[str, Any]],
+    final_state_blocks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the clean replacement response for `/stress`."""
     summary = workload_risk_summary(reporting_blocks)
@@ -218,6 +220,10 @@ def build_workload_risk_response(
         "to": to_time,
         "summary": summary.to_dict(),
         "points": [point.to_dict() for point in points],
+        "final_state_points": [
+            final_state_block_to_api_block(block)
+            for block in (final_state_blocks or [])
+        ],
     }
 
 
@@ -250,3 +256,4 @@ def _latest_state_from_counts(counts: dict[str, Any]) -> str | None:
     if counts.get("final_state"):
         return None
     return None
+

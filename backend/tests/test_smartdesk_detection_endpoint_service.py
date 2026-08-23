@@ -56,6 +56,33 @@ class SmartDeskEndpointServiceTests(unittest.TestCase):
         self.assertEqual(response["completed_blocks"][0]["dominant_state"], "Focused")
         self.assertEqual(response["completed_blocks"][0]["state_scores"]["Focused"], 1.0)
 
+    def test_current_session_uses_live_status_session_id_for_final_state_blocks(self):
+        self.repo.upsert_final_state_block({
+            "id": "final-live-session-1",
+            "user_id": "test-user",
+            "session_id": "live-session",
+            "summary": {
+                "block_start_time": "2026-08-22T09:00:00+05:30",
+                "block_end_time": "2026-08-22T09:05:00+05:30",
+                "window_seconds": 300.0,
+                "state": "fatigued",
+                "matched_rule": "drowsy",
+                "ready": True,
+            },
+            "created_at": "2026-08-22T09:05:00+05:30",
+        })
+
+        response = endpoint_service.current_session_response(
+            self.db,
+            user_id="test-user",
+            status={"running": True, "current_session_id": "live-session"},
+        )
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["status"]["current_session_id"], "live-session")
+        self.assertEqual(len(response["final_state_blocks"]), 1)
+        self.assertEqual(response["final_state_blocks"][0]["dominant_state"], "Fatigued")
+        self.assertEqual(response["completed_blocks"][0]["state_scores"]["Fatigued"], 1.0)
     def test_workload_risk_response_uses_reporting_blocks_in_window(self):
         self._insert_session("latest-session", "2026-08-22T09:00:00+05:30")
         self._insert_reporting("latest-session")

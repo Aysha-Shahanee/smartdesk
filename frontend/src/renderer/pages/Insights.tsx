@@ -228,11 +228,41 @@ const dominantWorkState = (scores?: Record<string, number>) => {
   return dominant;
 };
 
+const asWorkState = (value?: string | null): WorkState | null => {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  return WORK_STATE_ORDER.find(state => state.toLowerCase() === normalized) || null;
+};
+
+type WorkStateGridBlock = {
+  block_start_time?: string;
+  block_end_time?: string;
+  dominant_state?: string | null;
+  state_scores?: Record<string, number>;
+  final_state_block_count?: number;
+  ready?: boolean;
+};
+
+const stateFromBlock = (block: WorkStateGridBlock): WorkState | null =>
+  asWorkState(block.dominant_state) || dominantWorkState(block.state_scores);
+
 const averageWorkStateScores = (session: CurrentEmotionSession | null) => {
   const totals = WORK_STATE_ORDER.reduce<Record<WorkState, number>>((acc, state) => {
     acc[state] = 0;
     return acc;
   }, {} as Record<WorkState, number>);
+
+  const finalStateBlocks = (session?.final_state_blocks || []).filter(
+    block => block.ready === true && stateFromBlock(block),
+  );
+
+  if (finalStateBlocks.length > 0) {
+    finalStateBlocks.forEach(block => {
+      const state = stateFromBlock(block);
+      if (state) totals[state] += 1;
+    });
+    return totals;
+  }
 
   const blocks = session?.completed_blocks || session?.blocks || [];
   blocks.forEach(block => {
@@ -241,65 +271,59 @@ const averageWorkStateScores = (session: CurrentEmotionSession | null) => {
     });
   });
 
-  if (session?.current_block) {
-    WORK_STATE_ORDER.forEach(state => {
-      totals[state] += Number(session.current_block?.state_scores?.[state] || 0);
-    });
-  }
-
   return totals;
 };
 
-type WorkStateGridBlock = {
-  block_start_time?: string;
-  block_end_time?: string;
-  state_scores?: Record<string, number>;
-  final_state_block_count?: number;
-  ready?: boolean;
+type WorkStateDaySlot = {
+  index: number;
+  label: string;
+  parts: (WorkState | null)[];
 };
-
-const isCompletedReportingBlock = (block: WorkStateGridBlock) =>
-  block.ready === true && Number(block.final_state_block_count || 0) >= 3;
 
 const buildWorkStateDaySlots = (
   session: CurrentEmotionSession | null,
   selectedDate: string,
-  stressPoints: WorkStateGridBlock[] = [],
-) => {
+  finalStatePoints: WorkStateGridBlock[] = [],
+): WorkStateDaySlot[] => {
   const dayStart = new Date(`${selectedDate}T00:00:00`);
   const slotMs = 15 * 60 * 1000;
+  const partMs = 5 * 60 * 1000;
   const slots = Array.from({ length: 96 }, (_, index) => {
     const slotStart = new Date(dayStart.getTime() + index * slotMs);
     const slotEnd = new Date(slotStart.getTime() + slotMs);
     return {
       index,
       label: `${slotStart.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${slotEnd.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-      state: null as WorkState | null,
+      parts: [null, null, null] as (WorkState | null)[],
     };
   });
 
   const blocks: WorkStateGridBlock[] = [
-    ...(session?.completed_blocks || session?.blocks || []),
-    ...stressPoints,
-  ].filter(isCompletedReportingBlock);
+    ...(session?.final_state_blocks || []),
+    ...finalStatePoints,
+  ].filter(block => block.ready === true && Boolean(block.block_start_time));
 
   blocks.forEach(block => {
-    const state = dominantWorkState(block.state_scores);
+    const state = stateFromBlock(block);
     if (!state || !block.block_start_time) return;
 
     const start = new Date(block.block_start_time).getTime();
-    const end = block.block_end_time ? new Date(block.block_end_time).getTime() : start + slotMs;
-    if (Number.isNaN(start) || Number.isNaN(end)) return;
+    if (Number.isNaN(start)) return;
 
-    const startIndex = Math.max(0, Math.floor((start - dayStart.getTime()) / slotMs));
-    const exclusiveEnd = Math.max(start, end - 1);
-    const endIndex = Math.min(95, Math.max(startIndex, Math.floor((exclusiveEnd - dayStart.getTime()) / slotMs)));
-    for (let index = startIndex; index <= endIndex; index += 1) {
-      slots[index].state = state;
-    }
+    const offset = start - dayStart.getTime();
+    if (offset < 0 || offset >= 24 * 60 * 60 * 1000) return;
+
+    const slotIndex = Math.floor(offset / slotMs);
+    const partIndex = Math.min(2, Math.max(0, Math.floor((offset % slotMs) / partMs)));
+    slots[slotIndex].parts[partIndex] = state;
   });
 
   return slots;
+};
+
+const slotTitle = (slot: WorkStateDaySlot) => {
+  const labels = slot.parts.map((state, index) => `${index * 5}-${index * 5 + 5} min: ${state || 'No data'}`);
+  return `${slot.label}: ${labels.join(' | ')}`;
 };
 const Insights: React.FC = () => {
   const { theme } = useTheme();
@@ -409,7 +433,7 @@ const Insights: React.FC = () => {
     };
   });
   const workStateDaySlots = useMemo(
-    () => buildWorkStateDaySlots(currentEmotionSession, selectedDate, stress?.points || []),
+    () => buildWorkStateDaySlots(currentEmotionSession, selectedDate, stress?.final_state_points || []),
     [currentEmotionSession, selectedDate, stress],
   );
   const workStateHours = useMemo(
@@ -947,14 +971,24 @@ const Insights: React.FC = () => {
               {workStateHours.map((hourSlots, hour) => (
                 <div className="work-state-hour" key={hour}>
                   <div className="work-state-hour-slots">
-                    {hourSlots.map(slot => (
-                      <span
-                        className={`work-state-slot ${slot.state ? 'work-state-slot--filled' : ''}`}
-                        key={slot.index}
-                        style={{ background: slot.state ? WORK_STATE_COLORS[slot.state] : undefined }}
-                        title={`${slot.label}: ${slot.state || 'No data'}`}
-                      />
-                    ))}
+                    {hourSlots.map(slot => {
+                      const hasData = slot.parts.some(Boolean);
+                      return (
+                        <span
+                          className={`work-state-slot ${hasData ? 'work-state-slot--filled' : ''}`}
+                          key={slot.index}
+                          title={slotTitle(slot)}
+                        >
+                          {slot.parts.map((state, index) => (
+                            <span
+                              className={`work-state-slot-part ${state ? 'work-state-slot-part--filled' : ''}`}
+                              key={index}
+                              style={{ background: state ? WORK_STATE_COLORS[state] : undefined }}
+                            />
+                          ))}
+                        </span>
+                      );
+                    })}
                   </div>
                   <span className="work-state-hour-label">{hour % 3 === 0 ? `${String(hour).padStart(2, '0')}:00` : ''}</span>
                 </div>
@@ -983,7 +1017,7 @@ const Insights: React.FC = () => {
 
               <div className="emotion-status-grid">
                 <div>
-                  <span>Session started</span>
+                  <span>Official start</span>
                   <strong>{formatSessionTime(emotionStatus?.session_start_time)}</strong>
                 </div>
                 <div>
@@ -1677,5 +1711,6 @@ const Insights: React.FC = () => {
 };
 
 export default Insights;
+
 
 

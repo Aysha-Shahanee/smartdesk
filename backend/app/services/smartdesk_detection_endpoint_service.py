@@ -19,13 +19,21 @@ def current_session_response(
 ) -> dict[str, Any]:
     """Build the `/sessions/current` payload from v2 SQL rows."""
     repo = SmartDeskDetectionRepository(db)
-    session = repo.latest_session(user_id)
+    live_session_id = None
+    if status:
+        live_session_id = status.get("current_session_id") or status.get("session_id")
+
+    session = repo.session_by_id(live_session_id) if live_session_id else None
+    if session is None:
+        session = repo.latest_session(user_id)
+
+    block_session_id = live_session_id or (session["id"] if session is not None else None)
     reporting_blocks: list[dict[str, Any]] = []
     final_state_blocks: list[dict[str, Any]] = []
 
-    if session is not None:
-        reporting_blocks = repo.reporting_blocks_for_session(session["id"], user_id=user_id)
-        final_state_blocks = repo.final_state_blocks_for_session(session["id"], user_id=user_id)
+    if block_session_id is not None:
+        reporting_blocks = repo.reporting_blocks_for_session(block_session_id, user_id=user_id)
+        final_state_blocks = repo.final_state_blocks_for_session(block_session_id, user_id=user_id)
 
     effective_status = status or _status_from_session(session)
     return response_builder.build_current_session_response(
@@ -44,11 +52,14 @@ def workload_risk_response(
     end: datetime,
 ) -> dict[str, Any]:
     """Build the `/stress` replacement payload from v2 reporting rows."""
-    blocks = SmartDeskDetectionRepository(db).reporting_blocks_between(user_id, start, end)
+    repo = SmartDeskDetectionRepository(db)
+    reporting_blocks = repo.reporting_blocks_between(user_id, start, end)
+    final_state_blocks = repo.final_state_blocks_between(user_id, start, end)
     return response_builder.build_workload_risk_response(
         from_time=start.isoformat(),
         to_time=end.isoformat(),
-        reporting_blocks=blocks,
+        reporting_blocks=reporting_blocks,
+        final_state_blocks=final_state_blocks,
     )
 
 
@@ -81,3 +92,4 @@ def _status_from_session(session: dict[str, Any] | None) -> dict[str, Any]:
         "face_detected_samples": session.get("face_detected_samples") or 0,
         "completed_counts": session.get("completed_counts") or {},
     }
+

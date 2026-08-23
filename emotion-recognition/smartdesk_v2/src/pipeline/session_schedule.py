@@ -89,46 +89,13 @@ def choose_real_start_time(
     landmark_state: BlockSchedule,
     signal_alignment: BlockSchedule,
 ) -> datetime:
-    """Choose one startup-aligned real start time.
-
-    Priority:
-    1. If the current 15-minute full-system block is skipped, use its official start.
-    2. Else if the current 5-minute block is skipped, use its official start.
-    3. Else if the current 1-minute block is skipped, use its official start.
-    4. Else use the latest official start among the three checks.
-    """
-    if full_system.skipped_current_block:
-        return full_system.official_start
-    if landmark_state.skipped_current_block:
-        return landmark_state.official_start
-    if signal_alignment.skipped_current_block:
-        return signal_alignment.official_start
-    return max(
-        full_system.official_start,
-        landmark_state.official_start,
-        signal_alignment.official_start,
-    )
+    """Choose the official 5-minute boundary-aligned real start time."""
+    return landmark_state.official_start
 
 
 def choose_real_end_time(end_time: datetime) -> datetime:
-    """Choose one aligned session end using 15/5/1-minute end rules.
-
-    Priority:
-    1. If less than 7 minutes were used in the current 15-minute block,
-       discard that 15-minute block and end at its start.
-    2. Else if less than 3 minutes were used in the current 5-minute block,
-       discard that 5-minute block and end at its start.
-    3. Else discard the current partial 1-minute block by ending at its start.
-    """
+    """Choose the usable end by flooring to the previous 5-minute boundary."""
     if end_time.tzinfo is None:
         raise ValueError("end_time must be timezone-aware")
+    return floor_to_block(end_time, 5 * 60)
 
-    full_block_start = floor_to_block(end_time, 15 * 60)
-    if (end_time - full_block_start).total_seconds() < 7 * 60:
-        return full_block_start
-
-    landmark_block_start = floor_to_block(end_time, 5 * 60)
-    if (end_time - landmark_block_start).total_seconds() < 3 * 60:
-        return landmark_block_start
-
-    return floor_to_block(end_time, 60)
